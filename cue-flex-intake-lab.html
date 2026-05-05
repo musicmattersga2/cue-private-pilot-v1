@@ -1,0 +1,3829 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CUE FLEX Intake Lab</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 32px;
+      background: #0b0f12;
+      color: #eef6ef;
+    }
+
+    h1, h2, h3 {
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      color: #9ba7a0;
+      font-size: 18px;
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+
+    .card {
+      border: 1px solid #233028;
+      border-radius: 14px;
+      padding: 18px;
+      margin: 18px 0;
+      background: #10171a;
+    }
+
+    .review-card {
+      border: 1px solid #28485a;
+      border-radius: 14px;
+      padding: 18px;
+      margin: 18px 0;
+      background: #0d171d;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 5px 10px;
+      border: 1px solid #33443a;
+      border-radius: 999px;
+      margin-right: 8px;
+      margin-bottom: 8px;
+      color: #a8ff9e;
+      background: #142018;
+    }
+
+    .pill-blue {
+      color: #9ddcff;
+      border-color: #28485a;
+      background: #0d1b22;
+    }
+
+    .pill-magenta {
+      color: #f0a6ff;
+      border-color: #51315a;
+      background: #1f1223;
+    }
+
+    .pill-yellow {
+      color: #ffeaa0;
+      border-color: #5e542a;
+      background: #1f1b10;
+    }
+
+    .pill-red {
+      color: #ffb0b0;
+      border-color: #663333;
+      background: #211111;
+    }
+
+    .ops-complexity-pill {
+      display: inline-block;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .ops-complexity-low {
+      color: #9ff0b5;
+      border: 1px solid rgba(67, 209, 84, 0.45);
+      background: rgba(20, 50, 28, 0.45);
+      box-shadow: 0 0 18px rgba(67, 209, 84, 0.12);
+    }
+
+    .ops-complexity-medium {
+      color: #ffe4a8;
+      border: 1px solid rgba(255, 180, 80, 0.4);
+      background: rgba(45, 35, 12, 0.5);
+      box-shadow: 0 0 20px rgba(255, 160, 60, 0.1);
+    }
+
+    .ops-complexity-high {
+      color: #ffccb8;
+      border: 1px solid rgba(255, 120, 72, 0.5);
+      background: rgba(48, 20, 14, 0.55);
+      box-shadow: 0 0 26px rgba(255, 90, 48, 0.16);
+    }
+
+    .ops-summary-complexity-pill.high.ops-complexity-high {
+      border: 1px solid rgba(255, 120, 80, 0.5);
+      box-shadow: 0 0 12px rgba(255, 120, 80, 0.15);
+    }
+
+    .ops-coord-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+      margin-top: 6px;
+      row-gap: 10px;
+    }
+
+    .ops-summary-chips {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 6px;
+    }
+
+    .ops-coord-chip {
+      display: inline-block;
+      padding: 4px 11px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #c8e8d4;
+      border: 1px solid rgba(74, 107, 82, 0.55);
+      background: rgba(18, 38, 28, 0.55);
+      box-shadow: 0 0 14px rgba(74, 107, 82, 0.08);
+    }
+
+    .ops-coord-sep {
+      color: #5a6b62;
+      font-size: 12px;
+      font-weight: 600;
+      user-select: none;
+      padding: 0 2px;
+    }
+
+    .equipment-scope-keywords {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    .scope-keyword-chip {
+      display: inline-block;
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #9ddcff;
+      border: 1px solid rgba(40, 72, 90, 0.65);
+      background: rgba(13, 27, 34, 0.85);
+      box-shadow: 0 0 16px rgba(40, 120, 160, 0.08);
+      max-width: 100%;
+      word-break: break-word;
+    }
+
+    .raw-json-details {
+      margin-top: 14px;
+      border: 1px solid #233028;
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: #0c1013;
+    }
+
+    .raw-json-details summary {
+      cursor: pointer;
+      color: #9ddcff;
+      font-weight: 600;
+      font-size: 14px;
+      user-select: none;
+      list-style: none;
+    }
+
+    .raw-json-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .raw-json-details summary::before {
+      content: "▸ ";
+      opacity: 0.75;
+    }
+
+    .raw-json-details[open] summary::before {
+      content: "▾ ";
+    }
+
+    .raw-json-details[open] summary {
+      margin-bottom: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+
+    th, td {
+      border-bottom: 1px solid #263238;
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #a8ff9e;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    code {
+      color: #9ddcff;
+      font-size: 12px;
+    }
+
+    .muted {
+      color: #9ba7a0;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #070a0c;
+      border: 1px solid #263238;
+      border-radius: 10px;
+      padding: 14px;
+      color: #e6f7eb;
+      font-size: 12px;
+      max-height: 520px;
+      overflow: auto;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      box-sizing: border-box;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 13px;
+      background: #070a0c;
+      border: 1px solid #263238;
+      border-radius: 10px;
+      padding: 14px;
+      color: #e6f7eb;
+      resize: vertical;
+    }
+
+    textarea:focus,
+    input:focus {
+      outline: 2px solid #3d5c48;
+      outline-offset: 2px;
+    }
+
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #070a0c;
+      border: 1px solid #263238;
+      border-radius: 10px;
+      padding: 12px;
+      color: #e6f7eb;
+      font-size: 14px;
+    }
+
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+      align-items: center;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 15px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: 1px solid #33443a;
+      background: #1a2429;
+      color: #a8ff9e;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #243038;
+    }
+
+    button:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      border-color: #4a6b52;
+      background: #1e3324;
+    }
+
+    button.primary:hover {
+      background: #254530;
+    }
+
+    button.blue {
+      border-color: #2c5868;
+      background: #102630;
+      color: #9ddcff;
+    }
+
+    button.blue:hover {
+      background: #143240;
+    }
+
+    button.ghost {
+      color: #d6e4dc;
+      background: #12191d;
+      border-color: #2b363d;
+    }
+
+    button.ghost:hover {
+      background: #1b252b;
+    }
+
+    button.warn {
+      color: #ffeaa0;
+      background: #1f1b10;
+      border-color: #5e542a;
+    }
+
+    button.warn:hover {
+      background: #2b2514;
+    }
+
+    .err {
+      color: #ff9e9e;
+      margin-top: 10px;
+    }
+
+    .success {
+      color: #a8ff9e;
+      margin-top: 10px;
+    }
+
+    .rec-list {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .rec-list li {
+      margin: 8px 0;
+      line-height: 1.45;
+    }
+
+    label.block {
+      display: block;
+      margin-bottom: 8px;
+      color: #c5d4ca;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .stat {
+      border: 1px solid #233028;
+      border-radius: 14px;
+      padding: 14px;
+      background: #0e1518;
+    }
+
+    .stat .num {
+      font-size: 28px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .stat .label {
+      color: #9ba7a0;
+      margin-top: 4px;
+      font-size: 13px;
+    }
+
+    .ai-section {
+      border-top: 1px solid #263238;
+      padding-top: 14px;
+      margin-top: 14px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    /* Full-width operational summary: avoids single card trapped in a 50% two-col column */
+    .ops-summary-section {
+      width: 100%;
+      max-width: 1280px;
+      margin: 18px auto;
+      box-sizing: border-box;
+    }
+
+    .ops-summary-section,
+    .ops-summary-section *,
+    #operational-summary-wrap,
+    #operational-summary-wrap * {
+      box-sizing: border-box;
+    }
+
+    .ops-summary-section .card {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    /* Primary intelligence surface (overrides generic .card for ops summary only) */
+    .ops-summary-card {
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      background: linear-gradient(180deg, rgba(10, 20, 25, 0.9), rgba(5, 10, 12, 0.95));
+      padding: 28px 32px;
+      border-radius: 16px;
+    }
+
+    .small-subhead {
+      color: rgba(120, 200, 180, 0.7);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0 0 6px;
+    }
+
+    .ops-summary-title {
+      margin-top: 0;
+      margin-bottom: 4px;
+    }
+
+    .ops-summary-subtitle {
+      margin: 0 0 16px;
+      font-size: 13px;
+      line-height: 1.45;
+      max-width: min(100%, 720px);
+    }
+
+    .ops-action-tag {
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      color: rgba(180, 205, 190, 0.85);
+      margin: 0 0 8px;
+    }
+
+    .ops-summary-divider {
+      border: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      margin: 18px 0;
+    }
+
+    .ops-summary-lead {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.5;
+      color: #dce8e2;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: min(100%, 980px);
+    }
+
+    .ops-summary-section-label {
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(160, 190, 175, 0.75);
+      margin: 0 0 12px;
+      font-weight: 700;
+    }
+
+    .ops-action-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-width: min(100%, 980px);
+    }
+
+    .ops-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 14px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 12px;
+      background: rgba(4, 10, 12, 0.55);
+    }
+
+    .ops-action-main {
+      flex: 1 1 220px;
+      min-width: 0;
+    }
+
+    .ops-action-label {
+      font-weight: 700;
+      font-size: 14px;
+      color: #eaf7f2;
+      margin-bottom: 6px;
+    }
+
+    .ops-action-detail {
+      font-size: 13px;
+      line-height: 1.45;
+      margin: 0;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+
+    .ops-action-side {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+      min-width: 160px;
+    }
+
+    .ops-action-cta {
+      font-size: 13px;
+      padding: 9px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(74, 107, 82, 0.55);
+      background: rgba(18, 38, 28, 0.7);
+      color: #c8f0d4;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .ops-action-cta:hover {
+      background: rgba(28, 52, 38, 0.85);
+    }
+
+    .ops-action-msg {
+      font-size: 12px;
+      min-height: 1em;
+    }
+
+    .ops-complexity-interpret {
+      margin: 10px 0 0;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #9ba7a0;
+      max-width: min(100%, 980px);
+    }
+
+    .ops-coord-nav {
+      font: inherit;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .ops-coord-nav:hover {
+      border-color: rgba(120, 200, 180, 0.35);
+      color: #dff7ea;
+    }
+
+    .ai-exec-summary-details {
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin-top: 14px;
+      background: rgba(5, 12, 14, 0.45);
+    }
+
+    .ai-exec-summary-details summary {
+      cursor: pointer;
+      color: #8fa89d;
+      font-size: 13px;
+      font-weight: 600;
+      user-select: none;
+      list-style: none;
+    }
+
+    .ai-exec-summary-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .ai-exec-summary-body {
+      padding-top: 10px;
+    }
+
+    .ai-exec-summary-body p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.45;
+      color: #b8c9c0;
+    }
+
+    .deep-dive-toggle {
+      margin-top: 12px;
+      width: fit-content;
+    }
+
+    .deep-dive-panel {
+      margin-top: 14px;
+    }
+
+    .deep-dive-panel[hidden] {
+      display: none !important;
+    }
+
+    #staffing-review,
+    #trucking-review,
+    #equipment-scope-summary,
+    #cue-ai-review-cards,
+    #questions-for-pm,
+    #cue-task-board {
+      scroll-margin-top: 28px;
+    }
+
+    @media (max-width: 640px) {
+      .ops-action-row {
+        flex-direction: column;
+      }
+
+      .ops-action-side {
+        align-items: stretch;
+        width: 100%;
+        min-width: 0;
+      }
+
+      .ops-action-cta {
+        width: 100%;
+        white-space: normal;
+      }
+    }
+
+    .cue-task-board-section {
+      margin-top: 8px;
+    }
+
+    .task-columns {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 14px;
+      align-items: start;
+    }
+
+    @media (max-width: 720px) {
+      .task-columns {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .task-column {
+      min-width: 0;
+    }
+
+    .cue-task-card {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 10px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .task-header {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+      gap: 10px;
+    }
+
+    .task-dept {
+      opacity: 0.6;
+      font-size: 12px;
+      text-transform: lowercase;
+    }
+
+    .task-desc {
+      margin: 8px 0;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #b8c9c0;
+    }
+
+    .task-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .task-footer button {
+      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 8px;
+    }
+
+    .ops-summary-card #operational-summary-wrap .ai-section {
+      border-top: none;
+      margin-top: 0;
+      padding-top: 0;
+    }
+
+    .ops-summary-card #operational-summary-wrap .ai-section > h3 {
+      margin-bottom: 8px;
+      margin-top: 0;
+    }
+
+    #operational-summary-wrap {
+      width: 100%;
+      box-sizing: border-box;
+      overflow-x: hidden;
+    }
+
+    /* Readable line length for dense assessment/steps; card can still span wide */
+    #operational-summary-wrap .ai-section {
+      max-width: min(100%, 980px);
+    }
+
+    #operational-summary-wrap .ai-section > h3 {
+      overflow-wrap: break-word;
+    }
+
+    #operational-summary-wrap p {
+      margin: 0.35em 0 0;
+      line-height: 1.42;
+      overflow-wrap: break-word;
+      word-break: break-word;
+      max-width: 100%;
+    }
+
+    #operational-summary-wrap ol {
+      margin: 0.5em 0 0;
+      padding-left: 1.45em;
+      line-height: 1.42;
+    }
+
+    #operational-summary-wrap li {
+      margin: 0.5em 0;
+      line-height: 1.42;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+
+    .ops-summary-card #operational-summary-wrap ol {
+      padding-left: 20px;
+    }
+
+    .ops-summary-card #operational-summary-wrap li {
+      margin: 0 0 10px;
+    }
+
+    .ops-summary-card #operational-summary-wrap li::marker {
+      color: rgba(255, 255, 255, 0.4);
+    }
+
+    #operational-summary-wrap .ops-coord-row,
+    #operational-summary-wrap .ops-summary-chips,
+    #operational-summary-wrap .equipment-scope-keywords {
+      max-width: 100%;
+    }
+
+    .action-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid #263238;
+    }
+
+    .action-log {
+      border: 1px solid #263238;
+      background: #0d1316;
+      border-radius: 12px;
+      padding: 14px;
+      margin-top: 14px;
+    }
+
+    .action-log-entry {
+      border-bottom: 1px solid #263238;
+      padding: 8px 0;
+      color: #c9d8ce;
+    }
+
+    .action-log-entry:last-child {
+      border-bottom: none;
+    }
+
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .task-card {
+      border: 1px solid #28485a;
+      background: #0d171d;
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    .task-card h3 {
+      margin-top: 6px;
+    }
+
+    .task-meta {
+      color: #9ba7a0;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .task-status {
+      display: inline-block;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #142018;
+      border: 1px solid #33443a;
+      color: #a8ff9e;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+
+    .debug-details {
+      border: 1px solid #263238;
+      border-radius: 14px;
+      background: #0d1316;
+      margin-top: 14px;
+      overflow: hidden;
+    }
+
+    .debug-details summary {
+      cursor: pointer;
+      padding: 14px;
+      color: #a8ff9e;
+      font-weight: 700;
+      border-bottom: 1px solid #263238;
+      user-select: none;
+    }
+
+    .debug-details[open] summary {
+      background: #10171a;
+    }
+
+    .debug-body {
+      padding: 14px;
+    }
+
+    .debug-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .debug-tab {
+      font-size: 13px;
+      padding: 7px 11px;
+    }
+
+    .debug-tab.active {
+      background: #1e3324;
+      border-color: #4a6b52;
+      color: #a8ff9e;
+    }
+
+    .debug-panel {
+      display: none;
+    }
+
+    .debug-panel.active {
+      display: block;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    @media (max-width: 1000px) {
+      .grid, .two-col, .task-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+      body {
+        margin: 18px;
+      }
+
+      .grid, .two-col, .task-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .ops-summary-section {
+        margin-left: 0;
+        margin-right: 0;
+        max-width: 100%;
+      }
+
+      .ops-summary-section .card.ops-summary-card {
+        padding: 22px 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1 style="margin:0;">CUE FLEX Intake Lab</h1>
+    <button type="button" id="btn-lock-pilot">Lock Pilot</button>
+  </div>
+  <p class="subtitle">
+    Fetch live FLEX header data and <code>row-data</code> by element ID, or paste FLEX line-item JSON manually.
+    CUE parses staffing vs trucking, summarizes equipment scope, applies Music Matters-specific routing rules, and sends the structured payload to OpenAI for CUE review cards.
+  </p>
+
+  <div class="grid">
+    <div class="stat">
+      <div id="stat-total" class="num">0</div>
+      <div class="label">Parsed resource lines</div>
+    </div>
+    <div class="stat">
+      <div id="stat-staffing" class="num">0</div>
+      <div class="label">Staffing lines</div>
+    </div>
+    <div class="stat">
+      <div id="stat-trucking" class="num">0</div>
+      <div class="label">Trucking lines</div>
+    </div>
+    <div class="stat">
+      <div id="stat-other" class="num">0</div>
+      <div class="label">Other FLEX types</div>
+    </div>
+  </div>
+
+  <div class="card CUE_SYNC_FLEX_QUEUE_PATCH" id="sync-flex-now-card">
+    <div class="btn-row" style="justify-content:space-between;align-items:flex-start;">
+      <div>
+        <h2>FLEX Sync Queue</h2>
+        <p class="muted">
+          CUE monitors FLEX for newly confirmed quotes and routes them for review.
+        </p>
+      </div>
+      <span class="pill pill-blue">15-Min Polling Preview</span>
+    </div>
+
+    <div class="btn-row">
+      <button type="button" class="blue" id="btn-sync-flex-now">Sync FLEX Now</button>
+      <button type="button" id="btn-clear-detected-flex-queue">Clear Detected Queue</button>
+      <span id="sync-flex-now-status" class="muted">No sync run yet.</span>
+    </div>
+
+    <div class="ai-section">
+      <h3>Detected FLEX Shows</h3>
+      <div id="detected-flex-shows-list">
+        <p class="muted">No detected FLEX shows yet.</p>
+      </div>
+    </div>
+  </div>
+  <div class="card CUE_CONFIRMED_FLEX_WORKFLOW_PATCH" id="confirmed-flex-detected-card">
+    <div class="btn-row" style="justify-content:space-between;align-items:flex-start;">
+      <div>
+        <h2>Confirmed FLEX Show Detected</h2>
+        <p class="muted">
+          CUE monitors FLEX for newly confirmed quotes and routes them for review.
+        </p>
+      </div>
+      <span class="pill pill-blue">Polling Preview</span>
+    </div>
+
+    <div class="ai-section">
+      <h3>26-0401 - Main Stage Audio - Sweetwater 420 Fest 2026</h3>
+      <p>
+        <span class="pill">Confirmed FLEX Quote</span>
+        <span class="pill pill-blue">Rival Entertainment</span>
+        <span class="pill pill-magenta">Shirley Clarke Franklin Park</span>
+      </p>
+      <p class="muted">
+        CUE detected this confirmed FLEX quote. Review the intake before creating CUE staffing, trucking, and coordination work.
+      </p>
+
+      <div class="detected-table-wrap">
+        <table class="detected-table">
+          <thead>
+            <tr>
+              <th>Signal</th>
+              <th>Value</th>
+              <th>CUE Interpretation</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>FLEX Element ID</td>
+              <td><code>bac37124-8b40-4d00-a240-67b1ff05f2af</code></td>
+              <td>Known validated test intake for repeat testing.</td>
+            </tr>
+            <tr>
+              <td>Quote</td>
+              <td>26-0401</td>
+              <td>Confirmed quote available for review/import.</td>
+            </tr>
+            <tr>
+              <td>Load-in</td>
+              <td>2026-04-16 12:00</td>
+              <td>Use as staffing/trucking planning anchor.</td>
+            </tr>
+            <tr>
+              <td>Shipping Method</td>
+              <td>26' Box Truck</td>
+              <td>Route trucking review to Brian Kee / Trucking Coordinator.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" class="blue" id="btn-review-detected-flex">Review Intake</button>
+        <button type="button" id="btn-import-detected-flex">Import to CUE</button>
+        <button type="button" id="btn-ignore-detected-flex">Ignore</button>
+        <button type="button" id="btn-snooze-detected-flex">Snooze</button>
+      </div>
+
+      <p id="confirmed-flex-workflow-status" class="muted"></p>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Fetch Live FLEX Show Intake</h2>
+    <p class="muted">
+      Enter a FLEX element ID and fetch both header data and hydrated line-item row-data directly from FLEX.
+    </p>
+
+    <label class="block" for="flex-element-id"><strong>FLEX Element ID</strong></label>
+    <input
+      id="flex-element-id"
+      placeholder="Example: bac37124-8b40-4d00-a240-67b1ff05f2af"
+    />
+
+    <div class="btn-row">
+      <button type="button" class="primary" id="btn-fetch-flex">Fetch FLEX Show Intake</button>
+      <button type="button" class="ghost" id="btn-clear-state">Clear Saved State</button>
+      <span class="muted">This calls <code>/api/flex-show-intake?elementId=...</code></span>
+    </div>
+
+    <div id="flex-fetch-status" class="muted" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Show Context</h2>
+    <p class="muted">
+      Header data pulled from FLEX. This context is included in the CUE AI payload.
+    </p>
+    <div id="show-context-wrap">
+      <p class="muted">No show context loaded yet.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>FLEX line items</h2>
+    <p class="muted">
+      Parse resource rows for staffing, trucking, and equipment scope. Expand below only when you need the raw JSON.
+    </p>
+    <div class="btn-row">
+      <button type="button" class="primary" id="btn-parse">Parse FLEX Line Items</button>
+      <span class="muted">Rows with <code>lineItemType === "resource"</code> or any <code>resourceId</code> are kept.</span>
+    </div>
+    <details class="raw-json-details">
+      <summary>Raw FLEX row-data JSON</summary>
+      <label class="block" for="json-in" style="margin-top:4px;"><strong>Paste or edit JSON</strong></label>
+      <textarea id="json-in" placeholder='Paste FLEX row-data: a JSON array of roots, { "children": [...] }, or a single row object. Resource rows use lineItemType "resource".'></textarea>
+    </details>
+    <div id="parse-err" class="err" hidden></div>
+    <div id="parse-ok" class="success" hidden></div>
+  </div>
+
+  <div class="ops-summary-section">
+    <div class="card ops-summary-card">
+      <p class="small-subhead">System analysis</p>
+      <h2 class="ops-summary-title">CUE Operational Summary</h2>
+      <p class="ops-summary-subtitle muted">
+        CUE has analyzed this show and generated an operational plan.
+      </p>
+      <div id="operational-summary-wrap">
+        <p class="muted">Parse FLEX line items to generate an operational summary.</p>
+      </div>
+    </div>
+  </div>
+
+  <section id="cue-task-board" class="card cue-task-board-section">
+    <h2>CUE Task Board</h2>
+    <p class="muted">
+      Tasks created from the operational summary, AI review cards, and FLEX import prototypes. Complete moves a card to the done column.
+    </p>
+    <div class="btn-row CUE_CLEAR_TASK_LOG_BUTTONS_PATCH">
+      <button type="button" id="btn-clear-cue-tasks">Clear Tasks</button>
+    </div>
+    <div class="task-columns">
+      <div class="task-column" id="tasks-active">
+        <h3>Active</h3>
+      </div>
+      <div class="task-column" id="tasks-completed">
+        <h3>Completed</h3>
+      </div>
+    </div>
+  </section>
+
+  <div class="two-col">
+    <div class="card" id="staffing-review">
+      <h2>Staffing Review</h2>
+      <p class="muted">
+        FLEX <code>type.name</code> = Labor routes to Staffing.
+      </p>
+      <div id="staffing-wrap"></div>
+    </div>
+
+    <div class="card" id="trucking-review">
+      <h2>Trucking Review</h2>
+      <p class="muted">
+        FLEX <code>type.name</code> = Transportation routes to Trucking. Brian Kee / Trucking Coordinator handles truck timing and dispatch planning.
+      </p>
+      <div id="trucking-wrap"></div>
+    </div>
+  </div>
+
+  <div class="card" id="equipment-scope-summary">
+    <h2>Equipment Scope Summary</h2>
+    <p class="muted">
+      CUE summarizes Rental/equipment lines locally so OpenAI gets operational context without receiving every rental line.
+    </p>
+    <div id="equipment-scope-wrap">
+      <p class="muted">No equipment scope summarized yet.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Debug Panel</h2>
+    <p class="muted">
+      Collapsed by default. Use this to inspect raw FLEX data, the OpenAI-ready payload, and the latest AI response.
+    </p>
+
+    <details class="debug-details">
+      <summary>Open Debug Data</summary>
+
+      <div class="debug-body">
+        <div class="debug-tabs">
+          <button type="button" class="debug-tab active" data-debug-tab="row-data">Raw FLEX Row Data</button>
+          <button type="button" class="debug-tab" data-debug-tab="payload">OpenAI Payload</button>
+          <button type="button" class="debug-tab" data-debug-tab="ai-response">AI Response JSON</button>
+          <button type="button" class="debug-tab" data-debug-tab="ops-summary">Operational Summary Debug</button>
+        </div>
+
+        <div id="debug-row-data" class="debug-panel active">
+          <pre id="row-data-out">{}</pre>
+        </div>
+
+        <div id="debug-payload" class="debug-panel">
+          <pre id="payload-out">{}</pre>
+        </div>
+
+        <div id="debug-ai-response" class="debug-panel">
+          <pre id="ai-response-out">{}</pre>
+        </div>
+
+        <div id="debug-ops-summary" class="debug-panel">
+          <h3>Operational Summary Request Payload</h3>
+          <pre id="ops-summary-request-out">{}</pre>
+          <h3>Operational Summary API Response</h3>
+          <pre id="ops-summary-response-out">{}</pre>
+          <h3>Operational Summary Source</h3>
+          <pre id="ops-summary-source-out">unknown</pre>
+          <h3>Source verification</h3>
+          <pre id="ops-summary-verify-out"></pre>
+          <h3>sourceDetail</h3>
+          <pre id="ops-summary-source-detail-out">{}</pre>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card" id="cue-ai-review-cards">
+    <h2>CUE Deep Dive</h2>
+    <p class="muted" style="margin-top:0;margin-bottom:12px;max-width:640px;font-size:13px;line-height:1.45;">
+      Detailed analysis behind the operational decision.
+    </p>
+    <div class="btn-row">
+      <span id="cue-ai-model-selector" class="CUE_MODEL_COMPARE_PATCH_SELECTOR" style="display:inline-flex;align-items:center;gap:8px;margin-right:10px;">
+  <label for="ai-mode-select" class="muted" style="font-size:13px;">AI Engine</label>
+  <select id="ai-mode-select" style="background:#071012;color:#eaf7f2;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:9px 10px;">
+    <option value="current">Current</option>
+    <option value="advanced" selected>Advanced</option>
+    <option value="compare">Compare</option>
+  </select>
+</span>
+<button type="button" class="blue" id="btn-ai">Analyze with CUE AI</button>
+      <span class="muted">Calls local Node server → OpenAI API. API key stays in <code>.env</code>.</span>
+    </div>
+    <button type="button" class="ghost deep-dive-toggle" id="btn-deep-dive-toggle" aria-expanded="false">
+      View Detailed Analysis
+    </button>
+    <div id="ai-out-panel" class="deep-dive-panel" hidden>
+      <div id="ai-out"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Local Action Log</h2>
+    <p class="muted">
+      Prototype-only action history. Later this becomes an audit trail in CUE.
+    </p>
+    <div class="btn-row CUE_CLEAR_TASK_LOG_BUTTONS_PATCH">
+      <button type="button" id="btn-clear-action-log">Clear Action Log</button>
+    </div>
+    
+    <div id="action-log">
+      <p class="muted">No actions captured yet.</p>
+    </div>
+  </div>
+
+  <script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+
+  function resetDeepDivePanel() {
+    const panel = $("ai-out-panel");
+    const btn = $("btn-deep-dive-toggle");
+    if (panel) panel.hidden = true;
+    if (btn) {
+      btn.textContent = "View Detailed Analysis";
+      btn.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  window.cueTaskStore = { tasks: [] };
+  const cueTaskStore = window.cueTaskStore;
+
+  let actionLog = [];
+  let cardActionState = {};
+  let lastPayload = null;
+  let lastShowContext = null;
+  let lastRowData = null;
+  let lastAiResponse = null;
+  let detectedFlexShows = [];
+  let operationalSummaryRequestSeq = 0;
+  let lastOperationalSummarySource = "unknown";
+  let lastOperationalSummaryRequestPayload = null;
+  let lastOperationalSummaryApiResponse = null;
+  let lastOperationalSummarySourceDetail = null;
+  let lastOperationalSummarySteps = [];
+
+  const STORAGE_KEY = "cueFlexIntakeLabState.v1";
+
+  const OPS_PM_PHRASE_EXACT = "No PM is assigned — does this show need one?";
+
+  const OPS_POLISHED_DENSE_PA_ASSESSMENT =
+    "High-scope main stage audio package with large PA, control, fiber/drive, rigging, and power distribution across a weeklong window. Staffing and trucking are defined, but this will require early cross-team coordination across warehouse, trucking, and on-site execution.";
+
+  const OPS_TRUCKING_STEP_CANONICAL =
+    "Route trucking review to Brian Kee for timing and dispatch validation.";
+
+  function saveLabState() {
+    const state = {
+      elementId: $("flex-element-id")?.value || "",
+      actionLog,
+      cueTasks: cueTaskStore.tasks,
+      cardActionState,
+      lastPayload,
+      lastShowContext,
+      lastRowData,
+      lastAiResponse,
+      lastOperationalSummarySource,
+      lastOperationalSummaryRequestPayload,
+      lastOperationalSummaryApiResponse,
+      lastOperationalSummarySourceDetail,
+      detectedFlexShows,
+      savedAt: new Date().toISOString()
+    };
+
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (err) {
+      console.warn("Could not save CUE lab state:", err);
+    }
+  }
+
+  function loadLabState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+
+      return JSON.parse(raw);
+    } catch (err) {
+      console.warn("Could not load CUE lab state:", err);
+      return null;
+    }
+  }
+
+  function clearLabState() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (err) {
+      console.warn("Could not clear CUE lab state:", err);
+    }
+
+    actionLog = [];
+    cueTaskStore.tasks = [];
+    cardActionState = {};
+    lastPayload = null;
+    lastShowContext = null;
+    lastRowData = null;
+    lastAiResponse = null;
+    lastOperationalSummarySource = "unknown";
+    lastOperationalSummaryRequestPayload = null;
+    lastOperationalSummaryApiResponse = null;
+    lastOperationalSummarySourceDetail = null;
+
+    $("flex-element-id").value = "";
+    $("json-in").value = "";
+    $("row-data-out").textContent = "{}";
+    $("payload-out").textContent = "{}";
+    $("ai-response-out").textContent = "{}";
+    $("ops-summary-request-out").textContent = "{}";
+    $("ops-summary-response-out").textContent = "{}";
+    $("ops-summary-source-out").textContent = "unknown";
+    $("ops-summary-verify-out").textContent = "";
+    $("ops-summary-source-detail-out").textContent = "{}";
+    $("ai-out").innerHTML = "";
+    resetDeepDivePanel();
+    $("parse-ok").hidden = true;
+    $("parse-err").hidden = true;
+    $("flex-fetch-status").textContent = "";
+
+    renderShowContext(null);
+    renderEquipmentSummary(null);
+    renderOperationalSummary(null);
+    renderActionLog();
+    renderCueTaskBoard();
+
+    $("staffing-wrap").innerHTML = "";
+    $("trucking-wrap").innerHTML = "";
+
+    $("stat-total").textContent = "0";
+    $("stat-staffing").textContent = "0";
+    $("stat-trucking").textContent = "0";
+    $("stat-other").textContent = "0";
+  }
+
+  function restoreLabState() {
+    const state = loadLabState();
+    if (!state) return;
+
+    actionLog = Array.isArray(state.actionLog) ? state.actionLog : [];
+    cueTaskStore.tasks = Array.isArray(state.cueTasks) ? state.cueTasks : [];
+    if (
+      !cueTaskStore.tasks.length &&
+      Array.isArray(state.draftTasks) &&
+      state.draftTasks.length
+    ) {
+      cueTaskStore.tasks = migrateLegacyDraftTasksToCueTasks(state.draftTasks);
+    }
+    cardActionState =
+      state.cardActionState && typeof state.cardActionState === "object"
+        ? state.cardActionState
+        : {};
+    lastPayload = state.lastPayload || null;
+    lastShowContext = state.lastShowContext || null;
+    lastRowData = state.lastRowData || null;
+    lastAiResponse = state.lastAiResponse || null;
+    lastOperationalSummarySource = state.lastOperationalSummarySource || "unknown";
+    lastOperationalSummaryRequestPayload = state.lastOperationalSummaryRequestPayload || null;
+    lastOperationalSummaryApiResponse = state.lastOperationalSummaryApiResponse || null;
+    lastOperationalSummarySourceDetail = state.lastOperationalSummarySourceDetail || null;
+
+    if (!lastOperationalSummarySourceDetail && lastOperationalSummaryApiResponse) {
+      lastOperationalSummarySourceDetail = buildOperationalSummarySourceDetail(
+        lastOperationalSummaryApiResponse,
+        lastOperationalSummarySource
+      );
+    }
+
+    if (state.elementId) {
+      $("flex-element-id").value = state.elementId;
+    }
+
+    if (lastShowContext) {
+      renderShowContext(lastShowContext);
+    }
+
+    if (lastRowData) {
+      $("json-in").value = JSON.stringify(lastRowData, null, 2);
+      $("row-data-out").textContent = JSON.stringify(lastRowData, null, 2);
+
+      parseAndRender();
+    }
+
+    if (lastPayload) {
+      $("payload-out").textContent = JSON.stringify(lastPayload, null, 2);
+    }
+
+    if (lastAiResponse) {
+      $("ai-response-out").textContent = JSON.stringify(lastAiResponse, null, 2);
+
+      const analysis = lastAiResponse.analysis || {};
+
+      $("ai-out").innerHTML = buildAiReviewMarkup(
+        analysis,
+        lastAiResponse.model || "unknown",
+        "restored"
+      );
+    }
+
+    $("ops-summary-request-out").textContent = JSON.stringify(lastOperationalSummaryRequestPayload || {}, null, 2);
+    $("ops-summary-response-out").textContent = JSON.stringify(lastOperationalSummaryApiResponse || {}, null, 2);
+    $("ops-summary-source-out").textContent = String(lastOperationalSummarySource || "unknown");
+    $("ops-summary-verify-out").textContent = formatOperationalSummaryVerifyLine(
+      lastOperationalSummarySource,
+      lastOperationalSummarySourceDetail
+    );
+    $("ops-summary-source-detail-out").textContent = JSON.stringify(lastOperationalSummarySourceDetail || {}, null, 2);
+
+    renderActionLog();
+    renderCueTaskBoard();
+
+    if (state.savedAt) {
+      $("flex-fetch-status").innerHTML = `<span class="success">Restored saved CUE lab state from ${escapeHtml(new Date(state.savedAt).toLocaleString())}.</span>`;
+    }
+  }
+
+  function escapeHtml(v) {
+    return String(v ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  function departmentFromLegacyTaskType(taskType) {
+    const t = String(taskType || "").toLowerCase();
+    if (t === "staffing_review") return "staffing";
+    if (t === "trucking_review") return "trucking";
+    if (t === "warehouse_prep") return "warehouse";
+    if (t === "pm_decision_check" || t === "pm_question") return "pm";
+    if (t === "coordination_review" || t === "cue_show_import_review") return "ops";
+    if (t === "missing_data_follow_up" || t === "risk_follow_up") return "ops";
+    if (t.endsWith("_review_task")) return "ops";
+    return "ops";
+  }
+
+  function departmentForOperationalSummaryType(metaType) {
+    const m = String(metaType || "");
+    if (m === "staffing_review") return "staffing";
+    if (m === "trucking_review") return "trucking";
+    if (m === "warehouse_prep") return "warehouse";
+    if (m === "pm_question") return "pm";
+    return "ops";
+  }
+
+  function migrateLegacyDraftTasksToCueTasks(drafts) {
+    return drafts.map((t) => {
+      const createdAt =
+        t.createdAtIso ||
+        (typeof t.createdAt === "string" && t.createdAt.includes("T")
+          ? t.createdAt
+          : new Date().toISOString());
+      return {
+        id:
+          typeof t.id === "string" && t.id.length >= 8
+            ? t.id
+            : crypto.randomUUID(),
+        title: t.title || t.cardTitle || "Task",
+        description: t.recommendedNextStep || t.summary || t.detail || "",
+        owner: t.owner || t.ownerLabel || "Operations Review",
+        department: departmentFromLegacyTaskType(t.taskType || t.type),
+        showName: t.showName || "",
+        quoteNumber: t.sourceQuote || t.linkedFlexDocumentNumber || "",
+        status:
+          String(t.status || "").toLowerCase() === "completed"
+            ? "completed"
+            : "active",
+        source: t.source || "unknown",
+        createdAt,
+        taskType: t.taskType || t.type || null
+      };
+    });
+  }
+
+  function createCueTask(taskInput, opts = {}) {
+    const task = {
+      id: crypto.randomUUID(),
+      title: taskInput.title || "Task",
+      description: taskInput.description || "",
+      owner: taskInput.owner || "Operations Review",
+      department: taskInput.department || "ops",
+      showName: taskInput.showName ?? "",
+      quoteNumber: taskInput.quoteNumber ?? "",
+      status: "active",
+      source: taskInput.source || "unknown",
+      createdAt: new Date().toISOString()
+    };
+    if (taskInput.taskType) {
+      task.taskType = taskInput.taskType;
+    }
+    cueTaskStore.tasks.push(task);
+    renderCueTaskBoard();
+    saveLabState();
+
+    if (opts.scroll !== false) {
+      $("cue-task-board")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    return task;
+  }
+
+  function completeTask(taskId) {
+    const task = cueTaskStore.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+
+    task.status = "completed";
+    renderCueTaskBoard();
+    saveLabState();
+  }
+
+  window.completeTask = completeTask;
+
+  function renderCueTaskBoard() {
+    const activeEl = $("tasks-active");
+    const completedEl = $("tasks-completed");
+    if (!activeEl || !completedEl) return;
+
+    activeEl.innerHTML = "<h3>Active</h3>";
+    completedEl.innerHTML = "<h3>Completed</h3>";
+
+    if (!cueTaskStore.tasks.length) {
+      const empty = `<p class="muted" style="margin-top:8px;">No tasks yet.</p>`;
+      activeEl.innerHTML += empty;
+      return;
+    }
+
+    cueTaskStore.tasks.forEach((task) => {
+      const el = document.createElement("div");
+      el.className = "cue-task-card";
+
+      const completeBtn =
+        task.status === "active"
+          ? `<button type="button" data-complete-task="${escapeHtml(task.id)}">Complete</button>`
+          : "";
+
+      el.innerHTML = `
+      <div class="task-header">
+        <span class="task-title">${escapeHtml(task.title)}</span>
+        <span class="task-dept">${escapeHtml(task.department)}</span>
+      </div>
+      <div class="task-desc">${escapeHtml(task.description)}</div>
+      <div class="task-footer">
+        <span>${escapeHtml(task.owner)}</span>
+        ${completeBtn}
+      </div>
+    `;
+
+      if (task.status === "completed") {
+        completedEl.appendChild(el);
+      } else {
+        activeEl.appendChild(el);
+      }
+    });
+  }
+
+  function clearCueTasksOnly() {
+    cueTaskStore.tasks = [];
+    renderCueTaskBoard();
+    saveLabState();
+  }
+
+  function buildOperationalSummarySourceDetail(apiResponse, source) {
+    const model = apiResponse?.model ?? apiResponse?.summary?.model ?? null;
+    return {
+      provider: source === "openai" ? "openai" : source === "local_fallback" ? "local_fallback" : "unknown",
+      model: model || null,
+      openaiRaw: source === "openai"
+    };
+  }
+
+  function buildAiReviewMarkup(analysis, modelName, badgeVariant) {
+    const badge =
+      badgeVariant === "real"
+        ? "Real OpenAI analysis"
+        : "Restored OpenAI analysis";
+
+    return `
+        <p>
+          <span class="pill">${badge}</span>
+          <span class="pill pill-blue">Model: ${escapeHtml(modelName || "unknown")}</span>
+          <span class="pill pill-magenta">CUE Deep Dive</span>
+        </p>
+
+        <details class="ai-exec-summary-details">
+          <summary>Show AI executive summary</summary>
+          <div class="ai-exec-summary-body">
+            <p>${escapeHtml(analysis.summary || "")}</p>
+          </div>
+        </details>
+
+        <div class="ai-section">
+          <h3>Deep Dive Cards</h3>
+          ${renderCueReviewCards(analysis.cue_review_cards || [])}
+        </div>
+
+        <div id="questions-for-pm" class="ai-section">
+          <h3>Questions for PM</h3>
+          ${renderList(analysis.questions_for_pm || [])}
+        </div>
+
+        <div class="ai-section">
+          <h3>Recommended Next Actions</h3>
+          ${renderList(analysis.recommended_next_actions || [])}
+        </div>
+      `;
+  }
+
+  function complexityInterpretation(level) {
+    const l = String(level || "").trim().toLowerCase();
+    if (l === "high") return "Large multi-department coordination expected.";
+    if (l === "low") return "Limited coordination expected.";
+    return "Some cross-team coordination expected.";
+  }
+
+  function classifyOperationalStep(step) {
+    const raw = String(step || "").trim();
+    const low = raw.toLowerCase();
+
+    if (
+      raw === OPS_PM_PHRASE_EXACT ||
+      (/no pm is assigned/i.test(raw) && /does this show need one/i.test(raw))
+    ) {
+      return {
+        type: "pm_question",
+        label: "Assign Project Manager",
+        buttonLabel: "Create PM Decision",
+        title: "Assign Project Manager",
+        ownershipTag: "Decision Needed"
+      };
+    }
+
+    if (
+      /\b(pm|project manager)\b/i.test(raw) &&
+      (/assign|need one|not assigned|missing|no\s+pm\b/i.test(low) ||
+        /does this show need/i.test(low))
+    ) {
+      return {
+        type: "pm_question",
+        label: "Assign Project Manager",
+        buttonLabel: "Create PM Decision",
+        title: "Assign Project Manager",
+        ownershipTag: "Decision Needed"
+      };
+    }
+
+    if (isOperationalTruckingStep(raw) || raw === OPS_TRUCKING_STEP_CANONICAL) {
+      return {
+        type: "trucking_review",
+        label: "Route Trucking",
+        buttonLabel: "Open Trucking Review",
+        title: "Route Trucking",
+        ownershipTag: "Assigned: Brian Kee"
+      };
+    }
+
+    if (
+      /staffing|crew|\bfoh\b|\bmonitor\b|\bpatch\b|\blabor\b|spot|\bop\b/i.test(low)
+    ) {
+      return {
+        type: "staffing_review",
+        label: "Confirm Staffing",
+        buttonLabel: "Create Staffing Review",
+        title: "Confirm Staffing",
+        ownershipTag: "Assigned: Staffing Coordinator"
+      };
+    }
+
+    if (/truck|trucking|brian kee|dispatch|transport|vehicle|semi\b/i.test(low)) {
+      return {
+        type: "trucking_review",
+        label: "Route Trucking",
+        buttonLabel: "Open Trucking Review",
+        title: "Route Trucking",
+        ownershipTag: "Assigned: Brian Kee"
+      };
+    }
+
+    if (
+      /warehouse|prep|pack|equipment|rigging|power|fiber|\bpa\b|scope|rental/i.test(
+        low
+      )
+    ) {
+      return {
+        type: "warehouse_prep",
+        label: "Review Warehouse Prep",
+        buttonLabel: "Create Ops Task",
+        title: "Review Warehouse Prep",
+        ownershipTag: "Assigned: Warehouse / Ops"
+      };
+    }
+
+    const short = raw.length > 100 ? `${raw.slice(0, 97)}…` : raw;
+    return {
+      type: "general_review",
+      label: "Review Action",
+      buttonLabel: "Create Task",
+      title: short ? `Review: ${short}` : "Review Action",
+      ownershipTag: "Assigned: Operations Review"
+    };
+  }
+
+  function operationalSummaryOwnerForType(type) {
+    if (type === "staffing_review") return "Staffing Coordinator";
+    if (type === "trucking_review") return "Brian Kee / Trucking Coordinator";
+    if (type === "warehouse_prep") return "Warehouse / Operations";
+    if (type === "pm_question") return "Operations Review";
+    return "Operations Review";
+  }
+
+  function isDuplicateOperationalSummaryTask(taskType, taskTitle) {
+    const dept = departmentForOperationalSummaryType(taskType);
+    return cueTaskStore.tasks.some(
+      (t) =>
+        t.source === "operational_summary" &&
+        t.department === dept &&
+        t.title === taskTitle
+    );
+  }
+
+  function recordOperationalSummaryTask(meta, detail) {
+    const timestamp = new Date().toLocaleString();
+
+    const entry = {
+      id: `action_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      action: "Create Draft Task",
+      actionType: "operational_summary_task",
+      status: "open",
+      cardType: "operational_summary",
+      cardTitle: `${meta.title}: ${detail.slice(0, 120)}`,
+      show: getShowLabel(),
+      flexElementId: $("flex-element-id")?.value || null,
+      quoteNumber: lastShowContext?.documentNumber || null,
+      showName: lastShowContext?.showName || null,
+      actorLabel: "current_user",
+      source: "operational_summary",
+      timestamp,
+      createdAtIso: new Date().toISOString()
+    };
+
+    actionLog.unshift(entry);
+    renderActionLog();
+
+    createCueTask(
+      {
+        title: meta.title,
+        description: detail,
+        owner: operationalSummaryOwnerForType(meta.type),
+        department: departmentForOperationalSummaryType(meta.type),
+        showName: lastShowContext?.showName || "",
+        quoteNumber: lastShowContext?.documentNumber || "",
+        source: "operational_summary"
+      },
+      { scroll: true }
+    );
+  }
+
+  function scrollToCoordinationSection(label) {
+    const c = String(label || "").trim().toLowerCase();
+    let id = null;
+    if (c === "staffing") id = "staffing-review";
+    else if (c === "trucking") id = "trucking-review";
+    else if (c === "warehouse") id = "equipment-scope-summary";
+    else if (c === "pm") {
+      id = document.getElementById("questions-for-pm")
+        ? "questions-for-pm"
+        : "cue-ai-review-cards";
+    }
+
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function formatOperationalSummaryVerifyLine(source, detail) {
+    if (source === "unknown" || !detail || detail.provider === "unknown") {
+      return "Awaiting operational summary…";
+    }
+    if (detail.provider === "local_fallback" || source === "local_fallback") {
+      return "Fallback: local deterministic summary";
+    }
+    const m = detail.model || "unknown model";
+    return `OpenAI: ${m} ✅`;
+  }
+
+  function setOperationalSummaryDebug(requestPayload, apiResponse, source) {
+    lastOperationalSummaryRequestPayload = requestPayload || null;
+    lastOperationalSummaryApiResponse = apiResponse || null;
+    lastOperationalSummarySource = source || "unknown";
+    lastOperationalSummarySourceDetail = buildOperationalSummarySourceDetail(apiResponse, lastOperationalSummarySource);
+
+    $("ops-summary-request-out").textContent = JSON.stringify(lastOperationalSummaryRequestPayload || {}, null, 2);
+    $("ops-summary-response-out").textContent = JSON.stringify(lastOperationalSummaryApiResponse || {}, null, 2);
+    $("ops-summary-source-out").textContent = String(lastOperationalSummarySource);
+    $("ops-summary-verify-out").textContent = formatOperationalSummaryVerifyLine(
+      lastOperationalSummarySource,
+      lastOperationalSummarySourceDetail
+    );
+    $("ops-summary-source-detail-out").textContent = JSON.stringify(lastOperationalSummarySourceDetail || {}, null, 2);
+
+    try {
+      saveLabState();
+    } catch {}
+  }
+
+  function clearPilotAuthStorage() {
+    const authKeys = [
+      "cue_pilot_auth",
+      "cuePilotAuth",
+      "cue_pilot_password",
+      "cuePilotPassword",
+      "cue_private_pilot_auth",
+      "cuePrivatePilotAuth"
+    ];
+
+    for (const key of authKeys) {
+      try {
+        localStorage.removeItem(key);
+      } catch {}
+      try {
+        sessionStorage.removeItem(key);
+      } catch {}
+    }
+  }
+
+  async function lockPilot() {
+    clearPilotAuthStorage();
+
+    try {
+      await fetch("/api/logout", {
+        method: "POST"
+      });
+    } catch (err) {
+      console.warn("Lock Pilot logout request failed, continuing to login screen.", err);
+    }
+
+    window.location.href = "/login";
+  }
+
+  function flattenFinancialRows(rows) {
+    const flattened = [];
+
+    function walk(row) {
+      if (!row) return;
+
+      if (Array.isArray(row.children)) {
+        for (const child of row.children) walk(child);
+      }
+
+      if (row.lineItemType === "resource" || row.resourceId) {
+        flattened.push(row);
+      }
+    }
+
+    const roots = Array.isArray(rows)
+      ? rows
+      : rows && Array.isArray(rows.children)
+        ? rows.children
+        : [];
+
+    for (const row of roots) walk(row);
+
+    return flattened;
+  }
+
+  function normalizeRowsInput(parsed) {
+    if (parsed == null) throw new Error("JSON is empty.");
+    if (Array.isArray(parsed)) return parsed;
+    if (typeof parsed === "object" && Array.isArray(parsed.children)) return parsed.children;
+    if (typeof parsed === "object") return [parsed];
+
+    throw new Error('Expected a JSON array, an object with "children", or one line-item object.');
+  }
+
+  const DRIVER_OVERRIDE = /driver|cdl|truck\s*driver/i;
+
+  function classifyCueBucket(row) {
+    const typeName = (row?.type?.name || "").trim().toLowerCase();
+    const name = row?.name || "";
+
+    if (typeName === "labor") {
+      if (DRIVER_OVERRIDE.test(name)) return "Trucking";
+      return "Staffing";
+    }
+
+    if (typeName === "transportation") return "Trucking";
+
+    return null;
+  }
+
+  function toPayloadLine(row, cueBucket) {
+    const pm = row.pricingModel;
+
+    return {
+      lineItemId: row.id ?? null,
+      rootLineId: row.rootLineId ?? null,
+      resourceId: row.resourceId ?? null,
+      flexTypeName: row.type?.name ?? null,
+      availabilityMode: row.type?.availabilityMode ?? null,
+      name: row.name ?? null,
+      quantity: row.quantity ?? 0,
+      timeQty: row.timeQty ?? null,
+      note: row.note ?? null,
+      pricingModel: typeof pm === "object" && pm ? pm.name ?? pm : pm ?? null,
+      priceEach: row.priceEach ?? null,
+      priceExtended: row.priceExtended ?? null,
+      costExtended: row.costExtended ?? null,
+      pickupDate: row.pickupDate ?? null,
+      returnDate: row.returnDate ?? null,
+      cueBucket
+    };
+  }
+
+  function formatContextValue(value) {
+    if (value == null || value === "") return "—";
+
+    if (typeof value === "number" && value > 1000000000000) {
+      return new Date(value).toLocaleString();
+    }
+
+    if (
+      typeof value === "string" &&
+      /^\d+$/.test(value) &&
+      Number(value) > 1000000000000
+    ) {
+      return new Date(Number(value)).toLocaleString();
+    }
+
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+      return new Date(value).toLocaleString();
+    }
+
+    if (typeof value === "object") return JSON.stringify(value);
+
+    return value;
+  }
+
+  function normalizeProjectManagerValue(value) {
+    if (value == null) return "Not assigned";
+
+    if (typeof value === "object") {
+      const candidate = value?.name ?? value?.displayValue ?? value?.label ?? "";
+      if (typeof candidate === "string" && candidate.trim() !== "") {
+        return candidate.trim();
+      }
+      return "Not assigned";
+    }
+
+    const text = String(value).trim();
+    if (!text) return "Not assigned";
+
+    const normalized = text.toLowerCase();
+    if (
+      normalized === "null" ||
+      normalized === "undefined" ||
+      normalized === "none" ||
+      normalized === "n/a" ||
+      normalized === "na" ||
+      normalized === "-" ||
+      normalized === "—" ||
+      normalized === "—" ||
+      normalized === "[object object]"
+    ) {
+      return "Not assigned";
+    }
+
+    return text;
+  }
+
+  function hasAssignedProjectManager(value) {
+    return normalizeProjectManagerValue(value) !== "Not assigned";
+  }
+
+  function getShowLabel() {
+    const quote = lastShowContext?.documentNumber || "Unknown quote";
+    const name = lastShowContext?.showName || "Unknown show";
+    return `${quote} — ${name}`;
+  }
+
+  function renderShowContext(context) {
+    if (!context) {
+      $("show-context-wrap").innerHTML = `<p class="muted">No show context loaded yet.</p>`;
+      return;
+    }
+
+    const fields = [
+      ["Quote #", context.documentNumber],
+      ["Show Name", context.showName],
+      ["Client", context.client],
+      ["Venue", context.venue],
+      ["Project Manager", normalizeProjectManagerValue(context.projectManager)],
+      ["Person Responsible", context.personResponsible],
+      ["Shipping Method", context.shippingMethod],
+      ["Ship Date", context.shipDate],
+      ["Load In", context.loadInDate],
+      ["Show Start", context.showStartDate],
+      ["Load Out", context.loadOutDate],
+      ["Planned Start", context.plannedStartDate],
+      ["Planned End", context.plannedEndDate],
+    ];
+
+    $("show-context-wrap").innerHTML = `
+      <table>
+        <tbody>
+          ${fields.map(([label, value]) => `
+            <tr>
+              <th>${escapeHtml(label)}</th>
+              <td>${escapeHtml(formatContextValue(value))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function buildEquipmentSummary(otherRows) {
+    const rentalRows = otherRows.filter((row) => {
+      return String(row?.type?.name || "").toLowerCase() === "rental";
+    });
+
+    const allText = rentalRows
+      .map((row) => `${row.name || ""} ${row.note || ""}`)
+      .join(" ")
+      .toLowerCase();
+
+    const largeQuantityItems = rentalRows
+      .filter((row) => Number(row.quantity || 0) >= 8)
+      .sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0))
+      .slice(0, 12)
+      .map((row) => ({
+        name: row.name || "Unnamed rental item",
+        quantity: row.quantity || 0,
+        note: row.note || null,
+        priceExtended: row.priceExtended ?? null
+      }));
+
+    const highValueItems = rentalRows
+      .filter((row) => Number(row.priceExtended || 0) > 0)
+      .sort((a, b) => Number(b.priceExtended || 0) - Number(a.priceExtended || 0))
+      .slice(0, 8)
+      .map((row) => ({
+        name: row.name || "Unnamed rental item",
+        quantity: row.quantity || 0,
+        note: row.note || null,
+        priceExtended: row.priceExtended ?? null
+      }));
+
+    const keywordMap = [
+      {
+        keyword: "large audio pa",
+        test: /\b(gsl|j8|j12|panther|leopard|meyer|d&b|loudspeaker|line array|subwoofer|sub)\b/i
+      },
+      {
+        keyword: "delay / fill system",
+        test: /\b(delay|front fill|outfill|sidefill|fill)\b/i
+      },
+      {
+        keyword: "control package",
+        test: /\b(console|s6l|venue|grandma|control surface|processing rack)\b/i
+      },
+      {
+        keyword: "fiber / drive package",
+        test: /\b(fiber|opticalcon|drive rack|snake|ethercon|w1)\b/i
+      },
+      {
+        keyword: "rigging / motors",
+        test: /\b(truss|motor|rigging|point|flying frame|grid|hoist)\b/i
+      },
+      {
+        keyword: "power distribution",
+        test: /\b(power|distro|feeder|camlock|camlok|pd|powercon)\b/i
+      },
+      {
+        keyword: "lighting package",
+        test: /\b(lighting|robe|martin|chauvet|color strike|mac ultra|megapointe|blinder|leko)\b/i
+      },
+      {
+        keyword: "video / led package",
+        test: /\b(video|led|wall|camera|projection|switcher|processor)\b/i
+      }
+    ];
+
+    const notableKeywords = keywordMap
+      .filter((entry) => entry.test.test(allText))
+      .map((entry) => entry.keyword);
+
+    const scopeSignals = [];
+
+    if (rentalRows.length >= 100) {
+      scopeSignals.push("large equipment scope");
+    } else if (rentalRows.length >= 40) {
+      scopeSignals.push("moderate equipment scope");
+    }
+
+    if (largeQuantityItems.length >= 5) {
+      scopeSignals.push("multiple large-quantity equipment lines");
+    }
+
+    if (notableKeywords.includes("large audio pa")) {
+      scopeSignals.push("large PA / speaker system");
+    }
+
+    if (notableKeywords.includes("delay / fill system")) {
+      scopeSignals.push("delay/fill coverage likely involved");
+    }
+
+    if (notableKeywords.includes("fiber / drive package")) {
+      scopeSignals.push("fiber/control drive package");
+    }
+
+    if (notableKeywords.includes("rigging / motors")) {
+      scopeSignals.push("rigging or flown system coordination");
+    }
+
+    if (notableKeywords.includes("power distribution")) {
+      scopeSignals.push("power distribution coordination");
+    }
+
+    return {
+      rentalLineCount: rentalRows.length,
+      otherLineCount: otherRows.length,
+      notableKeywords,
+      scopeSignals,
+      largeQuantityItems,
+      highValueItems
+    };
+  }
+
+  function renderEquipmentSummary(summary) {
+    if (!summary) {
+      $("equipment-scope-wrap").innerHTML = `<p class="muted">No equipment scope summarized yet.</p>`;
+      return;
+    }
+
+    const keywords = summary.notableKeywords?.length
+      ? `<div class="equipment-scope-keywords">${summary.notableKeywords
+          .map((item) => `<span class="scope-keyword-chip">${escapeHtml(item)}</span>`)
+          .join("")}</div>`
+      : `<span class="muted">No major keywords detected.</span>`;
+
+    const signals = summary.scopeSignals?.length
+      ? summary.scopeSignals.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+      : `<li>No major scope signals detected.</li>`;
+
+    const largeItems = summary.largeQuantityItems?.length
+      ? summary.largeQuantityItems.map((item) => `
+          <tr>
+            <td>${escapeHtml(item.name)}</td>
+            <td>${escapeHtml(item.quantity)}</td>
+            <td>${escapeHtml(item.note || "")}</td>
+            <td>${escapeHtml(formatMoney(item.priceExtended))}</td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="4" class="muted">No large-quantity rental lines detected.</td></tr>`;
+
+    const highValueItems = summary.highValueItems?.length
+      ? summary.highValueItems.map((item) => `
+          <tr>
+            <td>${escapeHtml(item.name)}</td>
+            <td>${escapeHtml(item.quantity)}</td>
+            <td>${escapeHtml(item.note || "")}</td>
+            <td>${escapeHtml(formatMoney(item.priceExtended))}</td>
+          </tr>
+        `).join("")
+      : `<tr><td colspan="4" class="muted">No high-value rental lines detected.</td></tr>`;
+
+    $("equipment-scope-wrap").innerHTML = `
+      <p>
+        <span class="pill">Rental lines: ${escapeHtml(summary.rentalLineCount)}</span>
+        <span class="pill pill-magenta">Other lines: ${escapeHtml(summary.otherLineCount)}</span>
+      </p>
+
+      <div class="ai-section">
+        <h3>Detected Scope Keywords</h3>
+        ${keywords}
+      </div>
+
+      <div class="ai-section">
+        <h3>Scope Signals</h3>
+        <ul class="rec-list">${signals}</ul>
+      </div>
+
+      <div class="ai-section">
+        <h3>Large Quantity Items</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Qty</th>
+              <th>Note</th>
+              <th>Price Ext.</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${largeItems}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="ai-section">
+        <h3>High Value Items</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Qty</th>
+              <th>Note</th>
+              <th>Price Ext.</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${highValueItems}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function polishOperationalAssessment(text) {
+    const t = String(text || "").trim();
+    if (!t) return t;
+    if (
+      /large\s+pa/i.test(t) &&
+      /(fiber|fiber\/drive|control)/i.test(t) &&
+      /rigging/i.test(t) &&
+      /power/i.test(t) &&
+      /(weeklong|prep-to-return|prep\s+to\s+return)/i.test(t)
+    ) {
+      return OPS_POLISHED_DENSE_PA_ASSESSMENT;
+    }
+    return t;
+  }
+
+  function isOperationalTruckingStep(text) {
+    const s = String(text || "").trim();
+    if (!s) return false;
+    if (s === OPS_PM_PHRASE_EXACT || s.includes("No PM is assigned")) return false;
+    if (/^Route trucking review to Brian Kee for timing and dispatch validation\.?$/i.test(s)) {
+      return true;
+    }
+    const low = s.toLowerCase();
+    if (
+      /brian\s+kee|trucking coordinator|trucking review|route trucking|dispatch planning|truck timing|vehicle\/trailer|transportation line/i.test(s)
+    ) {
+      return true;
+    }
+    if (/\btrucking\b/.test(low) && /\b(review|route|dispatch|timing|vehicle|truck)\b/.test(low)) {
+      return true;
+    }
+    return false;
+  }
+
+  function polishOperationalNextStep(step) {
+    const raw = String(step || "").trim();
+    if (!raw) return raw;
+    if (raw === OPS_PM_PHRASE_EXACT) return OPS_PM_PHRASE_EXACT;
+    if (/No PM is assigned/i.test(raw) && /does this show need one/i.test(raw)) {
+      return OPS_PM_PHRASE_EXACT;
+    }
+    if (isOperationalTruckingStep(raw)) {
+      return OPS_TRUCKING_STEP_CANONICAL;
+    }
+    return raw;
+  }
+
+  function operationalComplexityPillClass(level) {
+    const l = String(level || "").trim().toLowerCase();
+    const base = "ops-complexity-pill ops-summary-complexity-pill";
+    if (l === "high") return `${base} high ops-complexity-high`;
+    if (l === "low") return `${base} low ops-complexity-low`;
+    return `${base} medium ops-complexity-medium`;
+  }
+
+  function coordinationChipNavKey(part) {
+    const s = String(part || "").trim().toLowerCase();
+    if (s === "staffing" || s === "staff") return "staffing";
+    if (s === "trucking" || s === "truck" || s === "trucks") return "trucking";
+    if (s === "warehouse") return "warehouse";
+    if (s === "pm" || s.includes("project manager")) return "pm";
+    return null;
+  }
+
+  function renderCoordinationChips(str) {
+    const raw = String(str || "").trim();
+    if (!raw) {
+      return `<span class="muted">—</span>`;
+    }
+    const parts = raw.split(/\s*\+\s*/).map((p) => p.trim()).filter(Boolean);
+    if (!parts.length) {
+      return `<span class="muted">${escapeHtml(raw)}</span>`;
+    }
+    return `<div class="ops-summary-chips">${parts
+      .map((p) => {
+        const key = coordinationChipNavKey(p);
+        if (!key) {
+          return `<span class="ops-coord-chip">${escapeHtml(p)}</span>`;
+        }
+        return `<button type="button" class="ops-coord-chip ops-coord-nav" data-coord-key="${key}">${escapeHtml(p)}</button>`;
+      })
+      .join("")}</div>`;
+  }
+
+  function renderOperationalSummary(summary) {
+    if (!summary) {
+      lastOperationalSummarySteps = [];
+      $("operational-summary-wrap").innerHTML = `<p class="muted">Parse FLEX line items to generate an operational summary.</p>`;
+      return;
+    }
+
+    const display = { ...summary };
+    delete display.source;
+
+    const assessment = polishOperationalAssessment(display.assessment);
+    const rawSteps = Array.isArray(display.recommendedNextSteps)
+      ? display.recommendedNextSteps.map(polishOperationalNextStep).filter(Boolean)
+      : [];
+
+    let stepRows = rawSteps.map((detail) => {
+      const meta = classifyOperationalStep(detail);
+      return {
+        detail,
+        type: meta.type,
+        label: meta.label,
+        buttonLabel: meta.buttonLabel,
+        title: meta.title,
+        ownershipTag: meta.ownershipTag || ""
+      };
+    });
+
+    const hasPmStep = stepRows.some((r) => r.type === "pm_question");
+    if (
+      !hasAssignedProjectManager(lastShowContext?.projectManager) &&
+      !hasPmStep
+    ) {
+      stepRows.push({
+        detail: "Determine ownership for cross-department coordination.",
+        type: "pm_question",
+        label: "Assign Project Manager",
+        buttonLabel: "Create PM Decision",
+        title: "Assign Project Manager",
+        ownershipTag: "Decision Needed"
+      });
+    }
+
+    lastOperationalSummarySteps = stepRows.map((row, index) => ({
+      index,
+      ...row
+    }));
+
+    const complexityLevel = display.complexityLevel || "Medium";
+    const complexityLine = complexityInterpretation(complexityLevel);
+    const coordinationRequired = display.coordinationRequired || "";
+
+    const actionRowsHtml = lastOperationalSummarySteps.length
+      ? lastOperationalSummarySteps
+          .map(
+            (row) => `
+      <div class="ops-action-row">
+        <div class="ops-action-main">
+          <div class="ops-action-label">${escapeHtml(row.label)}</div>
+          ${
+            row.ownershipTag
+              ? `<p class="ops-action-tag">${escapeHtml(row.ownershipTag)}</p>`
+              : ""
+          }
+          <p class="ops-action-detail muted">${escapeHtml(row.detail)}</p>
+        </div>
+        <div class="ops-action-side">
+          <button type="button" class="ops-action-cta" data-ops-cta data-ops-index="${row.index}">${escapeHtml(row.buttonLabel)}</button>
+          <span class="ops-action-msg muted" data-ops-msg aria-live="polite"></span>
+        </div>
+      </div>`
+          )
+          .join("")
+      : `<p class="muted">No recommended next steps.</p>`;
+
+    $("operational-summary-wrap").innerHTML = `
+      <p class="ops-summary-lead">${escapeHtml(assessment)}</p>
+      <hr class="ops-summary-divider" />
+      <div class="ai-section">
+        <p class="ops-summary-section-label">Recommended next steps</p>
+        <div class="ops-action-list">
+          ${actionRowsHtml}
+        </div>
+      </div>
+      <hr class="ops-summary-divider" />
+      <div class="ai-section">
+        <h3>Complexity Level</h3>
+        <p><span class="${operationalComplexityPillClass(complexityLevel)}">${escapeHtml(complexityLevel)}</span></p>
+        <p class="ops-complexity-interpret">${escapeHtml(complexityLine)}</p>
+      </div>
+      <hr class="ops-summary-divider" />
+      <div class="ai-section">
+        <h3>Coordination Required</h3>
+        ${renderCoordinationChips(coordinationRequired)}
+      </div>
+    `;
+  }
+
+  function buildOperationalSummary() {
+    const recommendedNextSteps = [
+      "Confirm audio staffing coverage for FOH, monitors, and patch.",
+      OPS_TRUCKING_STEP_CANONICAL,
+      "Validate load-in, show-start, and load-out against the operational plan."
+    ];
+
+    if (!hasAssignedProjectManager(lastShowContext?.projectManager)) {
+      recommendedNextSteps.push(OPS_PM_PHRASE_EXACT);
+    }
+
+    return {
+      assessment:
+        "Festival-scale audio deployment with staffing and trucking lanes to confirm — tighten warehouse prep, moves, and timing before execution.",
+      recommendedNextSteps,
+      complexityLevel: "Medium",
+      coordinationRequired: "Staffing + Trucking"
+    };
+  }
+
+  function buildOperationalSummaryPayload(flat, staffing, trucking, other, equipmentSummary) {
+    const toCompactLine = (row) => ({
+      name: row?.name ?? null,
+      quantity: row?.quantity ?? null,
+      timeQty: row?.timeQty ?? null,
+      pickupDate: row?.pickupDate ?? null,
+      returnDate: row?.returnDate ?? null,
+      note: row?.note ?? null
+    });
+
+    const topEquipmentNames = other
+      .filter((row) => {
+        const typeName = String(row?.type?.name || "").toLowerCase();
+        return typeName === "rental" || typeName === "equipment";
+      })
+      .map((row) => String(row?.name || "").trim())
+      .filter(Boolean)
+      .slice(0, 25);
+
+    const detectedKeywords = Array.from(
+      new Set([
+        ...(Array.isArray(equipmentSummary?.notableKeywords) ? equipmentSummary.notableKeywords : []),
+        ...(Array.isArray(equipmentSummary?.scopeSignals) ? equipmentSummary.scopeSignals : [])
+      ])
+    );
+
+    return {
+      showContext: {
+        quoteNumber: lastShowContext?.documentNumber ?? null,
+        showName: lastShowContext?.showName ?? null,
+        client: lastShowContext?.client ?? null,
+        venue: lastShowContext?.venue ?? null,
+        projectManager: normalizeProjectManagerValue(lastShowContext?.projectManager),
+        personResponsible: lastShowContext?.personResponsible ?? null,
+        shippingMethod: lastShowContext?.shippingMethod ?? null,
+        shipDate: lastShowContext?.shipDate ?? null,
+        loadIn: lastShowContext?.loadInDate ?? null,
+        showStart: lastShowContext?.showStartDate ?? null,
+        loadOut: lastShowContext?.loadOutDate ?? null,
+        plannedStart: lastShowContext?.plannedStartDate ?? null,
+        plannedEnd: lastShowContext?.plannedEndDate ?? null
+      },
+      counts: {
+        totalLines: flat.length,
+        staffingLines: staffing.length,
+        truckingLines: trucking.length,
+        otherLines: other.length
+      },
+      staffingLines: staffing.slice(0, 10).map(toCompactLine),
+      truckingLines: trucking.slice(0, 10).map(toCompactLine),
+      equipmentSignals: {
+        topEquipmentNames,
+        detectedKeywords
+      }
+    };
+  }
+
+  async function renderOperationalSummaryWithAi(compactPayload, fallbackSummary) {
+    const requestSeq = ++operationalSummaryRequestSeq;
+    $("operational-summary-wrap").innerHTML = `<p class="muted">CUE is reviewing the FLEX intake…</p>`;
+    setOperationalSummaryDebug(compactPayload, { status: "loading" }, "unknown");
+
+    try {
+      const res = await fetch("/api/operational-summary", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          payload: compactPayload,
+          fallbackSummary,
+          aiMode: $("ai-mode-select")?.value || "advanced",
+          mode: $("ai-mode-select")?.value || "advanced"
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setOperationalSummaryDebug(compactPayload, data, "local_fallback");
+        throw new Error(data.error || "Operational summary analysis failed.");
+      }
+
+      if (requestSeq !== operationalSummaryRequestSeq) return;
+      const source = data?.source || data?.summary?.source || "openai";
+      setOperationalSummaryDebug(compactPayload, data, source);
+      if (source === "local_fallback") {
+        renderOperationalSummary(fallbackSummary);
+        return;
+      }
+      renderOperationalSummary(data.summary || fallbackSummary);
+    } catch (err) {
+      if (requestSeq !== operationalSummaryRequestSeq) return;
+      setOperationalSummaryDebug(
+        compactPayload,
+        {
+          error: err?.message || String(err)
+        },
+        "local_fallback"
+      );
+      console.warn("Operational summary fallback: Local summary", err);
+      renderOperationalSummary(fallbackSummary);
+    }
+  }
+
+  function formatMoney(value) {
+    const number = Number(value || 0);
+
+    if (!number) return "—";
+
+    return number.toLocaleString(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0
+    });
+  }
+
+  function renderTable(items, emptyMsg) {
+    if (!items.length) {
+      return `<p class="muted">${escapeHtml(emptyMsg)}</p>`;
+    }
+
+    return `
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Qty</th>
+            <th>Time Qty</th>
+            <th>Note</th>
+            <th>Pricing</th>
+            <th>Rate</th>
+            <th>FLEX type</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((r) => `
+            <tr>
+              <td>${escapeHtml(r.name)}</td>
+              <td>${escapeHtml(r.quantity)}</td>
+              <td>${escapeHtml(r.timeQty)}</td>
+              <td>${escapeHtml(r.note)}</td>
+              <td>${escapeHtml(r.pricingModel)}</td>
+              <td>${escapeHtml(r.priceEach ?? "—")}</td>
+              <td>${escapeHtml(r.flexTypeName)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function buildPayload(flat, staffing, trucking, other) {
+    return {
+      schema: "cue.flex.intake.v2",
+      source: "flex-show-intake",
+      parsedAt: new Date().toISOString(),
+      show_context: lastShowContext,
+      operating_rules: {
+        staffing_rule: "FLEX Labor rows route to staffing unless explicit driver-related labor override applies.",
+        trucking_rule: "FLEX Transportation rows route to trucking. Explicit driver-related labor also routes to trucking.",
+        driver_assignment_rule: "Brian Kee / Trucking Coordinator handles driver assignment as part of normal trucking workflow. Only discuss drivers when FLEX explicitly names a driver role.",
+        driver_owner: "Brian Kee / trucking coordinator",
+        ai_authority: "AI recommends only. Humans approve all staffing and trucking actions."
+      },
+      summary: {
+        resourceLineCount: flat.length,
+        staffingCount: staffing.length,
+        truckingCount: trucking.length,
+        otherResourceCount: other.length,
+        hydrationStatus: flat.some((row) => row.name || row.type?.name)
+          ? "hydrated"
+          : "thin_resource_rows_only"
+      },
+      staffing: staffing.map((r) => toPayloadLine(r, "Staffing")),
+      trucking: trucking.map((r) => toPayloadLine(r, "Trucking")),
+      otherResourceLines: [],
+      equipment_summary: buildEquipmentSummary(other),
+      otherResourceSummary: {
+        count: other.length,
+        flexTypeNames: Array.from(
+          new Set(
+            other
+              .map((row) => row.type?.name)
+              .filter(Boolean)
+          )
+        ),
+        note:
+          "Other/rental/equipment lines are intentionally excluded from the AI payload. Use equipment_summary for compressed operational equipment context."
+      },
+      instructions_for_model: [
+        "These rows were classified from FLEX financial line data.",
+        "Use show_context/header data for quote number, show name, client, venue, PM, shipping method, and operational dates.",
+        "Use equipment_summary to understand equipment scope, PM complexity, trucking/warehouse coordination, and whether the show has large PA, lighting, rigging, fiber/control, power, delay/fill, or video scope.",
+        "Do not guess operational dates from timeQty when show_context dates are available.",
+        "Staffing = FLEX Labor unless the line explicitly names a driver-related role.",
+        "Trucking = FLEX Transportation plus explicitly driver-related Labor overrides.",
+        "Driver-related labor routes to trucking and not staffing when explicitly named.",
+        "Only discuss drivers when FLEX explicitly names a driver role.",
+        "Brian Kee/trucking should confirm dispatch timing, dock timing, vehicle/trailer plan, load-in/load-out, return logistics, PM coordination, and warehouse coordination.",
+        "If hydrationStatus is thin_resource_rows_only, report that line item names/types are missing and the quote cannot be classified yet.",
+        "Align quantities and notes with the client's show plan in CUE.",
+        "Do not create assignments automatically. Recommend review cards and next actions.",
+        "Use CUE review cards as the primary output format."
+      ]
+    };
+  }
+
+  function renderList(items) {
+    if (!items || !items.length) {
+      return `<p class="muted">None.</p>`;
+    }
+
+    return `
+      <ul class="rec-list">
+        ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+      </ul>
+    `;
+  }
+
+  function statusLabel(status) {
+    if (!status) return "review needed";
+    return String(status).replaceAll("_", " ");
+  }
+
+  function statusPillClass(status) {
+    const s = String(status || "").toLowerCase();
+
+    if (s === "passed") return "pill";
+    if (s === "warning") return "pill pill-yellow";
+    if (s === "blocked") return "pill pill-red";
+
+    return "pill pill-blue";
+  }
+
+  function cardStyle(status) {
+    const s = String(status || "").toLowerCase();
+
+    if (s === "passed") return "border-color: #3d6b4a; background: #101b13;";
+    if (s === "warning") return "border-color: #6b5e2f; background: #1d1a10;";
+    if (s === "blocked") return "border-color: #6b3333; background: #1d1010;";
+
+    return "border-color: #28485a; background: #0d171d;";
+  }
+
+  function renderDetectedItems(items) {
+    if (!items || !items.length) {
+      return `<p class="muted">No specific detected items listed.</p>`;
+    }
+
+    return `
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Qty</th>
+            <th>Time Qty</th>
+            <th>Note</th>
+            <th>Interpretation</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((item) => `
+            <tr>
+              <td>${escapeHtml(item.name)}</td>
+              <td>${escapeHtml(item.quantity ?? "—")}</td>
+              <td>${escapeHtml(item.timeQty ?? "—")}</td>
+              <td>${escapeHtml(item.note ?? "")}</td>
+              <td>${escapeHtml(item.interpretation ?? "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function cardKey(card, index) {
+    const type = String(card.card_type || "review").toLowerCase();
+    const title = String(card.title || "CUE Review Card");
+    return `${type}:${index}:${title}`;
+  }
+
+  function getCardActionState(card, index) {
+    return cardActionState[cardKey(card, index)] || null;
+  }
+
+  function setCardActionState(card, index, action, task) {
+    cardActionState[cardKey(card, index)] = {
+      action,
+      taskType: task?.taskType || null,
+      status: task?.status || null,
+      timestamp: new Date().toLocaleString()
+    };
+  }
+
+  function recommendedPrimaryAction(card) {
+    const type = String(card.card_type || "").toLowerCase();
+
+    if (type === "staffing") return "Create Staffing Review";
+    if (type === "trucking") return "Create Trucking Review";
+    if (type === "coordination") return "Create Coordination Review";
+    if (type === "show_context") return "Mark Context Reviewed";
+    if (type === "missing_data") return "Create Missing Data Follow-up";
+    if (type === "risk") return "Create Risk Follow-up";
+
+    return "Create Review Task";
+  }
+
+  function renderCardActions(card, index) {
+    const type = String(card.card_type || "review").toLowerCase();
+    const title = card.title || "CUE Review Card";
+    const primaryAction = recommendedPrimaryAction(card);
+    const state = getCardActionState(card, index);
+
+    if (state) {
+      return `
+        <div class="action-bar">
+          <span class="pill pill-blue">Action taken: ${escapeHtml(state.action)}</span>
+          <span class="pill">Status: ${escapeHtml(state.status || "captured")}</span>
+          <span class="muted">${escapeHtml(state.timestamp || "")}</span>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="action-bar">
+        <button type="button" class="primary" data-action="${escapeHtml(primaryAction)}" data-card-index="${index}" data-card-type="${escapeHtml(type)}" data-card-title="${escapeHtml(title)}">
+          ${escapeHtml(primaryAction)}
+        </button>
+        <button type="button" class="ghost" data-action="Mark Reviewed" data-card-index="${index}" data-card-type="${escapeHtml(type)}" data-card-title="${escapeHtml(title)}">
+          Mark Reviewed
+        </button>
+        <button type="button" class="warn" data-action="Ignore" data-card-index="${index}" data-card-type="${escapeHtml(type)}" data-card-title="${escapeHtml(title)}">
+          Ignore
+        </button>
+      </div>
+    `;
+  }
+
+  function renderCueReviewCards(cards) {
+    if (!cards || !cards.length) {
+      return `<p class="muted">No CUE review cards returned.</p>`;
+    }
+
+    return cards.map((card, index) => `
+      <div class="review-card" style="${cardStyle(card.status)}">
+        <p>
+          <span class="pill">${escapeHtml(card.card_type || "review")}</span>
+          <span class="${statusPillClass(card.status)}">${escapeHtml(statusLabel(card.status))}</span>
+          <span class="pill pill-magenta">Priority: ${escapeHtml(card.priority || "medium")}</span>
+        </p>
+
+        <h3>${escapeHtml(card.title || "CUE Review Card")}</h3>
+        <p class="muted"><strong>Owner:</strong> ${escapeHtml(card.owner || "Ops Review")}</p>
+        <p>${escapeHtml(card.summary || "")}</p>
+
+        <div class="ai-section">
+          <h3>Detected Items</h3>
+          ${renderDetectedItems(card.detected_items || [])}
+        </div>
+
+        <div class="ai-section">
+          <h3>Risks</h3>
+          ${renderList(card.risks || [])}
+        </div>
+
+        <div class="ai-section">
+          <h3>Recommended Actions</h3>
+          ${renderList(card.recommended_actions || [])}
+        </div>
+
+        ${renderCardActions(card, index)}
+      </div>
+    `).join("");
+  }
+
+  // CUE_REVIEW_ACTIONS_V1_PATCH
+  function captureAction(action, cardType, cardTitle) {
+    const normalizedAction = String(action || "").toLowerCase();
+    const normalizedCardType = String(cardType || "review").toLowerCase();
+
+    const entry = {
+      id: `action_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      action,
+      actionType: actionTypeForAction(normalizedAction),
+      status: statusForAction(normalizedAction),
+      cardType: normalizedCardType,
+      cardTitle,
+      show: getShowLabel(),
+      flexElementId: $("flex-element-id")?.value || null,
+      quoteNumber: lastShowContext?.documentNumber || null,
+      showName: lastShowContext?.showName || null,
+      actorLabel: "current_user",
+      source: "ai_review_card",
+      timestamp: new Date().toLocaleString(),
+      createdAtIso: new Date().toISOString()
+    };
+
+    actionLog.unshift(entry);
+
+    let task = null;
+    const legacy = createDraftTaskFromAction(entry);
+    if (legacy) {
+      task = createCueTask(
+        {
+          title: legacy.title,
+          description: legacy.recommendedNextStep || legacy.summary || "",
+          owner: legacy.owner,
+          department: departmentFromLegacyTaskType(legacy.taskType),
+          showName: legacy.showName || "",
+          quoteNumber: legacy.sourceQuote || "",
+          source: legacy.source || "ai_review_card",
+          taskType: legacy.taskType
+        },
+        { scroll: true }
+      );
+    }
+
+    renderActionLog();
+
+    return { entry, task };
+  }
+
+  // CUE_PM_DECISION_CHECK_PATCH_SAFE
+  function isPmDecisionEntry(entry) {
+    const text = [
+      entry?.action,
+      entry?.actionType,
+      entry?.cardType,
+      entry?.cardTitle
+    ].filter(Boolean).join(" ").toLowerCase();
+
+    return (
+      text.includes("project manager") ||
+      text.includes("pm assigned") ||
+      text.includes("no pm") ||
+      text.includes("pm ownership") ||
+      text.includes("pm decision") ||
+      text.includes("does this show need one")
+    );
+  }
+  function createDraftTaskFromAction(entry) {
+    const normalizedAction = String(entry.action || "").toLowerCase();
+    const cardType = String(entry.cardType || "review").toLowerCase();
+
+    // Mark Reviewed and Ignore are audit-log-only actions.
+    // They should not create draft CUE tasks.
+    if (
+      normalizedAction.includes("ignore") ||
+      normalizedAction.includes("mark reviewed") ||
+      normalizedAction.includes("mark context reviewed")
+    ) {
+      return null;
+    }
+
+    const taskType = taskTypeForAction(normalizedAction, cardType, entry);
+
+    if (!taskType) {
+      return null;
+    }
+
+    const owner = ownerForTask(cardType, taskType);
+    const priority = priorityForCardType(cardType);
+
+    return {
+      id: `task_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      type: taskType,
+      taskType,
+      status: "draft",
+      priority,
+      ownerRole: owner.ownerRole,
+      ownerLabel: owner.ownerLabel,
+      owner: owner.ownerLabel,
+      source: "ai_review_card",
+      sourceSystem: "FLEX",
+      sourceQuote: entry.quoteNumber,
+      linkedFlexElementId: entry.flexElementId,
+      linkedFlexDocumentNumber: entry.quoteNumber,
+      showName: entry.showName,
+      showLabel: entry.show,
+      cardType,
+      cardTitle: entry.cardTitle,
+      title: titleForTask(taskType, entry.cardTitle),
+      summary: summaryForTask(taskType, entry),
+      recommendedNextStep: recommendedNextStepForTask(taskType),
+      recommendedActions: recommendedActionsForTask(taskType),
+      detectedItems: [],
+      requiresHumanApproval: true,
+      createdBy: "cue_ai",
+      createdAt: entry.timestamp,
+      createdAtIso: entry.createdAtIso
+    };
+  }
+
+  function actionTypeForAction(action) {
+    if (action.includes("ignore")) return "review_card_ignored";
+    if (action.includes("mark reviewed")) return "review_card_marked_reviewed";
+    if (action.includes("mark context reviewed")) return "review_card_marked_reviewed";
+    if (action.includes("create staffing")) return "create_staffing_review";
+    if (action.includes("create trucking")) return "create_trucking_review";
+    if (action.includes("create coordination")) return "create_coordination_review";
+    if (action.includes("missing data")) return "create_missing_data_follow_up";
+    if (action.includes("risk")) return "create_risk_follow_up";
+    return "create_review_task";
+  }
+
+  function taskTypeForAction(action, cardType, entry) {
+    if (action.includes("create staffing")) return "staffing_review";
+    if (action.includes("create trucking")) return "trucking_review";
+    if (action.includes("create coordination")) return "coordination_review";
+    if (action.includes("missing data") && isPmDecisionEntry(entry)) return "pm_decision_check";
+    if (action.includes("missing data")) return "missing_data_follow_up";
+    if (action.includes("risk")) return "risk_follow_up";
+
+    if (cardType === "staffing") return "staffing_review";
+    if (cardType === "trucking") return "trucking_review";
+    if (cardType === "coordination") return "coordination_review";
+    if (cardType === "show_context") return "coordination_review";
+
+    return `${cardType}_review_task`;
+  }
+
+  function statusForAction(action) {
+    if (action.includes("ignore")) return "ignored";
+    if (action.includes("mark reviewed")) return "reviewed";
+    if (action.includes("mark context reviewed")) return "reviewed";
+
+    return "open";
+  }
+
+  function ownerForTask(cardType, taskType) {
+    const type = String(cardType || "").toLowerCase();
+    const task = String(taskType || "").toLowerCase();
+
+    if (task === "staffing_review" || type === "staffing") {
+      return {
+        ownerRole: "staffing_coordinator",
+        ownerLabel: "Staffing Coordinator"
+      };
+    }
+
+    if (task === "trucking_review" || type === "trucking") {
+      return {
+        ownerRole: "trucking_coordinator",
+        ownerLabel: "Brian Kee / Trucking Coordinator"
+      };
+    }
+
+    if (task === "pm_decision_check") {
+      return {
+        ownerRole: "operations_review",
+        ownerLabel: "Operations Review"
+      };
+    }
+
+    if (task === "coordination_review" || type === "coordination" || type === "show_context") {
+      if (hasAssignedProjectManager(lastShowContext?.projectManager)) {
+        return {
+          ownerRole: "project_manager",
+          ownerLabel: `${normalizeProjectManagerValue(lastShowContext.projectManager)} / Project Manager`
+        };
+      }
+
+      return {
+        ownerRole: "operations_review",
+        ownerLabel: "Operations Review"
+      };
+    }
+
+    return {
+      ownerRole: "operations_review",
+      ownerLabel: "Operations Review"
+    };
+  }
+
+  function priorityForCardType(cardType) {
+    const type = String(cardType || "").toLowerCase();
+
+    if (type === "risk") return "high";
+    if (type === "show_context") return "medium";
+    if (type === "staffing") return "medium";
+    if (type === "trucking") return "medium";
+    if (type === "coordination") return "medium";
+
+    return "medium";
+  }
+
+  function titleForTask(taskType, fallbackTitle) {
+    if (taskType === "staffing_review") return "Review staffing coverage";
+    if (taskType === "trucking_review") return "Review trucking plan";
+    if (taskType === "coordination_review") return "Review cross-functional coordination";
+    if (taskType === "pm_decision_check") return "Decide whether this show needs a PM";
+    if (taskType === "missing_data_follow_up") return "Resolve missing data";
+    if (taskType === "risk_follow_up") return "Review operational risk";
+
+    return fallbackTitle || "Review CUE card";
+  }
+
+  function summaryForTask(taskType, entry) {
+    if (taskType === "staffing_review") {
+      return "Review labor roles, headcount, dates, call times, availability, conflicts, and coverage before creating or confirming staffing assignments.";
+    }
+
+    if (taskType === "trucking_review") {
+      return "Review truck count/type, dispatch timing, site access, dock/staging, load-in/load-out timing, return logistics, and warehouse coordination.";
+    }
+
+    if (taskType === "coordination_review") {
+      return "Review cross-functional alignment across warehouse prep, staffing timing, trucking movement, venue access, deployment sequence, load-out, and PM ownership decision if needed.";
+    }
+
+    if (taskType === "pm_decision_check") {
+      return "No PM is assigned — does this show need one? Confirm whether PM ownership is needed for cross-functional coordination before execution.";
+    }
+
+    if (taskType === "missing_data_follow_up") {
+      return "Request or update missing FLEX/CUE data before operational approval.";
+    }
+
+    if (taskType === "risk_follow_up") {
+      return "Review the flagged risk and assign an owner for resolution.";
+    }
+
+    return `Review AI card: ${entry.cardTitle || "Untitled card"}.`;
+  }
+
+  function recommendedActionsForTask(taskType) {
+    if (taskType === "staffing_review") {
+      return [
+        "Confirm role coverage and headcount.",
+        "Confirm call times and work dates.",
+        "Check availability and conflicts before assignment."
+      ];
+    }
+
+    if (taskType === "trucking_review") {
+      return [
+        "Confirm truck count and vehicle plan.",
+        "Confirm dispatch and site access timing.",
+        "Confirm load-out and return logistics."
+      ];
+    }
+
+    if (taskType === "coordination_review") {
+      return [
+        "Align warehouse prep, staffing, trucking, and venue access.",
+        "Confirm load-in and load-out sequence.",
+        "Confirm whether PM ownership is needed."
+      ];
+    }
+
+    return [
+      "Review the AI recommendation.",
+      "Confirm owner and next action."
+    ];
+  }
+
+  function recommendedNextStepForTask(taskType) {
+    if (taskType === "staffing_review") {
+      return "Staffing Coordinator reviews labor coverage, call times, availability, and conflicts before creating staffing assignments.";
+    }
+
+    if (taskType === "trucking_review") {
+      return "Brian Kee / Trucking Coordinator reviews truck count/type, dispatch timing, site access, load-in/load-out timing, returns, and warehouse coordination.";
+    }
+
+    if (taskType === "coordination_review") {
+      return "Operations Review aligns warehouse, staffing, trucking, venue access, schedule, and PM ownership before execution.";
+    }
+
+    if (taskType === "pm_decision_check") {
+      return "No PM is assigned — does this show need one? Confirm whether PM ownership is needed for cross-functional coordination before execution.";
+    }
+
+    if (taskType === "missing_data_follow_up") {
+      return "Request or update missing FLEX/CUE data before operational approval.";
+    }
+
+    if (taskType === "risk_follow_up") {
+      return "Review risk and assign owner for resolution.";
+    }
+
+    return "Review card and determine next operational action.";
+  }
+
+  function renderActionLog() {
+    if (!actionLog.length) {
+      $("action-log").innerHTML = `<p class="muted">No actions captured yet.</p>`;
+      return;
+    }
+
+    $("action-log").innerHTML = `
+      <div class="action-log">
+        ${actionLog.map((entry) => `
+          <div class="action-log-entry">
+            <strong>${escapeHtml(entry.action)}</strong>
+            <span class="muted"> - ${escapeHtml(entry.cardType)} - ${escapeHtml(entry.timestamp)}</span>
+            <br />
+            <span>${escapeHtml(entry.cardTitle)}</span>
+            <br />
+            <span class="muted">${escapeHtml(entry.show)}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function parseAndRender() {
+    $("parse-err").hidden = true;
+    $("parse-err").textContent = "";
+    $("parse-ok").hidden = true;
+    $("parse-ok").textContent = "";
+    $("ai-out").innerHTML = "";
+    resetDeepDivePanel();
+
+    let parsed;
+
+    try {
+      parsed = JSON.parse($("json-in").value.trim() || "null");
+    } catch (e) {
+      $("parse-err").hidden = false;
+      $("parse-err").textContent = "Invalid JSON: " + (e && e.message ? e.message : String(e));
+      return;
+    }
+
+    let roots;
+
+    try {
+      roots = normalizeRowsInput(parsed);
+    } catch (e) {
+      $("parse-err").hidden = false;
+      $("parse-err").textContent = e.message || String(e);
+      return;
+    }
+
+    const flat = flattenFinancialRows(roots);
+    const staffing = [];
+    const trucking = [];
+    const other = [];
+
+    for (const row of flat) {
+      const bucket = classifyCueBucket(row);
+
+      if (bucket === "Staffing") staffing.push(row);
+      else if (bucket === "Trucking") trucking.push(row);
+      else other.push(row);
+    }
+
+    const staffingView = staffing.map((row) => ({
+      name: row.name,
+      quantity: row.quantity,
+      timeQty: row.timeQty,
+      note: row.note,
+      pricingModel: row.pricingModel?.name ?? row.pricingModel,
+      priceEach: row.priceEach,
+      flexTypeName: row.type?.name
+    }));
+
+    const truckingView = trucking.map((row) => ({
+      name: row.name,
+      quantity: row.quantity,
+      timeQty: row.timeQty,
+      note: row.note,
+      pricingModel: row.pricingModel?.name ?? row.pricingModel,
+      priceEach: row.priceEach,
+      flexTypeName: row.type?.name
+    }));
+
+    $("staffing-wrap").innerHTML = renderTable(
+      staffingView,
+      "No staffing-classified rows. If live FLEX data was fetched, it may be thin row-data without name/type hydration yet."
+    );
+
+    $("trucking-wrap").innerHTML = renderTable(
+      truckingView,
+      "No trucking-classified rows. If live FLEX data was fetched, it may be thin row-data without name/type hydration yet."
+    );
+
+    const equipmentSummary = buildEquipmentSummary(other);
+    renderEquipmentSummary(equipmentSummary);
+    const fallbackOperationalSummary = buildOperationalSummary();
+    const compactOperationalPayload = buildOperationalSummaryPayload(
+      flat,
+      staffing,
+      trucking,
+      other,
+      equipmentSummary
+    );
+    renderOperationalSummaryWithAi(compactOperationalPayload, fallbackOperationalSummary);
+
+    lastPayload = buildPayload(flat, staffing, trucking, other);
+
+    $("payload-out").textContent = JSON.stringify(lastPayload, null, 2);
+
+    $("stat-total").textContent = String(flat.length);
+    $("stat-staffing").textContent = String(staffing.length);
+    $("stat-trucking").textContent = String(trucking.length);
+    $("stat-other").textContent = String(other.length);
+
+    const hydrationStatus = lastPayload.summary.hydrationStatus;
+    $("parse-ok").hidden = false;
+    $("parse-ok").textContent = `Parsed ${flat.length} resource rows: ${staffing.length} staffing, ${trucking.length} trucking, ${other.length} other. Hydration: ${hydrationStatus}.`;
+
+    saveLabState();
+  }
+
+  async function fetchFlexLineItems() {
+    const elementId = $("flex-element-id").value.trim();
+
+    if (!elementId) {
+      $("flex-fetch-status").innerHTML = `<span class="err">Enter a FLEX element ID first.</span>`;
+      return;
+    }
+
+    $("flex-fetch-status").textContent = "Fetching FLEX show intake...";
+
+    try {
+      const res = await fetch(`/api/flex-show-intake?elementId=${encodeURIComponent(elementId)}`);
+      const result = await res.json();
+
+      if (!res.ok) {
+        throw new Error(result.error || "FLEX fetch failed.");
+      }
+
+      lastShowContext = result.showContext || null;
+      lastRowData = result.rowData || null;
+      renderShowContext(lastShowContext);
+
+      $("json-in").value = JSON.stringify(result.rowData, null, 2);
+      $("row-data-out").textContent = JSON.stringify(lastRowData, null, 2);
+      $("flex-fetch-status").innerHTML = `<span class="success">Fetched FLEX header data and row-data for element ID ${escapeHtml(elementId)}.</span>`;
+
+      parseAndRender();
+      saveLabState();
+    } catch (err) {
+      $("flex-fetch-status").innerHTML = `<span class="err">${escapeHtml(err.message || String(err))}</span>`;
+    }
+  }
+
+  async function runCueAi() {
+    if (!lastPayload) {
+      $("ai-out").innerHTML = `<p class="err">Parse line items first.</p>`;
+      return;
+    }
+
+    $("ai-out").innerHTML = `<p class="muted">Analyzing with real CUE AI...</p>`;
+
+    try {
+      const res = await fetch("/api/analyze-flex-intake", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ...lastPayload,
+          aiMode: $("ai-mode-select")?.value || "advanced",
+          mode: $("ai-mode-select")?.value || "advanced",
+          selectedAiMode: $("ai-mode-select")?.value || "advanced"
+        })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "OpenAI analysis failed.");
+      }
+
+      const analysis = data.analysis || {};
+
+      lastAiResponse = data;
+      $("ai-response-out").textContent = JSON.stringify(lastAiResponse, null, 2);
+
+      $("ai-out").innerHTML = buildAiReviewMarkup(
+        analysis,
+        data.model || "unknown",
+        "real"
+      );
+
+      saveLabState();
+    } catch (err) {
+      $("ai-out").innerHTML = `<p class="err">${escapeHtml(err.message || String(err))}</p>`;
+    }
+  }
+
+  function clearActionLogOnly() {
+    actionLog = [];
+    renderActionLog();
+    saveLabState();
+  }
+  const DETECTED_FLEX_TEST_SHOW = {
+    flexElementId: "bac37124-8b40-4d00-a240-67b1ff05f2af",
+    documentNumber: "26-0401",
+    showName: "Main Stage Audio - Sweetwater 420 Fest 2026",
+    client: "Rival Entertainment",
+    venue: "Shirley Clarke Franklin Park"
+  };
+
+  function setConfirmedFlexWorkflowStatus(message, variant = "muted") {
+    const el = $("confirmed-flex-workflow-status");
+    if (!el) return;
+
+    const className = variant === "success" ? "success" : variant === "error" ? "err" : "muted";
+    el.innerHTML = `<span class="${className}">${escapeHtml(message)}</span>`;
+  }
+
+  function captureConfirmedFlexWorkflowAction(actionType, label) {
+    const timestamp = new Date().toLocaleString();
+
+    const entry = {
+      id: `action_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      action: label,
+      actionType,
+      status: actionType.includes("ignore") ? "ignored" : actionType.includes("snooze") ? "snoozed" : "captured",
+      cardType: "confirmed_flex_show",
+      cardTitle: DETECTED_FLEX_TEST_SHOW.showName,
+      show: `${DETECTED_FLEX_TEST_SHOW.documentNumber} — ${DETECTED_FLEX_TEST_SHOW.showName}`,
+      flexElementId: DETECTED_FLEX_TEST_SHOW.flexElementId,
+      quoteNumber: DETECTED_FLEX_TEST_SHOW.documentNumber,
+      showName: DETECTED_FLEX_TEST_SHOW.showName,
+      actorLabel: "current_user",
+      source: "confirmed_flex_polling_preview",
+      timestamp,
+      createdAtIso: new Date().toISOString()
+    };
+
+    actionLog.unshift(entry);
+    renderActionLog();
+    saveLabState();
+
+    return entry;
+  }
+
+  function createDetectedFlexImportTask() {
+    const description =
+      "Review confirmed FLEX quote before creating the CUE show shell, staffing review, trucking review, and coordination review. Operations Review confirms import, then CUE creates the show shell and routes review tasks without auto-confirming staffing or trucking.";
+
+    const task = createCueTask(
+      {
+        title: "Review import to CUE",
+        description,
+        owner: "Operations Review",
+        department: "ops",
+        showName: DETECTED_FLEX_TEST_SHOW.showName,
+        quoteNumber: DETECTED_FLEX_TEST_SHOW.documentNumber,
+        source: "confirmed_flex_polling_preview",
+        taskType: "cue_show_import_review"
+      },
+      { scroll: true }
+    );
+
+    return task;
+  }
+
+  async function reviewDetectedFlexIntake() {
+    $("flex-element-id").value = DETECTED_FLEX_TEST_SHOW.flexElementId;
+    setConfirmedFlexWorkflowStatus("Reviewing detected FLEX intake...", "muted");
+
+    captureConfirmedFlexWorkflowAction("confirmed_flex_review_intake", "Review Intake");
+
+    await fetchFlexLineItems();
+
+    setConfirmedFlexWorkflowStatus("Detected FLEX intake loaded for review.", "success");
+  }
+
+  function importDetectedFlexToCue() {
+    captureConfirmedFlexWorkflowAction("confirmed_flex_import_to_cue", "Import to CUE");
+    createDetectedFlexImportTask();
+    setConfirmedFlexWorkflowStatus("Prototype import review task created. No real CUE show was created yet.", "success");
+  }
+
+  function ignoreDetectedFlexShow() {
+    captureConfirmedFlexWorkflowAction("confirmed_flex_ignored", "Ignore Detected FLEX Show");
+    setConfirmedFlexWorkflowStatus("Detected FLEX show ignored for this prototype.", "success");
+  }
+
+  function snoozeDetectedFlexShow() {
+    captureConfirmedFlexWorkflowAction("confirmed_flex_snoozed", "Snooze Detected FLEX Show");
+    setConfirmedFlexWorkflowStatus("Detected FLEX show snoozed for this prototype.", "success");
+  }
+  // CUE_SYNC_FLEX_QUEUE_REPAIR_COMPLETE
+  const SYNC_FLEX_TEST_SHOWS = [
+    {
+      flexElementId: "bac37124-8b40-4d00-a240-67b1ff05f2af",
+      documentNumber: "26-0401",
+      showName: "Main Stage Audio - Sweetwater 420 Fest 2026",
+      client: "Rival Entertainment",
+      venue: "Shirley Clarke Franklin Park",
+      loadIn: "2026-04-16 12:00",
+      loadOut: "2026-04-19 03:30",
+      shippingMethod: "26' Box Truck",
+      status: "detected"
+    }
+  ];
+
+  function setSyncFlexStatus(message, variant = "muted") {
+    const el = $("sync-flex-now-status");
+    if (!el) return;
+
+    const className = variant === "success" ? "success" : variant === "error" ? "err" : "muted";
+    el.innerHTML = `<span class="${className}">${escapeHtml(message)}</span>`;
+  }
+
+  function syncFlexNowPrototype() {
+    const now = new Date().toLocaleString();
+
+    SYNC_FLEX_TEST_SHOWS.forEach((show) => {
+      const existing = detectedFlexShows.find((item) => item.flexElementId === show.flexElementId);
+
+      if (!existing) {
+        detectedFlexShows.unshift({
+          ...show,
+          detectedAt: now,
+          lastSeenAt: now
+        });
+      } else if (existing.status === "detected") {
+        existing.lastSeenAt = now;
+      }
+    });
+
+    actionLog.unshift({
+      id: `action_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      action: "Sync FLEX Now",
+      actionType: "sync_flex_now",
+      status: "captured",
+      cardType: "flex_sync",
+      cardTitle: "Manual FLEX sync",
+      show: "FLEX Sync Queue",
+      quoteNumber: null,
+      showName: null,
+      actorLabel: "current_user",
+      source: "sync_flex_now_prototype",
+      timestamp: now,
+      createdAtIso: new Date().toISOString()
+    });
+
+    setSyncFlexStatus(`Sync complete. ${activeDetectedFlexShows().length} active detected show(s).`, "success");
+    renderDetectedFlexShowsQueue();
+    renderActionLog();
+    saveLabState();
+  }
+
+  function activeDetectedFlexShows() {
+    return detectedFlexShows.filter((show) => show.status === "detected");
+  }
+
+  function clearDetectedFlexQueue() {
+    detectedFlexShows = [];
+    setSyncFlexStatus("Detected queue cleared.", "success");
+    renderDetectedFlexShowsQueue();
+    saveLabState();
+  }
+
+  function renderDetectedFlexShowsQueue() {
+    const target = $("detected-flex-shows-list");
+    if (!target) return;
+
+    const activeShows = activeDetectedFlexShows();
+
+    if (!activeShows.length) {
+      target.innerHTML = `<p class="muted">No detected FLEX shows yet.</p>`;
+      return;
+    }
+
+    target.innerHTML = activeShows.map((show) => `
+      <div class="task-card" style="margin-bottom:14px;">
+        <p>
+          <span class="pill">Confirmed FLEX Quote</span>
+          <span class="pill pill-blue">${escapeHtml(show.documentNumber)}</span>
+          <span class="pill pill-magenta">${escapeHtml(show.shippingMethod || "Shipping TBD")}</span>
+        </p>
+
+        <h3>${escapeHtml(show.documentNumber)} - ${escapeHtml(show.showName)}</h3>
+
+        <div class="task-meta">
+          <strong>Client:</strong> ${escapeHtml(show.client || "-")}<br />
+          <strong>Venue:</strong> ${escapeHtml(show.venue || "-")}<br />
+          <strong>Load-in:</strong> ${escapeHtml(show.loadIn || "-")}<br />
+          <strong>Load-out:</strong> ${escapeHtml(show.loadOut || "-")}<br />
+          <strong>FLEX Element ID:</strong> <code>${escapeHtml(show.flexElementId)}</code><br />
+          <strong>Detected:</strong> ${escapeHtml(show.detectedAt || "-")}
+        </div>
+
+        <div class="btn-row">
+          <button type="button" class="blue" data-flex-queue-action="review" data-flex-element-id="${escapeHtml(show.flexElementId)}">Review Intake</button>
+          <button type="button" data-flex-queue-action="import" data-flex-element-id="${escapeHtml(show.flexElementId)}">Import to CUE</button>
+          <button type="button" data-flex-queue-action="ignore" data-flex-element-id="${escapeHtml(show.flexElementId)}">Ignore</button>
+          <button type="button" data-flex-queue-action="snooze" data-flex-element-id="${escapeHtml(show.flexElementId)}">Snooze</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function findDetectedFlexShow(flexElementId) {
+    return detectedFlexShows.find((show) => show.flexElementId === flexElementId);
+  }
+
+  async function reviewDetectedFlexQueueShow(flexElementId) {
+    const show = findDetectedFlexShow(flexElementId);
+    if (!show) return;
+
+    $("flex-element-id").value = show.flexElementId;
+    setSyncFlexStatus(`Reviewing ${show.documentNumber} intake...`, "muted");
+
+    captureDetectedFlexQueueAction(show, "confirmed_flex_review_intake", "Review Intake");
+
+    await fetchFlexLineItems();
+
+    setSyncFlexStatus(`${show.documentNumber} intake loaded for review.`, "success");
+  }
+
+  function importDetectedFlexQueueShow(flexElementId) {
+    const show = findDetectedFlexShow(flexElementId);
+    if (!show) return;
+
+    captureDetectedFlexQueueAction(show, "confirmed_flex_import_to_cue", "Import to CUE");
+    createDetectedFlexQueueImportTask(show);
+
+    show.status = "imported";
+    show.importedAt = new Date().toLocaleString();
+
+    setSyncFlexStatus(`${show.documentNumber} import review task created.`, "success");
+    renderDetectedFlexShowsQueue();
+    saveLabState();
+  }
+
+  function ignoreDetectedFlexQueueShow(flexElementId) {
+    const show = findDetectedFlexShow(flexElementId);
+    if (!show) return;
+
+    captureDetectedFlexQueueAction(show, "confirmed_flex_ignored", "Ignore");
+
+    show.status = "ignored";
+    show.ignoredAt = new Date().toLocaleString();
+
+    setSyncFlexStatus(`${show.documentNumber} ignored.`, "success");
+    renderDetectedFlexShowsQueue();
+    saveLabState();
+  }
+
+  function snoozeDetectedFlexQueueShow(flexElementId) {
+    const show = findDetectedFlexShow(flexElementId);
+    if (!show) return;
+
+    captureDetectedFlexQueueAction(show, "confirmed_flex_snoozed", "Snooze");
+
+    show.status = "snoozed";
+    show.snoozedUntil = "Tomorrow";
+
+    setSyncFlexStatus(`${show.documentNumber} snoozed until tomorrow.`, "success");
+    renderDetectedFlexShowsQueue();
+    saveLabState();
+  }
+
+  function captureDetectedFlexQueueAction(show, actionType, label) {
+    const timestamp = new Date().toLocaleString();
+
+    const entry = {
+      id: `action_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      action: label,
+      actionType,
+      status: actionType.includes("ignore") ? "ignored" : actionType.includes("snooze") ? "snoozed" : "captured",
+      cardType: "confirmed_flex_show",
+      cardTitle: show.showName,
+      show: `${show.documentNumber} - ${show.showName}`,
+      flexElementId: show.flexElementId,
+      quoteNumber: show.documentNumber,
+      showName: show.showName,
+      actorLabel: "current_user",
+      source: "sync_flex_queue_prototype",
+      timestamp,
+      createdAtIso: new Date().toISOString()
+    };
+
+    actionLog.unshift(entry);
+    renderActionLog();
+
+    return entry;
+  }
+
+  function createDetectedFlexQueueImportTask(show) {
+    const description =
+      "Review confirmed FLEX quote before creating the CUE show shell, staffing review, trucking review, and coordination review. Operations Review confirms import, then CUE creates the show shell and routes review tasks without auto-confirming staffing or trucking.";
+
+    const task = createCueTask(
+      {
+        title: "Review import to CUE",
+        description,
+        owner: "Operations Review",
+        department: "ops",
+        showName: show.showName,
+        quoteNumber: show.documentNumber,
+        source: "sync_flex_queue_prototype",
+        taskType: "cue_show_import_review"
+      },
+      { scroll: true }
+    );
+
+    return task;
+  }
+  $("btn-sync-flex-now")?.addEventListener("click", () => {
+    syncFlexNowPrototype();
+  });
+
+  $("btn-clear-detected-flex-queue")?.addEventListener("click", () => {
+    clearDetectedFlexQueue();
+  });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-flex-queue-action]");
+    if (!button) return;
+
+    const action = button.dataset.flexQueueAction;
+    const flexElementId = button.dataset.flexElementId;
+
+    if (action === "review") {
+      reviewDetectedFlexQueueShow(flexElementId);
+    }
+
+    if (action === "import") {
+      importDetectedFlexQueueShow(flexElementId);
+    }
+
+    if (action === "ignore") {
+      ignoreDetectedFlexQueueShow(flexElementId);
+    }
+
+    if (action === "snooze") {
+      snoozeDetectedFlexQueueShow(flexElementId);
+    }
+  });
+
+  $("btn-parse").addEventListener("click", () => {
+    parseAndRender();
+    saveLabState();
+  });
+
+  $("btn-ai").addEventListener("click", runCueAi);
+
+  $("btn-deep-dive-toggle")?.addEventListener("click", () => {
+    const panel = $("ai-out-panel");
+    const btn = $("btn-deep-dive-toggle");
+    if (!panel || !btn) return;
+
+    const willOpen = panel.hidden;
+    panel.hidden = !willOpen;
+    btn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    btn.textContent = willOpen ? "Hide Detailed Analysis" : "View Detailed Analysis";
+  });
+  $("btn-fetch-flex").addEventListener("click", fetchFlexLineItems);
+
+  $("btn-review-detected-flex")?.addEventListener("click", () => {
+    reviewDetectedFlexIntake();
+  });
+
+  $("btn-import-detected-flex")?.addEventListener("click", () => {
+    importDetectedFlexToCue();
+  });
+
+  $("btn-ignore-detected-flex")?.addEventListener("click", () => {
+    ignoreDetectedFlexShow();
+  });
+
+  $("btn-snooze-detected-flex")?.addEventListener("click", () => {
+    snoozeDetectedFlexShow();
+  });
+
+  $("btn-clear-state").addEventListener("click", () => {
+    clearLabState();
+  });
+
+  $("btn-clear-cue-tasks")?.addEventListener("click", () => {
+    clearCueTasksOnly();
+  });
+
+$("btn-clear-action-log")?.addEventListener("click", () => {
+  clearActionLogOnly();
+});
+  $("btn-lock-pilot")?.addEventListener("click", lockPilot);
+
+  document.addEventListener("click", (event) => {
+    const completeBtn = event.target.closest("button[data-complete-task]");
+    if (completeBtn) {
+      const id = completeBtn.getAttribute("data-complete-task");
+      if (id) completeTask(id);
+      return;
+    }
+
+    const opsBtn = event.target.closest("button[data-ops-cta]");
+    if (opsBtn) {
+      event.preventDefault();
+      const idx = Number(opsBtn.dataset.opsIndex);
+      if (Number.isNaN(idx)) return;
+      const row = lastOperationalSummarySteps[idx];
+      if (!row) return;
+      const msgEl = opsBtn.closest(".ops-action-row")?.querySelector("[data-ops-msg]");
+      if (isDuplicateOperationalSummaryTask(row.type, row.title)) {
+        if (msgEl) msgEl.textContent = "✓ Task Created";
+        opsBtn.disabled = true;
+        return;
+      }
+      if (msgEl) msgEl.textContent = "";
+      recordOperationalSummaryTask({ type: row.type, title: row.title }, row.detail);
+      if (msgEl) msgEl.textContent = "✓ Task Created";
+      opsBtn.disabled = true;
+      return;
+    }
+
+    const coordBtn = event.target.closest("button[data-coord-key]");
+    if (coordBtn) {
+      const key = coordBtn.getAttribute("data-coord-key");
+      if (key) scrollToCoordinationSection(key);
+    }
+  });
+
+  restoreLabState();
+  renderDetectedFlexShowsQueue();
+
+  document.addEventListener("click", (event) => {
+    const tab = event.target.closest("button[data-debug-tab]");
+    if (!tab) return;
+
+    const target = tab.dataset.debugTab;
+
+    document.querySelectorAll(".debug-tab").forEach((button) => {
+      button.classList.toggle("active", button === tab);
+    });
+
+    document.querySelectorAll(".debug-panel").forEach((panel) => {
+      panel.classList.remove("active");
+    });
+
+    const activePanel = document.getElementById(`debug-${target}`);
+    if (activePanel) {
+      activePanel.classList.add("active");
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const cardType = button.dataset.cardType;
+    const cardTitle = button.dataset.cardTitle;
+    const cardIndex = Number(button.dataset.cardIndex);
+
+    const result = captureAction(action, cardType, cardTitle);
+
+    const cards = lastAiResponse?.analysis?.cue_review_cards || [];
+    const card = cards[cardIndex];
+
+    if (card) {
+      setCardActionState(card, cardIndex, action, result.task);
+    }
+
+    button.textContent = result.task ? "Task Captured" : "Captured";
+    button.disabled = true;
+
+    if (lastAiResponse?.analysis?.cue_review_cards) {
+      const analysis = lastAiResponse.analysis;
+
+      $("ai-out").innerHTML = buildAiReviewMarkup(
+        analysis,
+        lastAiResponse.model || "unknown",
+        "restored"
+      );
+    }
+
+    saveLabState();
+    console.log("CUE action captured:", result);
+  });
+})();
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
