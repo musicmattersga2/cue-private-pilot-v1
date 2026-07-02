@@ -2,9 +2,9 @@
   "name": "cue",
   "version": "1.0.0",
   "description": "CUE FLEX private pilot",
-  "main": "cue-flex-ai-server.mjs",
+  "main": "cue-flex-intelligence-server.mjs",
   "scripts": {
-    "start": "node cue-flex-ai-server.mjs",
+    "start": "node cue-flex-intelligence-server.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

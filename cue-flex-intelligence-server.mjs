@@ -48,8 +48,47 @@ const FLEX_HEADER_CODES = [
   "projectManagerId",
   "notes",
 
+  // FLEX financial totals shown on the quote/invoice Totals tab.
+  // These may vary by FLEX configuration; summary logic includes fallbacks.
+  "discount",
+  "subtotal",
+  "salesTax",
+  "additionalDiscount",
+  "creditCardFee",
+  "total",
+  "totalAppliedPayments",
+  "balanceDue",
+
   // Music Matters custom Ship Date field discovered earlier.
   "1d3824da-d004-41cc-b9f8-a3db6b9c4a6d",
+];
+
+
+const FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID =
+  process.env.FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID ||
+  "d256daec-b055-11df-b8d5-00e08175e43e";
+
+const FLEX_PEACHTREE_CORNERS_LOCATION_ID =
+  process.env.FLEX_PEACHTREE_CORNERS_LOCATION_ID ||
+  "2f49c62c-b139-11df-b8d5-00e08175e43e";
+
+const FLEX_MONTHLY_SALES_HEADER_FIELDS = [
+  "name",
+  "documentNumber",
+  "clientId",
+  "personResponsibleId",
+  "statusId",
+  "corporateIdentityId",
+  "locationId",
+  "preparedDate",
+  "plannedStartDate",
+  "dueDate",
+  "totalPrice",
+  "totalAppliedPayments",
+  "balanceDue",
+  "notes",
+  "pickupLocationId",
+  "returnLocationId",
 ];
 
 function sendJson(res, statusCode, data) {
@@ -162,6 +201,201 @@ function buildFlexHeaderDataUrl(elementId) {
   }
 
   return url;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function getAtlantaFlexMonthRange(year, month) {
+  const yearNumber = Number(year);
+  const monthNumber = Number(month);
+
+  if (!Number.isInteger(yearNumber) || yearNumber < 2000 || yearNumber > 2100) {
+    throw new Error("Invalid year. Use a four-digit year like 2026.");
+  }
+
+  if (!Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) {
+    throw new Error("Invalid month. Use 1 through 12.");
+  }
+
+  const startMonth = pad2(monthNumber);
+  const nextMonthDate = new Date(Date.UTC(yearNumber, monthNumber, 1));
+  const nextYear = nextMonthDate.getUTCFullYear();
+  const nextMonth = pad2(nextMonthDate.getUTCMonth() + 1);
+
+  // This matches the FLEX report request observed from Music Matters Invoices:
+  // local Atlanta month start/end represented as 04:00:00 through 03:59:59.
+  // Later we can make this DST-aware, but this exactly matches the discovered June report call.
+  return {
+    start: `${yearNumber}-${startMonth}-01T04:00:00`,
+    end: `${nextYear}-${nextMonth}-01T03:59:59`,
+  };
+}
+
+function buildFlexMonthlySalesUrl(year, month) {
+  const base = getFlexBaseUrl();
+  const { start, end } = getAtlantaFlexMonthRange(year, month);
+
+  const url = new URL(`${base}/api/element-list/total-data`);
+
+  url.searchParams.set("_dc", String(Date.now()));
+  url.searchParams.set("definitionId", FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID);
+
+  for (const field of FLEX_MONTHLY_SALES_HEADER_FIELDS) {
+    url.searchParams.append("headerFieldTypeIds", field);
+  }
+
+  const filter = [
+    {
+      property: "locationId",
+      valueList: [FLEX_PEACHTREE_CORNERS_LOCATION_ID],
+    },
+    {
+      property: "plannedStartDate",
+      value: `${start}|${end}`,
+      dateRangeFilter: true,
+    },
+  ];
+
+  url.searchParams.set("filter", JSON.stringify(filter));
+
+  return {
+    url,
+    dateRange: { start, end },
+    filter,
+  };
+}
+
+async function fetchFlexMonthlySales(year, month) {
+  const { url, dateRange, filter } = buildFlexMonthlySalesUrl(year, month);
+
+  console.log("Fetching FLEX monthly sales total from:", url.toString());
+
+  const data = await fetchJsonFromFlex(url);
+  const headerValueMap = data?.headerValueMap || {};
+
+  const monthlySalesTotal = toNumber(headerValueMap.totalPrice);
+  const totalAppliedPayments = toNumber(headerValueMap.totalAppliedPayments);
+  const balanceDue = toNumber(headerValueMap.balanceDue);
+
+  return {
+    year: Number(year),
+    month: Number(month),
+    dateRange,
+    elementCount: Number(data?.elementCount || 0),
+    monthlySalesTotal,
+    totalPrice: monthlySalesTotal,
+    totalAppliedPayments,
+    balanceDue,
+    source: "Music Matters Invoices total-data report",
+    definitionId: FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID,
+    locationId: FLEX_PEACHTREE_CORNERS_LOCATION_ID,
+    dateField: "plannedStartDate",
+    filter,
+    rawHeaderValueMap: headerValueMap,
+    requestUrl: url.toString(),
+  };
+}
+
+async function fetchFlexSalesGoalsRollup(year) {
+  const yearNumber = Number(year);
+
+  if (!Number.isInteger(yearNumber) || yearNumber < 2000 || yearNumber > 2100) {
+    throw new Error("Invalid year. Use a four-digit year like 2026.");
+  }
+
+  const months = [];
+
+  for (let month = 1; month <= 12; month += 1) {
+    const result = await fetchFlexMonthlySales(yearNumber, month);
+
+    months.push({
+      year: yearNumber,
+      month,
+      monthName: [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+      ][month - 1],
+      dateRange: result.dateRange,
+      elementCount: result.elementCount,
+      monthlySalesTotal: result.monthlySalesTotal,
+      totalPrice: result.totalPrice,
+      totalAppliedPayments: result.totalAppliedPayments,
+      balanceDue: result.balanceDue,
+    });
+  }
+
+  const yearTotal = Math.round(
+    months.reduce((sum, item) => sum + item.monthlySalesTotal, 0) * 100
+  ) / 100;
+
+  const totalAppliedPayments = Math.round(
+    months.reduce((sum, item) => sum + item.totalAppliedPayments, 0) * 100
+  ) / 100;
+
+  const balanceDue = Math.round(
+    months.reduce((sum, item) => sum + item.balanceDue, 0) * 100
+  ) / 100;
+
+  const elementCount = months.reduce((sum, item) => sum + item.elementCount, 0);
+
+  return {
+    year: yearNumber,
+    months,
+    yearTotal,
+    totalPrice: yearTotal,
+    totalAppliedPayments,
+    balanceDue,
+    elementCount,
+    source: "Music Matters Invoices total-data report",
+    definitionId: FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID,
+    locationId: FLEX_PEACHTREE_CORNERS_LOCATION_ID,
+    dateField: "plannedStartDate",
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function fetchFlexSalesGoalsRow(year) {
+  const rollup = await fetchFlexSalesGoalsRollup(year);
+
+  const monthMap = {};
+  for (const month of rollup.months) {
+    monthMap[month.monthName.toLowerCase()] = month.monthlySalesTotal;
+  }
+
+  return {
+    year: rollup.year,
+    january: monthMap.january || 0,
+    february: monthMap.february || 0,
+    march: monthMap.march || 0,
+    april: monthMap.april || 0,
+    may: monthMap.may || 0,
+    june: monthMap.june || 0,
+    july: monthMap.july || 0,
+    august: monthMap.august || 0,
+    september: monthMap.september || 0,
+    october: monthMap.october || 0,
+    november: monthMap.november || 0,
+    december: monthMap.december || 0,
+    total: rollup.yearTotal,
+    elementCount: rollup.elementCount,
+    totalAppliedPayments: rollup.totalAppliedPayments,
+    balanceDue: rollup.balanceDue,
+    source: rollup.source,
+    dateField: rollup.dateField,
+    generatedAt: rollup.generatedAt,
+  };
 }
 
 async function fetchJsonFromFlex(url) {
@@ -303,6 +537,16 @@ function buildShowContext(headerData, elementId) {
     personResponsible: extractHeaderValue(headerData, "personResponsibleId"),
     projectManager: extractHeaderValue(headerData, "projectManagerId"),
     notes: extractHeaderValue(headerData, "notes"),
+    financials: {
+      discount: toNumber(extractHeaderValue(headerData, "discount")),
+      subtotal: toNumber(extractHeaderValue(headerData, "subtotal")),
+      salesTax: toNumber(extractHeaderValue(headerData, "salesTax")),
+      additionalDiscount: toNumber(extractHeaderValue(headerData, "additionalDiscount")),
+      creditCardFee: toNumber(extractHeaderValue(headerData, "creditCardFee")),
+      total: toNumber(extractHeaderValue(headerData, "total")),
+      totalAppliedPayments: toNumber(extractHeaderValue(headerData, "totalAppliedPayments")),
+      balanceDue: toNumber(extractHeaderValue(headerData, "balanceDue")),
+    },
   };
 }
 
@@ -324,6 +568,266 @@ async function fetchFlexShowIntake(elementId) {
       rowDataUrl: rowResult.requestUrl,
     },
   };
+}
+
+
+function toNumber(value) {
+  if (value == null) return 0;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const cleaned = String(value)
+    .replace(/[$,]/g, "")
+    .trim();
+
+  const parsed = Number(cleaned);
+
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeFlexCellValue(value) {
+  if (value == null) return null;
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (typeof value === "object") {
+    if ("data" in value) return normalizeFlexCellValue(value.data);
+
+    return (
+      value.preferredDisplayString ||
+      value.displayName ||
+      value.name ||
+      value.value ||
+      value.text ||
+      value.label ||
+      value.formattedValue ||
+      value.shortName ||
+      value.id ||
+      null
+    );
+  }
+
+  return value;
+}
+
+function rowToObject(row) {
+  if (!row) return {};
+
+  if (!Array.isArray(row) && typeof row === "object") {
+    const output = {};
+
+    for (const [key, value] of Object.entries(row)) {
+      output[key] = normalizeFlexCellValue(value);
+    }
+
+    return output;
+  }
+
+  if (Array.isArray(row)) {
+    const output = {};
+
+    FLEX_ROW_DATA_CODES.forEach((code, index) => {
+      output[code] = normalizeFlexCellValue(row[index]);
+    });
+
+    return output;
+  }
+
+  return {};
+}
+
+function unwrapFlexRows(rowData) {
+  if (Array.isArray(rowData)) return rowData;
+
+  if (Array.isArray(rowData?.rows)) return rowData.rows;
+  if (Array.isArray(rowData?.data)) return rowData.data;
+  if (Array.isArray(rowData?.items)) return rowData.items;
+  if (Array.isArray(rowData?.children)) return rowData.children;
+
+  return [];
+}
+
+function classifyFlexLineItem(rowObject) {
+  const typeText = String(rowObject.type || rowObject.source_type || "").toLowerCase();
+  const nameText = String(rowObject.name || "").toLowerCase();
+  const noteText = String(rowObject.note || "").toLowerCase();
+
+  const combined = `${typeText} ${nameText} ${noteText}`;
+
+  if (
+    /\b(labor|crew|tech|technician|engineer|stagehand|operator|ld|a1|a2|v1|v2|pm|project manager)\b/i.test(
+      combined
+    )
+  ) {
+    return "labor";
+  }
+
+  if (
+    /\b(transport|transportation|truck|trucking|delivery|pickup|pick up|freight|mileage|van|box truck|trailer)\b/i.test(
+      combined
+    )
+  ) {
+    return "transportation";
+  }
+
+  if (
+    /\b(rental|fixture|console|audio|lighting|video|led|truss|rigging|cable|power|speaker|pa|microphone|deck|stage)\b/i.test(
+      combined
+    )
+  ) {
+    return "rental";
+  }
+
+  return "other";
+}
+
+function buildFlexDocumentSummary(intake) {
+  const rows = unwrapFlexRows(intake.rowData).map(rowToObject);
+
+  const summary = {
+    elementId: intake.elementId,
+    showContext: intake.showContext,
+    totals: {
+      document: 0,
+      rental: 0,
+      labor: 0,
+      transportation: 0,
+      other: 0,
+    },
+    counts: {
+      lineItems: rows.length,
+      rentalLines: 0,
+      laborLines: 0,
+      transportationLines: 0,
+      otherLines: 0,
+    },
+    lineItems: [],
+    warnings: [],
+    requests: intake.requests,
+  };
+
+  for (const row of rows) {
+    const category = classifyFlexLineItem(row);
+    const priceExtended = toNumber(row.priceExtended);
+    const quantity = toNumber(row.quantity);
+    const timeQty = toNumber(row.timeQty);
+
+    summary.totals.document += priceExtended;
+
+    if (category === "rental") {
+      summary.totals.rental += priceExtended;
+      summary.counts.rentalLines += 1;
+    } else if (category === "labor") {
+      summary.totals.labor += priceExtended;
+      summary.counts.laborLines += 1;
+    } else if (category === "transportation") {
+      summary.totals.transportation += priceExtended;
+      summary.counts.transportationLines += 1;
+    } else {
+      summary.totals.other += priceExtended;
+      summary.counts.otherLines += 1;
+    }
+
+    summary.lineItems.push({
+      category,
+      name: row.name || null,
+      type: row.type || null,
+      quantity,
+      timeQty,
+      pricingModel: row.pricingModel || null,
+      priceEach: toNumber(row.priceEach),
+      priceExtended,
+      note: row.note || null,
+    });
+  }
+
+  for (const key of Object.keys(summary.totals)) {
+    summary.totals[key] = Math.round(summary.totals[key] * 100) / 100;
+  }
+
+  // The line-item/category math above matches the category subtotal shown by FLEX,
+  // but FLEX can also apply quote-level adjustments after that, such as
+  // Additional Discount, tax, or credit-card fees. Keep both values so Sales Goals
+  // can use the final invoice/quote total instead of the category subtotal.
+  const flexFinancials = summary.showContext?.financials || {};
+  const categorySubtotal = summary.totals.document;
+  const balanceDue = flexFinancials.balanceDue || 0;
+  const totalAppliedPayments = flexFinancials.totalAppliedPayments || 0;
+
+  const inferredInvoiceTotalFromBalance =
+    balanceDue || totalAppliedPayments
+      ? Math.round((balanceDue + totalAppliedPayments) * 100) / 100
+      : 0;
+
+  const calculatedInvoiceTotal =
+    Math.round(
+      (
+        categorySubtotal +
+        (flexFinancials.salesTax || 0) +
+        (flexFinancials.additionalDiscount || 0) +
+        (flexFinancials.creditCardFee || 0)
+      ) * 100
+    ) / 100;
+
+  summary.totals.categorySubtotal = categorySubtotal;
+
+  summary.financials = {
+    categorySubtotal,
+    discount: flexFinancials.discount || 0,
+    subtotal: flexFinancials.subtotal || categorySubtotal,
+    salesTax: flexFinancials.salesTax || 0,
+    additionalDiscount: flexFinancials.additionalDiscount || 0,
+    creditCardFee: flexFinancials.creditCardFee || 0,
+    invoiceTotal:
+      flexFinancials.total ||
+      inferredInvoiceTotalFromBalance ||
+      calculatedInvoiceTotal,
+    totalAppliedPayments,
+    balanceDue,
+    invoiceTotalSource: flexFinancials.total
+      ? "flex_total"
+      : inferredInvoiceTotalFromBalance
+        ? "balance_due_plus_payments"
+        : "category_subtotal_fallback",
+  };
+
+  if (summary.financials.invoiceTotalSource === "balance_due_plus_payments") {
+    summary.warnings.push(
+      "Invoice total was inferred from FLEX balanceDue + totalAppliedPayments because FLEX header total was not returned."
+    );
+  }
+
+  if (summary.financials.invoiceTotalSource === "category_subtotal_fallback") {
+    summary.warnings.push(
+      "Invoice total fell back to category subtotal because FLEX final total fields were not returned."
+    );
+  }
+
+  if (!summary.showContext?.showName) {
+    summary.warnings.push("Missing show name from FLEX header data.");
+  }
+
+  if (!summary.showContext?.client) {
+    summary.warnings.push("Missing client from FLEX header data.");
+  }
+
+  if (!summary.showContext?.showStartDate && !summary.showContext?.plannedStartDate) {
+    summary.warnings.push("Missing show/planned start date from FLEX header data.");
+  }
+
+  if (summary.counts.lineItems === 0) {
+    summary.warnings.push("No FLEX line items were returned.");
+  }
+
+  return summary;
 }
 
 /**
@@ -685,6 +1189,25 @@ function isPilotAuthorized(req) {
   return token && token === getPilotSessionToken();
 }
 
+function isAutomationAuthorized(req, url) {
+  const configuredToken = process.env.CUE_AUTOMATION_TOKEN || "";
+
+  if (!configuredToken) return false;
+
+  const queryToken = url.searchParams.get("automationToken") || "";
+  const headerToken = req.headers["x-cue-automation-token"] || "";
+
+  return queryToken === configuredToken || headerToken === configuredToken;
+}
+
+function isAutomationAllowedPath(pathname) {
+  return [
+    "/api/flex/monthly-sales",
+    "/api/flex/sales-goals-rollup",
+    "/api/flex/sales-goals-row",
+  ].includes(pathname);
+}
+
 function renderLoginPage(message = "") {
   const escapedMessage = String(message || "")
     .replace(/&/g, "&amp;")
@@ -920,10 +1443,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (!isPilotAuthorized(req)) {
+    const automationAuthorized =
+      isAutomationAllowedPath(url.pathname) && isAutomationAuthorized(req, url);
+
+    if (!isPilotAuthorized(req) && !automationAuthorized) {
       if (url.pathname.startsWith("/api/")) {
         sendJson(res, 401, {
-          error: "Unauthorized. Enter the CUE Private Pilot password first.",
+          error:
+            "Unauthorized. Enter the CUE Private Pilot password first, or provide a valid automation token for approved automation endpoints.",
         });
         return;
       }
@@ -974,6 +1501,73 @@ const server = http.createServer(async (req, res) => {
       }
 
       const result = await fetchFlexShowIntake(elementId);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+
+    if (req.method === "GET" && url.pathname === "/api/flex-document-summary") {
+      const elementId = url.searchParams.get("elementId");
+
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId",
+        });
+        return;
+      }
+
+      const intake = await fetchFlexShowIntake(elementId);
+      const summary = buildFlexDocumentSummary(intake);
+
+      sendJson(res, 200, summary);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/monthly-sales") {
+      const year = url.searchParams.get("year");
+      const month = url.searchParams.get("month");
+
+      if (!year || !month) {
+        sendJson(res, 400, {
+          error: "Missing required query parameters: year and month",
+        });
+        return;
+      }
+
+      const result = await fetchFlexMonthlySales(year, month);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/sales-goals-rollup") {
+      const year = url.searchParams.get("year");
+
+      if (!year) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: year",
+        });
+        return;
+      }
+
+      const result = await fetchFlexSalesGoalsRollup(year);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/sales-goals-row") {
+      const year = url.searchParams.get("year");
+
+      if (!year) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: year",
+        });
+        return;
+      }
+
+      const result = await fetchFlexSalesGoalsRow(year);
 
       sendJson(res, 200, result);
       return;
@@ -1266,7 +1860,7 @@ console.log("[CUE AI MODEL SELECT]", {
 });
 
 server.listen(PORT, () => {
-    console.log(`CUE Private Pilot running at http://localhost:${PORT}`);
+    console.log(`CUE FLEX Intelligence Server running at http://localhost:${PORT}`);
 
   if (!CUE_PILOT_PASSWORD) {
     console.warn("WARNING: CUE_PILOT_PASSWORD is not set. Password gate is disabled for local development.");
