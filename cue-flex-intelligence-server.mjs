@@ -1310,6 +1310,108 @@ function buildFlexAskAnswer(intent, detail, question) {
   };
 }
 
+
+function buildFlexAskBriefPayload(fullResult) {
+  const result = fullResult?.result || {};
+  const showContext = fullResult?.showContext || {};
+  const summary = fullResult?.supportingData?.summary || {};
+  const financials = summary?.financials || {};
+  const totals = summary?.totals || {};
+
+  const payload = {
+    question: fullResult?.question || null,
+    intent: fullResult?.intent || null,
+    documentNumber: fullResult?.documentNumber || showContext?.documentNumber || null,
+    elementId: fullResult?.elementId || null,
+    showName: showContext?.showName || null,
+    client: showContext?.client || null,
+    venue: showContext?.venue || null,
+    plannedStartDate: showContext?.plannedStartDate || null,
+    answer: fullResult?.answer || result?.answer || "",
+    headline: result?.headline || null,
+    warnings: summary?.warnings || [],
+  };
+
+  if (fullResult?.intent === "document_labor") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.lines = (result.items || []).map((item) => ({
+      text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_transportation") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.lines = (result.items || []).map((item) => ({
+      text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_inventory") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.sections = (result.sections || []).map((section) => ({
+      name: section.name,
+      total: section.total,
+      totalFormatted: section.totalFormatted,
+      itemCount: section.itemCount,
+      lines: (section.items || []).map((item) => ({
+        text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+        name: item.name,
+        quantity: item.quantity,
+        timeQty: item.timeQty,
+        priceExtended: item.priceExtended,
+        priceExtendedFormatted: item.priceExtendedFormatted,
+        lineMute: item.lineMute,
+      })),
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_total") {
+    payload.invoiceTotal = result.invoiceTotal || financials.invoiceTotal || 0;
+    payload.invoiceTotalFormatted =
+      result.invoiceTotalFormatted || formatUsd(payload.invoiceTotal);
+    payload.categorySubtotal =
+      result.categorySubtotal || financials.categorySubtotal || totals.document || 0;
+    payload.categorySubtotalFormatted =
+      result.categorySubtotalFormatted || formatUsd(payload.categorySubtotal);
+    payload.balanceDue = result.balanceDue || financials.balanceDue || 0;
+    payload.balanceDueFormatted =
+      result.balanceDueFormatted || formatUsd(payload.balanceDue);
+    payload.invoiceTotalSource = result.invoiceTotalSource || financials.invoiceTotalSource || null;
+    payload.categoryBreakdown = result.categoryBreakdown || {
+      rental: totals.rental || 0,
+      rentalFormatted: formatUsd(totals.rental || 0),
+      labor: totals.labor || 0,
+      laborFormatted: formatUsd(totals.labor || 0),
+      transportation: totals.transportation || 0,
+      transportationFormatted: formatUsd(totals.transportation || 0),
+      other: totals.other || 0,
+      otherFormatted: formatUsd(totals.other || 0),
+    };
+    return payload;
+  }
+
+  payload.totals = totals;
+  payload.financials = financials;
+  payload.counts = fullResult?.supportingData?.counts || null;
+  return payload;
+}
+
 async function answerFlexAskQuestion(question) {
   const documentNumber = extractDocumentNumberFromQuestion(question);
   const intent = classifyFlexAskIntent(question);
@@ -1742,6 +1844,7 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/document-detail",
     "/api/flex/find-quote",
     "/api/flex/ask",
+    "/api/flex/ask-brief",
   ].includes(pathname);
 }
 
@@ -2061,13 +2164,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/flex/ask" && (req.method === "GET" || req.method === "POST")) {
+    if (
+      (url.pathname === "/api/flex/ask" || url.pathname === "/api/flex/ask-brief") &&
+      (req.method === "GET" || req.method === "POST")
+    ) {
       let question = url.searchParams.get("question");
+      let format = url.searchParams.get("format") || "";
+
+      if (url.pathname === "/api/flex/ask-brief") {
+        format = "brief";
+      }
 
       if (req.method === "POST") {
         const rawBody = await readRequestBody(req);
         const requestBody = JSON.parse(rawBody || "{}");
         question = requestBody.question || question;
+        format = requestBody.format || format;
       }
 
       if (!question) {
@@ -2078,6 +2190,11 @@ const server = http.createServer(async (req, res) => {
       }
 
       const result = await answerFlexAskQuestion(question);
+
+      if (String(format).toLowerCase() === "brief") {
+        sendJson(res, 200, buildFlexAskBriefPayload(result));
+        return;
+      }
 
       sendJson(res, 200, result);
       return;
