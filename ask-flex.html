@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask FLEX · CUE</title>
+  <style>
+    :root {
+      --bg: #030706;
+      --panel: rgba(9, 18, 15, 0.94);
+      --panel-2: rgba(255, 255, 255, 0.045);
+      --border: rgba(128, 255, 153, 0.16);
+      --text: #f4fff7;
+      --muted: #9bb5aa;
+      --green: #43d154;
+      --cyan: #00d5e8;
+      --magenta: #ff4fd8;
+      --danger: #ff6b6b;
+      --warning: #ffd166;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 16% 12%, rgba(67, 209, 84, 0.13), transparent 30%),
+        radial-gradient(circle at 84% 20%, rgba(0, 213, 232, 0.11), transparent 28%),
+        radial-gradient(circle at 58% 95%, rgba(255, 79, 216, 0.08), transparent 34%),
+        var(--bg);
+    }
+
+    .shell {
+      width: min(1100px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 22px;
+      margin-bottom: 24px;
+    }
+
+    .brand {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      color: #071208;
+      background: var(--green);
+      font-weight: 950;
+      letter-spacing: -0.04em;
+      box-shadow: 0 0 40px rgba(67, 209, 84, 0.18);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 0.96;
+      letter-spacing: -0.055em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin-top: 8px;
+      font-size: 15px;
+    }
+
+    .status {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 9px 13px;
+      color: #c8fbd2;
+      background: rgba(67, 209, 84, 0.08);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(13, 27, 22, 0.94), rgba(5, 10, 8, 0.96));
+      box-shadow: 0 18px 80px rgba(0, 0, 0, 0.26);
+      padding: 24px;
+    }
+
+    .question-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 86px;
+      resize: vertical;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--text);
+      font-size: 22px;
+      line-height: 1.35;
+      padding: 18px;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: rgba(67, 209, 84, 0.68);
+      box-shadow: 0 0 0 4px rgba(67, 209, 84, 0.10);
+    }
+
+    button {
+      border: 0;
+      border-radius: 18px;
+      background: var(--green);
+      color: #041006;
+      font-weight: 850;
+      font-size: 16px;
+      padding: 18px 22px;
+      cursor: pointer;
+      min-height: 62px;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .examples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .chip {
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 11px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .chip:hover {
+      color: var(--text);
+      border-color: rgba(67, 209, 84, 0.36);
+    }
+
+    .result {
+      margin-top: 18px;
+      display: none;
+    }
+
+    .result.visible {
+      display: block;
+    }
+
+    .answer-card {
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.045);
+      padding: 22px;
+    }
+
+    .eyebrow {
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .answer {
+      font-size: 26px;
+      line-height: 1.18;
+      letter-spacing: -0.03em;
+      margin-bottom: 18px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .meta span {
+      color: var(--muted);
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+
+    .section {
+      margin-top: 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 16px;
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 16px;
+    }
+
+    th, td {
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      padding: 11px 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    td.num, th.num {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .warning {
+      margin-top: 14px;
+      color: #ffe6a3;
+      background: rgba(255, 209, 102, 0.08);
+      border: 1px solid rgba(255, 209, 102, 0.18);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+
+    .error {
+      color: #ffd0d0;
+      background: rgba(255, 107, 107, 0.08);
+      border: 1px solid rgba(255, 107, 107, 0.18);
+      border-radius: 16px;
+      padding: 14px;
+      margin-top: 16px;
+      display: none;
+      white-space: pre-wrap;
+    }
+
+    .error.visible { display: block; }
+
+    details {
+      margin-top: 16px;
+      color: var(--muted);
+    }
+
+    pre {
+      overflow: auto;
+      max-height: 360px;
+      background: rgba(0,0,0,0.28);
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 14px;
+      border-radius: 16px;
+      color: #d6ffe1;
+      font-size: 12px;
+    }
+
+    @media (max-width: 740px) {
+      header, .question-row {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      button {
+        width: 100%;
+      }
+
+      .answer {
+        font-size: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark">C</div>
+        <div>
+          <h1>Ask FLEX</h1>
+          <div class="subtitle">Plain-English lookup for quotes, labor, inventory, totals, and transportation.</div>
+        </div>
+      </div>
+      <div class="status">CUE Intelligence · Live FLEX</div>
+    </header>
+
+    <section class="panel">
+      <div class="question-row">
+        <textarea id="question" spellcheck="true">What labor is on 26-1747?</textarea>
+        <button id="askButton">Ask FLEX</button>
+      </div>
+
+      <div class="examples">
+        <div class="chip" data-q="What labor is on 26-1747?">Labor on 26-1747</div>
+        <div class="chip" data-q="What inventory is on 26-1747?">Inventory on 26-1747</div>
+        <div class="chip" data-q="What transportation is on 26-1747?">Transportation on 26-1747</div>
+        <div class="chip" data-q="What is the total on 26-1747?">Total on 26-1747</div>
+      </div>
+
+      <div id="error" class="error"></div>
+
+      <div id="result" class="result">
+        <div class="answer-card">
+          <div id="headline" class="eyebrow">Answer</div>
+          <div id="answer" class="answer"></div>
+          <div id="meta" class="meta"></div>
+          <div id="details"></div>
+          <div id="warnings"></div>
+
+          <details>
+            <summary>Raw response</summary>
+            <pre id="raw"></pre>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const questionEl = document.getElementById("question");
+    const askButton = document.getElementById("askButton");
+    const resultEl = document.getElementById("result");
+    const errorEl = document.getElementById("error");
+    const headlineEl = document.getElementById("headline");
+    const answerEl = document.getElementById("answer");
+    const metaEl = document.getElementById("meta");
+    const detailsEl = document.getElementById("details");
+    const warningsEl = document.getElementById("warnings");
+    const rawEl = document.getElementById("raw");
+
+    for (const chip of document.querySelectorAll(".chip")) {
+      chip.addEventListener("click", () => {
+        questionEl.value = chip.dataset.q;
+        questionEl.focus();
+      });
+    }
+
+    questionEl.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        askFlex();
+      }
+    });
+
+    askButton.addEventListener("click", askFlex);
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function renderMeta(data) {
+      const parts = [
+        data.documentNumber ? `Quote ${data.documentNumber}` : null,
+        data.client || null,
+        data.venue || null,
+        data.plannedStartDate ? `Planned ${new Date(data.plannedStartDate).toLocaleDateString()}` : null,
+      ].filter(Boolean);
+
+      metaEl.innerHTML = parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("");
+    }
+
+    function renderLines(lines) {
+      if (!Array.isArray(lines) || lines.length === 0) return "";
+
+      return `
+        <div class="section">
+          <h3>Lines</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th class="num">Qty</th>
+                <th class="num">Time Qty</th>
+                <th class="num">Extended</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lines.map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td class="num">${escapeHtml(line.quantity ?? "")}</td>
+                  <td class="num">${escapeHtml(line.timeQty ?? "")}</td>
+                  <td class="num">${escapeHtml(line.priceExtendedFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderInventorySections(sections) {
+      if (!Array.isArray(sections) || sections.length === 0) return "";
+
+      return sections.map((section) => `
+        <div class="section">
+          <h3>${escapeHtml(section.name)} · ${escapeHtml(section.totalFormatted)} · ${escapeHtml(section.itemCount)} item(s)</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th class="num">Qty</th>
+                <th class="num">Time Qty</th>
+                <th class="num">Extended</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(section.lines || []).map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td class="num">${escapeHtml(line.quantity ?? "")}</td>
+                  <td class="num">${escapeHtml(line.timeQty ?? "")}</td>
+                  <td class="num">${escapeHtml(line.priceExtendedFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `).join("");
+    }
+
+    function renderTotalBreakdown(data) {
+      if (!data.categoryBreakdown) return "";
+
+      const rows = [
+        ["Rental", data.categoryBreakdown.rentalFormatted],
+        ["Labor", data.categoryBreakdown.laborFormatted],
+        ["Transportation", data.categoryBreakdown.transportationFormatted],
+        ["Other", data.categoryBreakdown.otherFormatted],
+      ];
+
+      return `
+        <div class="section">
+          <h3>Category Breakdown</h3>
+          <table>
+            <tbody>
+              ${rows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderWarnings(warnings) {
+      if (!Array.isArray(warnings) || warnings.length === 0) {
+        warningsEl.innerHTML = "";
+        return;
+      }
+
+      warningsEl.innerHTML = warnings
+        .map((warning) => `<div class="warning">${escapeHtml(warning)}</div>`)
+        .join("");
+    }
+
+    function renderAnswer(data) {
+      headlineEl.textContent = data.headline || "Answer";
+      answerEl.textContent = data.answer || "";
+      renderMeta(data);
+
+      if (data.sections) {
+        detailsEl.innerHTML = renderInventorySections(data.sections);
+      } else if (data.lines) {
+        detailsEl.innerHTML = renderLines(data.lines);
+      } else if (data.categoryBreakdown) {
+        detailsEl.innerHTML = renderTotalBreakdown(data);
+      } else {
+        detailsEl.innerHTML = "";
+      }
+
+      renderWarnings(data.warnings);
+      rawEl.textContent = JSON.stringify(data, null, 2);
+      resultEl.classList.add("visible");
+    }
+
+    async function askFlex() {
+      const question = questionEl.value.trim();
+
+      if (!question) return;
+
+      askButton.disabled = true;
+      askButton.textContent = "Asking...";
+      errorEl.classList.remove("visible");
+      errorEl.textContent = "";
+
+      try {
+        const url = `/api/flex/ask-brief?question=${encodeURIComponent(question)}`;
+        const response = await fetch(url, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+
+        const text = await response.text();
+        let data;
+
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(text.slice(0, 1000));
+        }
+
+        if (!response.ok) {
+          throw new Error(data.error || JSON.stringify(data, null, 2));
+        }
+
+        renderAnswer(data);
+      } catch (error) {
+        errorEl.textContent = error.message || "Ask FLEX failed.";
+        errorEl.classList.add("visible");
+      } finally {
+        askButton.disabled = false;
+        askButton.textContent = "Ask FLEX";
+      }
+    }
+  </script>
+</body>
+</html>

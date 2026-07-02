@@ -7,6 +7,7 @@ import "dotenv/config";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
+const ASK_FLEX_HTML_FILE = path.resolve("./ask-flex.html");
 const CUE_PILOT_PASSWORD = process.env.CUE_PILOT_PASSWORD || "";
 const CUE_PILOT_SESSION_SECRET =
   process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
@@ -2104,6 +2105,18 @@ const server = http.createServer(async (req, res) => {
       (url.pathname === "/" || url.pathname === "/cue-flex-intake-lab.html")
     ) {
       const html = fs.readFileSync(HTML_FILE, "utf8");
+
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(html);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ask-flex") {
+      const html = fs.readFileSync(ASK_FLEX_HTML_FILE, "utf8");
 
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
