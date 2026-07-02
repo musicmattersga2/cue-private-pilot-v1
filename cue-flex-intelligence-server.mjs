@@ -831,6 +831,148 @@ function buildFlexDocumentSummary(intake) {
 }
 
 
+
+function buildFlexSearchUrl(searchText) {
+  const base = getFlexBaseUrl();
+
+  const url = new URL(`${base}/api/search`);
+
+  url.searchParams.set("_dc", String(Date.now()));
+  url.searchParams.set("searchText", String(searchText || "").trim());
+
+  // Search types captured from FLEX global search while looking up quote 26-1747.
+  // Keep this broad enough to match quotes/financial documents while preserving FLEX behavior.
+  url.searchParams.set(
+    "searchTypes",
+    [
+      "inventory-model",
+      "358f312c-b051-11df-b8d5-00e08175e43e",
+      "d256daec-b055-11df-b8d5-00e08175e43e",
+      "9bfb850c-b117-11df-b8d5-00e08175e43e",
+    ].join(",")
+  );
+
+  url.searchParams.set("maxResults", "1000");
+  url.searchParams.set("canIncludeSerialUnits", "true");
+  url.searchParams.set("includeDeleted", "false");
+  url.searchParams.set("includeClosed", "true");
+  url.searchParams.set("page", "1");
+  url.searchParams.set("start", "0");
+  url.searchParams.set("limit", "25");
+
+  return url;
+}
+
+async function fetchFlexSearch(searchText) {
+  const url = buildFlexSearchUrl(searchText);
+
+  console.log("Fetching FLEX search from:", url.toString());
+
+  const data = await fetchJsonFromFlex(url);
+
+  return {
+    searchText,
+    requestUrl: url.toString(),
+    data,
+  };
+}
+
+function normalizeFlexSearchResults(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.rows)) return data.rows;
+
+  return [];
+}
+
+function extractSearchResultId(result) {
+  return (
+    result?.id ||
+    result?.elementId ||
+    result?.elementID ||
+    result?.element_id ||
+    result?.objectId ||
+    result?.objectID ||
+    null
+  );
+}
+
+async function findFlexQuoteByDocumentNumber(documentNumber) {
+  const normalizedDocumentNumber = String(documentNumber || "").trim();
+
+  if (!normalizedDocumentNumber) {
+    throw new Error("Missing required documentNumber.");
+  }
+
+  const searchResult = await fetchFlexSearch(normalizedDocumentNumber);
+  const results = normalizeFlexSearchResults(searchResult.data);
+
+  const candidates = results
+    .map((result) => ({
+      raw: result,
+      elementId: extractSearchResultId(result),
+      name:
+        result?.name ||
+        result?.displayName ||
+        result?.preferredDisplayString ||
+        result?.text ||
+        result?.label ||
+        null,
+      documentNumber:
+        result?.documentNumber ||
+        result?.number ||
+        result?.docNumber ||
+        result?.identifier ||
+        null,
+      type:
+        result?.type ||
+        result?.definitionName ||
+        result?.className ||
+        result?.category ||
+        null,
+    }))
+    .filter((candidate) => candidate.elementId);
+
+  // FLEX global search may return only name/id for the match. Prefer any result that explicitly
+  // carries the document number, otherwise use the first result returned for this exact search.
+  const exactMatch =
+    candidates.find(
+      (candidate) =>
+        String(candidate.documentNumber || "").trim().toLowerCase() ===
+        normalizedDocumentNumber.toLowerCase()
+    ) || candidates[0] || null;
+
+  if (!exactMatch) {
+    return {
+      documentNumber: normalizedDocumentNumber,
+      found: false,
+      elementId: null,
+      name: null,
+      matches: [],
+      requestUrl: searchResult.requestUrl,
+      rawCount: results.length,
+    };
+  }
+
+  return {
+    documentNumber: normalizedDocumentNumber,
+    found: true,
+    elementId: exactMatch.elementId,
+    name: exactMatch.name,
+    type: exactMatch.type,
+    matches: candidates.map((candidate) => ({
+      elementId: candidate.elementId,
+      name: candidate.name,
+      documentNumber: candidate.documentNumber,
+      type: candidate.type,
+    })),
+    requestUrl: searchResult.requestUrl,
+    rawCount: results.length,
+  };
+}
+
 function flattenFlexRows(rows, parentSection = null, depth = 0) {
   const flattened = [];
 
@@ -1353,6 +1495,7 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/sales-goals-rollup",
     "/api/flex/sales-goals-row",
     "/api/flex/document-detail",
+    "/api/flex/find-quote",
   ].includes(pathname);
 }
 
@@ -1672,12 +1815,43 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/flex/find-quote") {
+      const documentNumber = url.searchParams.get("documentNumber");
+
+      if (!documentNumber) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: documentNumber",
+        });
+        return;
+      }
+
+      const result = await findFlexQuoteByDocumentNumber(documentNumber);
+
+      sendJson(res, result.found ? 200 : 404, result);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/flex/document-detail") {
-      const elementId = url.searchParams.get("elementId");
+      let elementId = url.searchParams.get("elementId");
+      const documentNumber = url.searchParams.get("documentNumber");
+
+      if (!elementId && documentNumber) {
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          sendJson(res, 404, {
+            error: `No FLEX quote found for documentNumber ${documentNumber}`,
+            lookup: quoteLookup,
+          });
+          return;
+        }
+
+        elementId = quoteLookup.elementId;
+      }
 
       if (!elementId) {
         sendJson(res, 400, {
-          error: "Missing required query parameter: elementId",
+          error: "Missing required query parameter: elementId or documentNumber",
         });
         return;
       }
@@ -1685,7 +1859,15 @@ const server = http.createServer(async (req, res) => {
       const intake = await fetchFlexShowIntake(elementId);
       const detail = buildFlexDocumentDetail(intake);
 
-      sendJson(res, 200, detail);
+      sendJson(res, 200, {
+        ...detail,
+        lookup: documentNumber
+          ? {
+              documentNumber,
+              resolvedElementId: elementId,
+            }
+          : null,
+      });
       return;
     }
 
