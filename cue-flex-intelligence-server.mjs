@@ -830,6 +830,153 @@ function buildFlexDocumentSummary(intake) {
   return summary;
 }
 
+
+function flattenFlexRows(rows, parentSection = null, depth = 0) {
+  const flattened = [];
+
+  for (const rawRow of Array.isArray(rows) ? rows : []) {
+    const row = rowToObject(rawRow);
+    const children = Array.isArray(rawRow?.children) ? rawRow.children : [];
+
+    const typeName =
+      typeof rawRow?.type === "object"
+        ? rawRow.type?.name
+        : row.type;
+
+    const normalized = {
+      id: rawRow?.id || null,
+      parentSection,
+      depth,
+      name: row.name || rawRow?.name || null,
+      type: typeName || null,
+      lineItemType: rawRow?.lineItemType || null,
+      subtotalType: rawRow?.subtotalType || null,
+      category: classifyFlexLineItem({
+        ...row,
+        type: typeName,
+      }),
+      quantity: toNumber(row.quantity ?? rawRow?.quantity),
+      timeQty: toNumber(row.timeQty ?? rawRow?.timeQty),
+      pricingModel: normalizeFlexCellValue(row.pricingModel ?? rawRow?.pricingModel),
+      priceEach: toNumber(row.priceEach ?? rawRow?.priceEach),
+      priceExtended: toNumber(row.priceExtended ?? rawRow?.priceExtended),
+      costExtended: toNumber(rawRow?.costExtended),
+      note: row.note || rawRow?.note || null,
+      lineMute: Boolean(row.lineMute ?? rawRow?.lineMute),
+      priceMute: Boolean(row.priceMute ?? rawRow?.priceMute),
+      totalMute: Boolean(row.totalMute ?? rawRow?.totalMute),
+      leaf: Boolean(rawRow?.leaf),
+      subtotal: Boolean(rawRow?.subtotal),
+      container: Boolean(rawRow?.container),
+      hasChildren: children.length > 0,
+    };
+
+    flattened.push(normalized);
+
+    const nextParentSection =
+      depth === 0 && normalized.name ? normalized.name : parentSection;
+
+    if (children.length > 0) {
+      flattened.push(...flattenFlexRows(children, nextParentSection, depth + 1));
+    }
+  }
+
+  return flattened;
+}
+
+function isSectionTotalLine(item) {
+  return (
+    item.depth === 0 &&
+    item.subtotal === true &&
+    item.subtotalType === "header" &&
+    item.name
+  );
+}
+
+function isBillableDetailLine(item) {
+  if (!item.name) return false;
+  if (item.lineItemType === "subtotal") return false;
+  if (item.subtotal === true) return false;
+  if (item.priceExtended === 0 && item.quantity === 0) return false;
+
+  return true;
+}
+
+function buildFlexDocumentDetail(intake) {
+  const summary = buildFlexDocumentSummary(intake);
+  const topRows = unwrapFlexRows(intake.rowData);
+  const flatRows = flattenFlexRows(topRows);
+
+  const sectionTotals = flatRows.filter(isSectionTotalLine);
+
+  const sections = sectionTotals.map((section) => {
+    const items = flatRows
+      .filter((item) => item.parentSection === section.name)
+      .filter(isBillableDetailLine)
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        type: item.type,
+        quantity: item.quantity,
+        timeQty: item.timeQty,
+        pricingModel: item.pricingModel,
+        priceEach: item.priceEach,
+        priceExtended: item.priceExtended,
+        note: item.note,
+        lineMute: item.lineMute,
+        priceMute: item.priceMute,
+        totalMute: item.totalMute,
+      }));
+
+    return {
+      name: section.name,
+      category: section.category,
+      total: section.priceExtended,
+      itemCount: items.length,
+      items,
+    };
+  });
+
+  const laborItems = sections
+    .filter((section) => section.category === "labor" || /labor/i.test(section.name))
+    .flatMap((section) => section.items);
+
+  const transportationItems = sections
+    .filter(
+      (section) =>
+        section.category === "transportation" || /transport/i.test(section.name)
+    )
+    .flatMap((section) => section.items);
+
+  const inventoryItems = sections
+    .filter(
+      (section) =>
+        section.category === "rental" &&
+        !/labor|transport/i.test(section.name)
+    )
+    .flatMap((section) => section.items);
+
+  return {
+    elementId: intake.elementId,
+    showContext: intake.showContext,
+    summary,
+    counts: {
+      sections: sections.length,
+      flattenedRows: flatRows.length,
+      inventoryItems: inventoryItems.length,
+      laborItems: laborItems.length,
+      transportationItems: transportationItems.length,
+    },
+    sections,
+    laborItems,
+    transportationItems,
+    inventoryItems,
+    warnings: summary.warnings || [],
+  };
+}
+
+
 /**
  * CUE product-rule post-processing.
  * This makes output more reliable than prompt-only behavior.
@@ -1205,6 +1352,7 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/monthly-sales",
     "/api/flex/sales-goals-rollup",
     "/api/flex/sales-goals-row",
+    "/api/flex/document-detail",
   ].includes(pathname);
 }
 
@@ -1521,6 +1669,23 @@ const server = http.createServer(async (req, res) => {
       const summary = buildFlexDocumentSummary(intake);
 
       sendJson(res, 200, summary);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/document-detail") {
+      const elementId = url.searchParams.get("elementId");
+
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId",
+        });
+        return;
+      }
+
+      const intake = await fetchFlexShowIntake(elementId);
+      const detail = buildFlexDocumentDetail(intake);
+
+      sendJson(res, 200, detail);
       return;
     }
 
