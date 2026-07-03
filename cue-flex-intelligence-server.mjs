@@ -1139,6 +1139,726 @@ function extractDocumentNumberFromQuestion(question) {
   return match ? match[0] : null;
 }
 
+
+const FLEX_EQUIPMENT_FAMILIES = [
+  {
+    id: "speaker",
+    label: "Speakers / PA",
+    primaryPatterns: [
+      /\bspeakers?\b/i,
+      /\bloudspeakers?\b/i,
+      /\bline array\b/i,
+      /\barray\b/i,
+      /\bpa\b/i,
+      /\bsubwoofers?\b/i,
+      /\bsubs?\b/i,
+      /\bmonitors?\b/i,
+      /\bwedges?\b/i,
+      /\bfront fill\b/i,
+      /\bside fill\b/i,
+      /\bdelay\b/i,
+      /\bleopard\b/i,
+      /\blyon\b/i,
+      /\bmina\b/i,
+      /\bmelodie\b/i,
+      /\b700-hp\b/i,
+      /\b900-lfc\b/i,
+      /\b1100-lfc\b/i,
+      /\bmjf\b/i,
+      /\bmeyer\b/i,
+      /\bl-acoustics\b/i,
+      /\bd&b\b/i,
+      /\bjbl\b/i,
+      /\bqsc\b/i,
+      /\bks28\b/i,
+      /\bk1\b/i,
+      /\bk2\b/i,
+      /\bkara\b/i,
+      /\bara\b/i,
+      /\by-?series\b/i,
+      /\bv-?series\b/i,
+    ],
+    relatedPatterns: [
+      /\bspeaker cable\b/i,
+      /\bnl4\b/i,
+      /\bnl8\b/i,
+      /\bamplifier\b/i,
+      /\bamp rack\b/i,
+      /\bgalileo\b/i,
+      /\bgalaxy\b/i,
+      /\blake\b/i,
+      /\bprocessor\b/i,
+      /\bdrive rack\b/i,
+    ],
+  },
+  {
+    id: "led_panel",
+    label: "Video LED Panels",
+    primaryPatterns: [
+      /\bled panels?\b/i,
+      /\bvideo panels?\b/i,
+      /\bwall panels?\b/i,
+      /\bled wall\b/i,
+      /\bvideo wall\b/i,
+      /\binfiled\b/i,
+      /\babsen\b/i,
+      /\broe\b/i,
+      /\bunilumin\b/i,
+      /\bcb5\b/i,
+      /\bcb8\b/i,
+      /\bar4\.?6\b/i,
+      /\bdb2\b/i,
+      /\bbp2\b/i,
+      /\bpanel:\s*xl\b/i,
+      /\bpixel\b/i,
+    ],
+    relatedPatterns: [
+      /\bnovastar\b/i,
+      /\bvx1000s?\b/i,
+      /\bvx4s\b/i,
+      /\bmctrl\b/i,
+      /\bprocessor\b/i,
+      /\bsending card\b/i,
+      /\breceiving card\b/i,
+      /\bdata jumper\b/i,
+      /\bpower jumper\b/i,
+      /\bled cable\b/i,
+      /\bground support\b/i,
+      /\bheader bar\b/i,
+      /\bhanging bar\b/i,
+      /\bcurving\b/i,
+    ],
+  },
+  {
+    id: "video",
+    label: "Video",
+    primaryPatterns: [
+      /\bvideo\b/i,
+      /\bswitcher\b/i,
+      /\bprocessor\b/i,
+      /\bscaler\b/i,
+      /\bprojector\b/i,
+      /\bscreen\b/i,
+      /\bcamera\b/i,
+      /\bmonitors?\b/i,
+      /\bconfidence monitor\b/i,
+      /\bpreview monitor\b/i,
+      /\bplayback\b/i,
+      /\bresolume\b/i,
+      /\bbarco\b/i,
+      /\bblackmagic\b/i,
+      /\bdecimator\b/i,
+      /\baja\b/i,
+      /\bnovastar\b/i,
+      /\bvx1000s?\b/i,
+    ],
+    relatedPatterns: [
+      /\bsdi\b/i,
+      /\bhdmi\b/i,
+      /\bfiber\b/i,
+      /\bconverter\b/i,
+      /\bextender\b/i,
+      /\bcat6\b/i,
+    ],
+  },
+  {
+    id: "truss",
+    label: "Truss",
+    primaryPatterns: [
+      /\btruss\b/i,
+      /\bbox truss\b/i,
+      /\b12x12\b/i,
+      /\b20\.?5\b/i,
+      /\bgt\b/i,
+      /\btomcat\b/i,
+      /\btyler\b/i,
+      /\bglobal truss\b/i,
+      /\bcorner block\b/i,
+      /\bbase plate\b/i,
+      /\bspigots?\b/i,
+      /\btruss tower\b/i,
+      /\bcircle truss\b/i,
+    ],
+    relatedPatterns: [
+      /\bcouplers?\b/i,
+      /\bclamps?\b/i,
+      /\bcheeseborough\b/i,
+      /\bsafet(y|ies)\b/i,
+      /\bspan set\b/i,
+      /\bsteel\b/i,
+      /\bshackle\b/i,
+    ],
+  },
+  {
+    id: "motor",
+    label: "Motors / Hoists",
+    primaryPatterns: [
+      /\bmotors?\b/i,
+      /\bhoists?\b/i,
+      /\bchain motor\b/i,
+      /\bchain hoist\b/i,
+      /\b1\/2 ton\b/i,
+      /\bhalf ton\b/i,
+      /\b1 ton\b/i,
+      /\bone ton\b/i,
+      /\bquarter ton\b/i,
+      /\bcm lodestar\b/i,
+      /\blodestar\b/i,
+      /\bliftket\b/i,
+    ],
+    relatedPatterns: [
+      /\bmotor controller\b/i,
+      /\bcontroller\b/i,
+      /\bpickle\b/i,
+      /\bpickle cable\b/i,
+      /\bsocapex\b/i,
+      /\bspan set\b/i,
+      /\bshackle\b/i,
+      /\bsteel\b/i,
+    ],
+  },
+  {
+    id: "console",
+    label: "Consoles / Desks",
+    primaryPatterns: [
+      /\bconsoles?\b/i,
+      /\bdesks?\b/i,
+      /\bcontrol surface\b/i,
+      /\bgrandma\b/i,
+      /\bma2\b/i,
+      /\bma3\b/i,
+      /\bavid\b/i,
+      /\bdigico\b/i,
+      /\byamaha\b/i,
+      /\bcl5\b/i,
+      /\bql5\b/i,
+      /\bsd10\b/i,
+      /\bsd12\b/i,
+      /\bsd9\b/i,
+      /\bprofile\b/i,
+      /\bvenue\b/i,
+      /\bwing\b/i,
+      /\bx32\b/i,
+      /\bm32\b/i,
+    ],
+    relatedPatterns: [
+      /\bstage rack\b/i,
+      /\bsnake\b/i,
+      /\bdante\b/i,
+      /\brio\b/i,
+      /\bsoundgrid\b/i,
+      /\bnetwork switch\b/i,
+      /\bartnet\b/i,
+      /\bdmx\b/i,
+    ],
+  },
+  {
+    id: "mic",
+    label: "Microphones / Wireless",
+    primaryPatterns: [
+      /\bmics?\b/i,
+      /\bmicrophones?\b/i,
+      /\bwireless\b/i,
+      /\biem\b/i,
+      /\bin ear\b/i,
+      /\bin-ear\b/i,
+      /\bhandheld\b/i,
+      /\blavalier\b/i,
+      /\blav\b/i,
+      /\bbodypack\b/i,
+      /\bheadset\b/i,
+      /\bshure\b/i,
+      /\bsennheiser\b/i,
+      /\bsm58\b/i,
+      /\bsm57\b/i,
+      /\bksm\b/i,
+      /\bulxd\b/i,
+      /\bqlxd\b/i,
+      /\baxient\b/i,
+    ],
+    relatedPatterns: [
+      /\bantenna\b/i,
+      /\bpaddle\b/i,
+      /\bcombiners?\b/i,
+      /\bdistribution\b/i,
+      /\brf\b/i,
+      /\bmic stand\b/i,
+      /\bboom stand\b/i,
+      /\bxlr\b/i,
+    ],
+  },
+  {
+    id: "cable",
+    label: "Cable",
+    primaryPatterns: [
+      /\bcables?\b/i,
+      /\bxlr\b/i,
+      /\bsdi\b/i,
+      /\bhdmi\b/i,
+      /\bnl4\b/i,
+      /\bnl8\b/i,
+      /\bsocapex\b/i,
+      /\bcat6\b/i,
+      /\bethernet\b/i,
+      /\bpower cable\b/i,
+      /\bstinger\b/i,
+      /\bjumper\b/i,
+      /\bfeeder\b/i,
+      /\btail\b/i,
+    ],
+    relatedPatterns: [],
+  },
+  {
+    id: "power",
+    label: "Power",
+    primaryPatterns: [
+      /\bpower\b/i,
+      /\bdistro\b/i,
+      /\bpower distribution\b/i,
+      /\bdisconnect\b/i,
+      /\bfeeder\b/i,
+      /\btails?\b/i,
+      /\bcamlock\b/i,
+      /\bsocapex\b/i,
+      /\bstingers?\b/i,
+      /\blunchbox\b/i,
+      /\bbreaker\b/i,
+      /\btransformer\b/i,
+    ],
+    relatedPatterns: [
+      /\bcable ramp\b/i,
+      /\byellow jacket\b/i,
+    ],
+  },
+  {
+    id: "lighting",
+    label: "Lighting",
+    primaryPatterns: [
+      /\blights?\b/i,
+      /\blighting\b/i,
+      /\bfixtures?\b/i,
+      /\bwashes?\b/i,
+      /\bbeams?\b/i,
+      /\bspots?\b/i,
+      /\bstrobes?\b/i,
+      /\bpixelline\b/i,
+      /\bpar\b/i,
+      /\bmoving head\b/i,
+      /\bvl\d+\b/i,
+      /\bproteus\b/i,
+      /\bmaximus\b/i,
+      /\bhybrid\b/i,
+      /\brobe\b/i,
+      /\bmega ?pointe\b/i,
+      /\bbmfl\b/i,
+      /\bviper\b/i,
+      /\bultra\b/i,
+      /\bmartin\b/i,
+      /\bmac\b/i,
+      /\bcolorado\b/i,
+      /\bchauvet\b/i,
+      /\belation\b/i,
+    ],
+    relatedPatterns: [
+      /\bdmx\b/i,
+      /\bartnet\b/i,
+      /\bsacn\b/i,
+      /\bnode\b/i,
+      /\bdimmer\b/i,
+      /\brelay\b/i,
+    ],
+  },
+];
+
+const FLEX_ITEM_QUESTION_PATTERNS = [
+  /\bdoes\b/i,
+  /\bdo we have\b/i,
+  /\bhas\b/i,
+  /\bhave\b/i,
+  /\bhow many\b/i,
+  /\bwhat .* are on\b/i,
+  /\bwhich .* are on\b/i,
+  /\bis there\b/i,
+  /\bare there\b/i,
+  /\bshow me .* on\b/i,
+  /\bfind .* on\b/i,
+];
+
+function normalizeFlexItemText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^\w\s.+/-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getAllInventoryItemsWithSection(detail) {
+  const sections = Array.isArray(detail?.sections) ? detail.sections : [];
+
+  return sections
+    .filter(
+      (section) =>
+        section.category === "rental" &&
+        !/labor|transport/i.test(String(section.name || ""))
+    )
+    .flatMap((section) =>
+      (Array.isArray(section.items) ? section.items : []).map((item) => ({
+        ...item,
+        sectionName: section.name,
+        sectionCategory: section.category,
+      }))
+    );
+}
+
+function detectEquipmentFamilyFromQuestion(question) {
+  const text = String(question || "");
+
+  for (const family of FLEX_EQUIPMENT_FAMILIES) {
+    const allPatterns = [...family.primaryPatterns, ...family.relatedPatterns];
+    if (allPatterns.some((pattern) => pattern.test(text))) {
+      return family;
+    }
+  }
+
+  return null;
+}
+
+function stripItemSearchPhrase(question) {
+  let text = String(question || "");
+
+  text = text.replace(/\b\d{2}-\d{3,6}\b/g, " ");
+
+  const removePatterns = [
+    /\bwhat\b/gi,
+    /\bwhich\b/gi,
+    /\bdoes\b/gi,
+    /\bdo\b/gi,
+    /\bwe\b/gi,
+    /\bhave\b/gi,
+    /\bhas\b/gi,
+    /\bhow many\b/gi,
+    /\bis there\b/gi,
+    /\bare there\b/gi,
+    /\bshow\b/gi,
+    /\bme\b/gi,
+    /\bfind\b/gi,
+    /\bon\b/gi,
+    /\bin\b/gi,
+    /\bthe\b/gi,
+    /\ba\b/gi,
+    /\ban\b/gi,
+    /\bquote\b/gi,
+    /\bjob\b/gi,
+    /\bflex\b/gi,
+    /\bitems?\b/gi,
+    /\bequipment\b/gi,
+    /\bgear\b/gi,
+    /\brentals?\b/gi,
+  ];
+
+  for (const pattern of removePatterns) {
+    text = text.replace(pattern, " ");
+  }
+
+  return text
+    .replace(/[?!.:,;()[\]{}"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSignificantSearchTokens(value) {
+  const baseTokens = normalizeFlexItemText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .filter(
+      (token) =>
+        ![
+          "the",
+          "and",
+          "for",
+          "with",
+          "quote",
+          "job",
+          "flex",
+          "items",
+          "item",
+          "gear",
+          "equipment",
+          "rental",
+          "rentals",
+          "what",
+          "which",
+          "have",
+          "does",
+          "show",
+          "many",
+          "there",
+          "are",
+          "is",
+        ].includes(token)
+    );
+
+  const expanded = [];
+
+  for (const token of baseTokens) {
+    expanded.push(token);
+
+    // Handle simple plurals and model-number plurals, e.g. VX1000s -> vx1000.
+    if (token.length > 3 && token.endsWith("s")) {
+      expanded.push(token.slice(0, -1));
+    }
+
+    if (token.length > 4 && token.endsWith("es")) {
+      expanded.push(token.slice(0, -2));
+    }
+  }
+
+  return [...new Set(expanded)];
+}
+
+function itemMatchesAnyPattern(item, patterns) {
+  const haystack = `${item.name || ""} ${item.note || ""}`;
+  return patterns.some((pattern) => pattern.test(haystack));
+}
+
+function scoreExactItemMatch(item, tokens) {
+  if (!tokens.length) return 0;
+
+  const haystack = normalizeFlexItemText(
+    `${item.name || ""} ${item.note || ""} ${item.sectionName || ""}`
+  );
+
+  let score = 0;
+
+  for (const token of tokens) {
+    if (haystack.includes(token)) {
+      score += token.length >= 4 ? 2 : 1;
+    }
+  }
+
+  // Reward phrase-level match when the user's original phrase survives cleanup.
+  const phrase = [...new Set(tokens)].join(" ");
+  if (phrase.length >= 4 && haystack.includes(phrase)) {
+    score += 4;
+  }
+
+  return score;
+}
+
+function summarizeMatchedFlexItems(items, maxItems = 80) {
+  return (Array.isArray(items) ? items : [])
+    .slice(0, maxItems)
+    .map((item) => ({
+      name: item.name,
+      sectionName: item.sectionName,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      pricingModel: item.pricingModel,
+      priceEach: item.priceEach,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: formatUsd(item.priceExtended),
+      lineMute: item.lineMute,
+      matchType: item.matchType || null,
+      matchScore: item.matchScore || 0,
+    }));
+}
+
+
+function isSpecificItemSearchPhrase(tokens) {
+  const genericTokens = new Set([
+    "audio",
+    "speaker",
+    "speakers",
+    "pa",
+    "sub",
+    "subs",
+    "video",
+    "led",
+    "panel",
+    "panels",
+    "wall",
+    "truss",
+    "motor",
+    "motors",
+    "hoist",
+    "hoists",
+    "console",
+    "consoles",
+    "mic",
+    "mics",
+    "microphone",
+    "microphones",
+    "cable",
+    "cables",
+    "power",
+    "lighting",
+    "light",
+    "lights",
+  ]);
+
+  return tokens.some((token) => {
+    const t = String(token || "").toLowerCase();
+    return /[a-z]+[0-9]+|[0-9]+[a-z]+/i.test(t) || (t.length >= 6 && !genericTokens.has(t));
+  });
+}
+
+function isPrimaryFamilyMatch(item, family) {
+  const name = String(item?.name || "");
+
+  if (family?.id === "truss") {
+    return /\bbox truss\b|\bcircle truss\b|\btriangle truss\b|\b12"?\s*box truss\b|\b20\.?5"?\s*truss\b|\btruss\s*-\s*\d/i.test(name);
+  }
+
+  if (family?.id === "led_panel") {
+    return /\bpanel\b/i.test(name) && !/\b(processor|novastar|vx1000|vx4s|mctrl|sending|receiving|jumper|cable|ground support|header|hanging|curving)\b/i.test(name);
+  }
+
+  if (family?.id === "speaker") {
+    return !/\b(cable|nl4|nl8|amplifier|amp rack|processor|galileo|galaxy|lake|drive rack)\b/i.test(name);
+  }
+
+  return true;
+}
+
+function shouldDemotePrimaryFamilyMatch(item, family) {
+  const name = String(item?.name || "");
+
+  if (family?.id === "truss") {
+    return /(bolt|tool set|tool|base plate|steel pipe|strap|ballast|shackle|span set|safety|safeties|clamp|coupler)/i.test(name);
+  }
+
+  if (family?.id === "led_panel") {
+    return /(processor|novastar|vx1000|vx4s|mctrl|sending|receiving|jumper|cable|ground support|header|hanging|curving)/i.test(name);
+  }
+
+  if (family?.id === "speaker") {
+    return /(cable|nl4|nl8|amplifier|amp rack|processor|galileo|galaxy|lake|drive rack)/i.test(name);
+  }
+
+  return false;
+}
+
+function buildFlexSmartItemSearch(detail, question) {
+  const family = detectEquipmentFamilyFromQuestion(question);
+  const rawSearchPhrase = stripItemSearchPhrase(question);
+  const tokens = getSignificantSearchTokens(rawSearchPhrase);
+  const allItems = getAllInventoryItemsWithSection(detail);
+
+  let primaryMatches = [];
+  let relatedMatches = [];
+  let searchMode = family ? "family" : "exact";
+
+  const exactMatches = tokens.length
+    ? allItems
+        .map((item) => ({
+          ...item,
+          matchType: "primary",
+          matchScore: scoreExactItemMatch(item, tokens),
+        }))
+        .filter((item) => item.matchScore > 0)
+        .sort((a, b) => b.matchScore - a.matchScore)
+    : [];
+
+  if (isSpecificItemSearchPhrase(tokens) && exactMatches.length) {
+    searchMode = "exact";
+    primaryMatches = exactMatches;
+    relatedMatches = [];
+  } else if (family) {
+    const familyMatches = allItems
+      .filter((item) => itemMatchesAnyPattern(item, family.primaryPatterns))
+      .map((item) => ({ ...item, matchScore: 10 }));
+
+    primaryMatches = familyMatches
+      .filter((item) => isPrimaryFamilyMatch(item, family))
+      .filter((item) => !shouldDemotePrimaryFamilyMatch(item, family))
+      .map((item) => ({ ...item, matchType: "primary" }));
+
+    const demotedMatches = familyMatches
+      .filter(
+        (item) =>
+          !isPrimaryFamilyMatch(item, family) ||
+          shouldDemotePrimaryFamilyMatch(item, family)
+      )
+      .map((item) => ({ ...item, matchType: "related", matchScore: 5 }));
+
+    relatedMatches = [
+      ...demotedMatches,
+      ...allItems
+        .filter((item) => itemMatchesAnyPattern(item, family.relatedPatterns))
+        .filter(
+          (item) =>
+            !primaryMatches.some(
+              (primary) =>
+                primary.id === item.id &&
+                primary.name === item.name &&
+                primary.sectionName === item.sectionName
+            )
+        )
+        .map((item) => ({ ...item, matchType: "related", matchScore: 5 })),
+    ];
+
+    relatedMatches = relatedMatches.filter(
+      (item, index, array) =>
+        index ===
+        array.findIndex(
+          (other) =>
+            other.id === item.id &&
+            other.name === item.name &&
+            other.sectionName === item.sectionName
+        )
+    );
+  } else if (exactMatches.length) {
+    searchMode = "exact";
+    primaryMatches = exactMatches;
+    relatedMatches = [];
+  }
+
+  const totalPrimaryQuantity = primaryMatches.reduce(
+    (sum, item) => sum + Number(item.quantity || 0),
+    0
+  );
+  const totalRelatedQuantity = relatedMatches.reduce(
+    (sum, item) => sum + Number(item.quantity || 0),
+    0
+  );
+  const primaryTotal = primaryMatches.reduce(
+    (sum, item) => sum + Number(item.priceExtended || 0),
+    0
+  );
+  const relatedTotal = relatedMatches.reduce(
+    (sum, item) => sum + Number(item.priceExtended || 0),
+    0
+  );
+
+  const familyLabel =
+    searchMode === "exact"
+      ? `Item Search: ${rawSearchPhrase || "Item"}`
+      : family?.label || (rawSearchPhrase ? `Item Search: ${rawSearchPhrase}` : "Item Search");
+
+  return {
+    familyId: searchMode === "exact" ? null : family?.id || null,
+    familyLabel,
+    searchMode,
+    searchPhrase: rawSearchPhrase,
+    tokens,
+    primaryMatches: summarizeMatchedFlexItems(primaryMatches, 100),
+    relatedMatches: summarizeMatchedFlexItems(relatedMatches, 100),
+    primaryCount: primaryMatches.length,
+    relatedCount: relatedMatches.length,
+    totalCount: primaryMatches.length + relatedMatches.length,
+    totalPrimaryQuantity,
+    totalRelatedQuantity,
+    primaryTotal: Math.round(primaryTotal * 100) / 100,
+    primaryTotalFormatted: formatUsd(primaryTotal),
+    relatedTotal: Math.round(relatedTotal * 100) / 100,
+    relatedTotalFormatted: formatUsd(relatedTotal),
+    totalMatchedValue: Math.round((primaryTotal + relatedTotal) * 100) / 100,
+    totalMatchedValueFormatted: formatUsd(primaryTotal + relatedTotal),
+  };
+}
+
 function classifyFlexAskIntent(question) {
   const text = String(question || "").toLowerCase();
 
@@ -1150,12 +1870,21 @@ function classifyFlexAskIntent(question) {
     return "document_transportation";
   }
 
-  if (/\b(inventory|gear|equipment|rental|rentals|items|item list|what is on|what's on)\b/i.test(text)) {
-    return "document_inventory";
-  }
-
   if (/\b(total|price|cost|amount|balance|invoice total|quote total)\b/i.test(text)) {
     return "document_total";
+  }
+
+  const hasItemQuestionShape = FLEX_ITEM_QUESTION_PATTERNS.some((pattern) =>
+    pattern.test(text)
+  );
+  const hasEquipmentFamily = Boolean(detectEquipmentFamilyFromQuestion(text));
+
+  if (hasEquipmentFamily || hasItemQuestionShape) {
+    return "document_item_search";
+  }
+
+  if (/\b(inventory|gear|equipment|rental|rentals|items|item list|what is on|what's on)\b/i.test(text)) {
+    return "document_inventory";
   }
 
   return "document_summary";
@@ -1233,6 +1962,37 @@ function buildFlexAskAnswer(intent, detail, question) {
       total: transportationTotal,
       totalFormatted: formatUsd(transportationTotal),
       items,
+    };
+  }
+
+  if (intent === "document_item_search") {
+    const itemSearch = buildFlexSmartItemSearch(detail, question);
+    const primaryText =
+      itemSearch.primaryCount === 1
+        ? "1 primary match"
+        : `${itemSearch.primaryCount} primary matches`;
+    const relatedText =
+      itemSearch.relatedCount === 1
+        ? "1 related match"
+        : `${itemSearch.relatedCount} related matches`;
+
+    const answer =
+      itemSearch.totalCount > 0
+        ? `${documentLabel}: ${itemSearch.familyLabel} found ${primaryText}${
+            itemSearch.relatedCount ? ` and ${relatedText}` : ""
+          }. Primary quantity total is ${itemSearch.totalPrimaryQuantity}. Primary matched value is ${itemSearch.primaryTotalFormatted}.`
+        : `${documentLabel}: I did not find any items matching ${
+            itemSearch.searchPhrase || "that item search"
+          }.`;
+
+    return {
+      answer,
+      headline: itemSearch.familyLabel,
+      itemSearch,
+      total: itemSearch.primaryTotal,
+      totalFormatted: itemSearch.primaryTotalFormatted,
+      items: itemSearch.primaryMatches,
+      relatedItems: itemSearch.relatedMatches,
     };
   }
 
@@ -1359,6 +2119,35 @@ function buildFlexAskBriefPayload(fullResult) {
   if (fullResult?.needsClarification) {
     payload.needsClarification = true;
     payload.lines = [];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_item_search") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.itemSearch = result.itemSearch || null;
+    payload.lines = (result.items || []).map((item) => ({
+      text: `${item.name} — ${item.sectionName || "Inventory"} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      sectionName: item.sectionName,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+      matchType: item.matchType,
+      matchScore: item.matchScore,
+    }));
+    payload.relatedLines = (result.relatedItems || []).map((item) => ({
+      text: `${item.name} — ${item.sectionName || "Inventory"} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      sectionName: item.sectionName,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+      matchType: item.matchType,
+      matchScore: item.matchScore,
+    }));
     return payload;
   }
 
@@ -1734,7 +2523,7 @@ async function answerFlexAskQuestion(question) {
       transportationItems:
         intent === "document_transportation" ? detail.transportationItems : undefined,
       inventoryItems:
-        intent === "document_inventory" ? detail.inventoryItems : undefined,
+        intent === "document_inventory" || intent === "document_item_search" ? detail.inventoryItems : undefined,
     },
     lookup: quoteLookup,
   };
