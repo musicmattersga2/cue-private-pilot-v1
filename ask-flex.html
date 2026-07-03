@@ -671,6 +671,71 @@
       `;
     }
 
+    function renderSectionSummary(data) {
+      const facts = data.facts || {};
+      const sections = Array.isArray(data.sections) ? data.sections : [];
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+
+      const summaryRows = [
+        ["Invoice total", facts.invoiceTotalFormatted || data.totalFormatted || "$0.00"],
+        ["Category subtotal", facts.categorySubtotalFormatted || "$0.00"],
+        ["Rental", facts.rentalTotalFormatted || "$0.00"],
+        ["Labor", facts.laborTotalFormatted || "$0.00"],
+        ["Transportation", facts.transportationTotalFormatted || "$0.00"],
+        ["Inventory items", facts.inventoryItemCount ?? ""],
+        ["Sections", facts.sectionCount ?? sections.length],
+      ];
+
+      const mismatchSections = sections.filter((section) => section.totalAudit?.hasMismatch);
+
+      return `
+        <div class="section">
+          <h3>Section Summary</h3>
+          <table>
+            <tbody>
+              ${summaryRows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Sections</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th>Category</th>
+                <th class="num">Items</th>
+                <th class="num">Official Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lines.map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td>${escapeHtml(line.category || "")}</td>
+                  <td class="num">${escapeHtml(line.itemCount ?? "")}</td>
+                  <td class="num">${escapeHtml(line.totalFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        ${mismatchSections.length ? `
+          <div class="warning">
+            Some FLEX section totals do not match the visible line-item sum. I am showing official FLEX section totals in the summary.
+            ${mismatchSections.map((section) => `${escapeHtml(section.name)}: visible lines ${escapeHtml(section.totalAudit.visibleLineTotalFormatted)}, official section ${escapeHtml(section.totalAudit.officialSectionTotalFormatted)}`).join(" · ")}
+          </div>
+        ` : ""}
+      `;
+    }
+
     function renderMatchCards(data) {
       const matches = Array.isArray(data.matches) ? data.matches : [];
       const initialDisplayCount = Number(data.initialDisplayCount || 5);
@@ -827,6 +892,8 @@
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.intent === "document_sections" || data.sectionType) {
+        detailsEl.innerHTML = renderSectionSummary(data);
       } else if (data.intent === "document_money" || data.moneyType) {
         detailsEl.innerHTML = renderMoneyFacts(data);
       } else if (data.intent === "document_context") {

@@ -2092,6 +2092,10 @@ function classifyFlexAskIntent(question) {
     return "document_context";
   }
 
+  if (/\b(operational summary|ops summary|operation summary|quick summary|quick overview|overview|summarize|sections?|categories|category breakdown|breakdown|departments?|dept|video vs|audio vs|lighting vs|truss vs|power vs)\b/i.test(text)) {
+    return "document_sections";
+  }
+
   const hasItemQuestionShape = FLEX_ITEM_QUESTION_PATTERNS.some((pattern) =>
     pattern.test(text)
   );
@@ -2435,6 +2439,168 @@ function buildFlexMoneyAnswer(detail, question) {
 }
 
 
+
+function classifyFlexSectionQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(operational summary|ops summary|operation summary|quick summary|quick overview|overview|summarize|summary)\b/i.test(text)) {
+    return "operational_summary";
+  }
+
+  if (/\b(sections?|categories|category breakdown|breakdown|departments?|dept|video vs|audio vs|lighting vs|truss vs|power vs)\b/i.test(text)) {
+    return "section_breakdown";
+  }
+
+  return "section_breakdown";
+}
+
+
+function buildSectionTotalAudit(section) {
+  const lines = Array.isArray(section?.lines) ? section.lines : [];
+  const visibleLineTotal = lines.reduce(
+    (sum, item) => sum + Number(item.priceExtended || 0),
+    0
+  );
+  const officialSectionTotal = Number(section?.total || 0);
+  const delta = Math.round((visibleLineTotal - officialSectionTotal) * 100) / 100;
+
+  return {
+    visibleLineTotal: Math.round(visibleLineTotal * 100) / 100,
+    visibleLineTotalFormatted: formatUsd(visibleLineTotal),
+    officialSectionTotal,
+    officialSectionTotalFormatted: formatUsd(officialSectionTotal),
+    delta,
+    deltaFormatted: formatUsd(Math.abs(delta)),
+    hasMismatch: Math.abs(delta) >= 0.01,
+  };
+}
+
+
+function buildFlexSectionSummary(detail, question) {
+  const showContext = detail?.showContext || {};
+  const summary = detail?.summary || {};
+  const totals = summary?.totals || {};
+  const financials = summary?.financials || {};
+  const sectionType = classifyFlexSectionQuestion(question);
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const sections = (Array.isArray(detail.sections) ? detail.sections : []).map((section) => {
+    const mapped = {
+      name: section.name,
+      category: section.category,
+      total: Number(section.total || 0),
+      totalFormatted: formatUsd(section.total || 0),
+      itemCount: section.itemCount || 0,
+      lines: summarizeItemsForAnswer(section.items, 100),
+    };
+
+    return {
+      ...mapped,
+      totalAudit: buildSectionTotalAudit(mapped),
+    };
+  });
+
+  const billableSections = sections.filter((section) => Number(section.total || 0) !== 0 || section.itemCount > 0);
+  const rentalSections = sections.filter(
+    (section) =>
+      section.category === "rental" &&
+      !/labor|transport/i.test(String(section.name || ""))
+  );
+  const laborSections = sections.filter(
+    (section) => section.category === "labor" || /labor/i.test(String(section.name || ""))
+  );
+  const transportationSections = sections.filter(
+    (section) =>
+      section.category === "transportation" || /transport/i.test(String(section.name || ""))
+  );
+
+  const topSections = [...billableSections]
+    .sort((a, b) => Number(b.total || 0) - Number(a.total || 0))
+    .slice(0, 6);
+
+  const sectionsWithTotalMismatches = sections.filter(
+    (section) => section.totalAudit?.hasMismatch
+  );
+
+  const facts = {
+    invoiceTotal: financials.invoiceTotal || totals.document || 0,
+    invoiceTotalFormatted: formatUsd(financials.invoiceTotal || totals.document || 0),
+    categorySubtotal: financials.categorySubtotal || totals.document || 0,
+    categorySubtotalFormatted: formatUsd(financials.categorySubtotal || totals.document || 0),
+    rentalTotal: totals.rental || 0,
+    rentalTotalFormatted: formatUsd(totals.rental || 0),
+    laborTotal: totals.labor || 0,
+    laborTotalFormatted: formatUsd(totals.labor || 0),
+    transportationTotal: totals.transportation || 0,
+    transportationTotalFormatted: formatUsd(totals.transportation || 0),
+    sectionCount: sections.length,
+    rentalSectionCount: rentalSections.length,
+    inventoryItemCount: detail?.counts?.inventoryItems || 0,
+    laborItemCount: detail?.counts?.laborItems || 0,
+    transportationItemCount: detail?.counts?.transportationItems || 0,
+    sectionsWithTotalMismatchCount: sectionsWithTotalMismatches.length,
+    hasSectionTotalMismatches: sectionsWithTotalMismatches.length > 0,
+  };
+
+  const sectionTotalNote = sectionsWithTotalMismatches.length
+    ? ` Note: ${sectionsWithTotalMismatches.length} section ${pluralizeFlexWord(
+        sectionsWithTotalMismatches.length,
+        "total does",
+        "totals do"
+      )} not match the visible line-item sum, so I am using FLEX section totals as the official section numbers.`
+    : "";
+
+  if (sectionType === "operational_summary") {
+    const topSectionText = topSections
+      .slice(0, 3)
+      .map((section) => `${section.name} ${section.totalFormatted}`)
+      .join(", ");
+
+    return {
+      headline: "Operational Summary",
+      sectionType,
+      answer: `${documentLabel}: ${facts.invoiceTotalFormatted} total with ${facts.inventoryItemCount} rental inventory ${pluralizeFlexWord(
+        facts.inventoryItemCount,
+        "item"
+      )}, ${facts.laborItemCount} labor ${pluralizeFlexWord(
+        facts.laborItemCount,
+        "line"
+      )}, and ${facts.transportationItemCount} transportation ${pluralizeFlexWord(
+        facts.transportationItemCount,
+        "line"
+      )}.${topSectionText ? ` Biggest sections: ${topSectionText}.` : ""}${sectionTotalNote}`,
+      facts,
+      sections,
+      topSections,
+      rentalSections,
+      laborSections,
+      transportationSections,
+    };
+  }
+
+  return {
+    headline: "Section Breakdown",
+    sectionType,
+    answer: `${documentLabel} has ${sections.length} ${pluralizeFlexWord(
+      sections.length,
+      "section"
+    )}. Rental totals ${facts.rentalTotalFormatted}, labor totals ${facts.laborTotalFormatted}, and transportation totals ${facts.transportationTotalFormatted}.${sectionTotalNote}`,
+    facts,
+    sections,
+    topSections,
+    rentalSections,
+    laborSections,
+    transportationSections,
+  };
+}
+
+
 function buildFlexAskAnswer(intent, detail, question) {
   const showContext = detail?.showContext || {};
   const summary = detail?.summary || {};
@@ -2454,6 +2620,10 @@ function buildFlexAskAnswer(intent, detail, question) {
 
   if (intent === "document_context") {
     return buildFlexContextAnswer(detail, question);
+  }
+
+  if (intent === "document_sections") {
+    return buildFlexSectionSummary(detail, question);
   }
 
   if (intent === "document_labor") {
@@ -2650,6 +2820,39 @@ function buildFlexAskBriefPayload(fullResult) {
   if (fullResult?.needsClarification) {
     payload.needsClarification = true;
     payload.lines = [];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_sections") {
+    payload.sectionType = result.sectionType || null;
+    payload.facts = result.facts || {};
+    payload.total = result.facts?.invoiceTotal || 0;
+    payload.totalFormatted = result.facts?.invoiceTotalFormatted || formatUsd(0);
+    payload.sections = (result.sections || []).map((section) => ({
+      name: section.name,
+      category: section.category,
+      total: section.total,
+      totalFormatted: section.totalFormatted,
+      itemCount: section.itemCount,
+      totalAudit: section.totalAudit || null,
+      lines: (section.lines || []).map((item) => ({
+        text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+        name: item.name,
+        quantity: item.quantity,
+        timeQty: item.timeQty,
+        priceExtended: item.priceExtended,
+        priceExtendedFormatted: item.priceExtendedFormatted,
+      })),
+    }));
+    payload.topSections = result.topSections || [];
+    payload.lines = (result.topSections || []).map((section) => ({
+      text: `${section.name} — ${section.itemCount} item(s) — ${section.totalFormatted}`,
+      name: section.name,
+      itemCount: section.itemCount,
+      total: section.total,
+      totalFormatted: section.totalFormatted,
+      category: section.category,
+    }));
     return payload;
   }
 
