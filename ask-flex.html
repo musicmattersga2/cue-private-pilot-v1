@@ -529,6 +529,72 @@
       `;
     }
 
+    function renderLineTable(title, lines, emptyText = "") {
+      if (!Array.isArray(lines) || lines.length === 0) {
+        if (!emptyText) return "";
+
+        return `
+          <div class="section">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="hint">${escapeHtml(emptyText)}</div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="section">
+          <h3>${escapeHtml(title)}</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Section</th>
+                <th class="num">Qty</th>
+                <th class="num">Time Qty</th>
+                <th class="num">Extended</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lines.map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td>${escapeHtml(line.sectionName || "")}</td>
+                  <td class="num">${escapeHtml(line.quantity ?? "")}</td>
+                  <td class="num">${escapeHtml(line.timeQty ?? "")}</td>
+                  <td class="num">${escapeHtml(line.priceExtendedFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderSmartItemSearch(data) {
+      const search = data.itemSearch || {};
+      const primaryTitle = `Primary Matches${search.primaryCount != null ? ` · ${search.primaryCount}` : ""}${search.primaryTotalFormatted ? ` · ${search.primaryTotalFormatted}` : ""}`;
+      const relatedTitle = `Related Items${search.relatedCount != null ? ` · ${search.relatedCount}` : ""}${search.relatedTotalFormatted ? ` · ${search.relatedTotalFormatted}` : ""}`;
+
+      const summaryParts = [
+        search.searchMode ? `Mode: ${search.searchMode}` : null,
+        search.familyLabel ? `Search: ${search.familyLabel}` : null,
+        search.totalPrimaryQuantity != null ? `Primary Qty: ${search.totalPrimaryQuantity}` : null,
+        search.totalRelatedQuantity ? `Related Qty: ${search.totalRelatedQuantity}` : null,
+        search.totalMatchedValueFormatted ? `All matched value: ${search.totalMatchedValueFormatted}` : null,
+      ].filter(Boolean);
+
+      return `
+        <div class="section">
+          <h3>Smart Item Search</h3>
+          <div class="meta">
+            ${summaryParts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
+          </div>
+        </div>
+        ${renderLineTable(primaryTitle, data.lines, "No primary matches found.")}
+        ${renderLineTable(relatedTitle, data.relatedLines)}
+      `;
+    }
+
     function renderMatchCards(data) {
       const matches = Array.isArray(data.matches) ? data.matches : [];
 
@@ -663,6 +729,8 @@
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.intent === "document_item_search" || data.itemSearch) {
+        detailsEl.innerHTML = renderSmartItemSearch(data);
       } else if (data.sections) {
         detailsEl.innerHTML = renderInventorySections(data.sections);
       } else if (data.lines) {
