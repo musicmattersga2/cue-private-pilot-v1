@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -222,6 +223,76 @@
       letter-spacing: -0.02em;
     }
 
+    .match-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .match-card {
+      width: 100%;
+      text-align: left;
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 20px;
+      background: rgba(255,255,255,0.045);
+      color: var(--text);
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+      cursor: pointer;
+      min-height: auto;
+    }
+
+    .match-card:hover {
+      border-color: rgba(67, 209, 84, 0.42);
+      box-shadow: 0 0 0 4px rgba(67, 209, 84, 0.08);
+    }
+
+    .match-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .quote-pill {
+      color: #061008;
+      background: var(--green);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .match-name {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      line-height: 1.2;
+    }
+
+    .match-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .match-meta span {
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      border-radius: 999px;
+      padding: 6px 9px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 10px;
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -302,6 +373,10 @@
       .answer {
         font-size: 22px;
       }
+
+      .match-top {
+        display: grid;
+      }
     }
   </style>
 </head>
@@ -329,6 +404,7 @@
         <div class="chip" data-q="What inventory is on 26-1747?">Inventory on 26-1747</div>
         <div class="chip" data-q="What transportation is on 26-1747?">Transportation on 26-1747</div>
         <div class="chip" data-q="What is the total on 26-1747?">Total on 26-1747</div>
+        <div class="chip" data-q="What labor is on NMR World Cup?">Search by name</div>
       </div>
 
       <div id="error" class="error"></div>
@@ -386,12 +462,38 @@
         .replace(/'/g, "&#039;");
     }
 
+    function formatDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+
+    function replaceSearchPhraseWithDocumentNumber(question, searchQuery, documentNumber) {
+      if (!question || !documentNumber) return question;
+
+      const escaped = String(searchQuery || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+      if (escaped) {
+        const regex = new RegExp(escaped, "i");
+        if (regex.test(question)) {
+          return question.replace(regex, documentNumber);
+        }
+      }
+
+      return `${question} ${documentNumber}`;
+    }
+
     function renderMeta(data) {
       const parts = [
         data.documentNumber ? `Quote ${data.documentNumber}` : null,
         data.client || null,
         data.venue || null,
-        data.plannedStartDate ? `Planned ${new Date(data.plannedStartDate).toLocaleDateString()}` : null,
+        data.plannedStartDate ? `Planned ${formatDate(data.plannedStartDate)}` : null,
       ].filter(Boolean);
 
       metaEl.innerHTML = parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("");
@@ -423,6 +525,54 @@
               `).join("")}
             </tbody>
           </table>
+        </div>
+      `;
+    }
+
+    function renderMatchCards(data) {
+      const matches = Array.isArray(data.matches) ? data.matches : [];
+
+      if (matches.length === 0) {
+        return `
+          <div class="section">
+            <h3>No quote matches</h3>
+            <div class="hint">Try a quote number like 26-1747 or a more specific quote name.</div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="section">
+          <h3>Possible Quotes</h3>
+          <div class="match-list">
+            ${matches.map((match) => {
+              const planned = formatDate(match.plannedStartDate);
+              const nextQuestion = replaceSearchPhraseWithDocumentNumber(
+                data.question,
+                data.searchQuery,
+                match.documentNumber
+              );
+
+              return `
+                <button class="match-card" data-next-question="${escapeHtml(nextQuestion)}" type="button">
+                  <div class="match-top">
+                    <div>
+                      <div class="match-name">${escapeHtml(match.name || "Untitled FLEX quote")}</div>
+                    </div>
+                    <div class="quote-pill">${escapeHtml(match.documentNumber || "No quote #")}</div>
+                  </div>
+                  <div class="match-meta">
+                    ${match.client ? `<span>${escapeHtml(match.client)}</span>` : ""}
+                    ${match.venue ? `<span>${escapeHtml(match.venue)}</span>` : ""}
+                    ${planned ? `<span>Planned ${escapeHtml(planned)}</span>` : ""}
+                    ${match.invoiceTotalFormatted ? `<span>Total ${escapeHtml(match.invoiceTotalFormatted)}</span>` : ""}
+                    ${match.balanceDueFormatted ? `<span>Balance ${escapeHtml(match.balanceDueFormatted)}</span>` : ""}
+                  </div>
+                  <div class="hint">Click to ask: ${escapeHtml(nextQuestion)}</div>
+                </button>
+              `;
+            }).join("")}
+          </div>
         </div>
       `;
     }
@@ -495,12 +645,25 @@
         .join("");
     }
 
+    function bindMatchCards() {
+      for (const card of document.querySelectorAll(".match-card")) {
+        card.addEventListener("click", () => {
+          const nextQuestion = card.dataset.nextQuestion;
+          if (!nextQuestion) return;
+          questionEl.value = nextQuestion;
+          askFlex();
+        });
+      }
+    }
+
     function renderAnswer(data) {
       headlineEl.textContent = data.headline || "Answer";
       answerEl.textContent = data.answer || "";
       renderMeta(data);
 
-      if (data.sections) {
+      if (data.needsSelection) {
+        detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.sections) {
         detailsEl.innerHTML = renderInventorySections(data.sections);
       } else if (data.lines) {
         detailsEl.innerHTML = renderLines(data.lines);
@@ -513,6 +676,7 @@
       renderWarnings(data.warnings);
       rawEl.textContent = JSON.stringify(data, null, 2);
       resultEl.classList.add("visible");
+      bindMatchCards();
     }
 
     async function askFlex() {
