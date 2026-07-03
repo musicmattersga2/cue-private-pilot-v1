@@ -2131,6 +2131,134 @@ function getSectionByCategoryOrName(detail, category, namePattern) {
   });
 }
 
+
+function pluralizeFlexWord(count, singular, plural = `${singular}s`) {
+  return Number(count || 0) === 1 ? singular : plural;
+}
+
+function formatFlexItemOneLine(item) {
+  if (!item) return "";
+  const qty = item.quantity != null ? `${item.quantity}x ` : "";
+  const section = item.sectionName ? ` from ${item.sectionName}` : "";
+  const price =
+    item.priceExtendedFormatted && item.priceExtendedFormatted !== "$0.00"
+      ? ` (${item.priceExtendedFormatted})`
+      : "";
+
+  return `${qty}${item.name}${section}${price}`;
+}
+
+function makeHumanItemSearchAnswer(documentLabel, itemSearch) {
+  const primary = Array.isArray(itemSearch?.primaryMatches)
+    ? itemSearch.primaryMatches
+    : [];
+  const related = Array.isArray(itemSearch?.relatedMatches)
+    ? itemSearch.relatedMatches
+    : [];
+  const searchPhrase = itemSearch?.searchPhrase || "that item";
+  const familyLabel = itemSearch?.familyLabel || "Item Search";
+  const primaryCount = Number(itemSearch?.primaryCount || 0);
+  const relatedCount = Number(itemSearch?.relatedCount || 0);
+  const totalPrimaryQuantity = Number(itemSearch?.totalPrimaryQuantity || 0);
+
+  if (!primaryCount && !relatedCount) {
+    return `${documentLabel}: I do not see ${searchPhrase} on this quote.`;
+  }
+
+  if (itemSearch?.searchMode === "exact") {
+    if (primaryCount === 1) {
+      return `Yes — ${documentLabel} has ${formatFlexItemOneLine(
+        primary[0]
+      )} on the quote.`;
+    }
+
+    return `Yes — ${documentLabel} has ${primaryCount} matches for ${searchPhrase}, totaling ${totalPrimaryQuantity} units and ${itemSearch.primaryTotalFormatted}.`;
+  }
+
+  const hasRelated = relatedCount > 0;
+
+  if (primaryCount === 1) {
+    return `${documentLabel} has ${formatFlexItemOneLine(primary[0])}. ${
+      hasRelated
+        ? `I also found ${relatedCount} related ${pluralizeFlexWord(
+            relatedCount,
+            "item"
+          )}.`
+        : ""
+    }`.trim();
+  }
+
+  return `${documentLabel} has ${totalPrimaryQuantity} primary ${familyLabel.toLowerCase()} units across ${primaryCount} ${pluralizeFlexWord(
+    primaryCount,
+    "line"
+  )}, totaling ${itemSearch.primaryTotalFormatted}.${
+    hasRelated
+      ? ` I also found ${relatedCount} related ${pluralizeFlexWord(
+          relatedCount,
+          "item"
+        )} totaling ${itemSearch.relatedTotalFormatted}.`
+      : ""
+  }`;
+}
+
+function makeHumanLaborAnswer(documentLabel, items, laborTotal) {
+  const count = Array.isArray(items) ? items.length : 0;
+
+  if (!count) {
+    return `${documentLabel}: I do not see any labor lines on this quote.`;
+  }
+
+  return `${documentLabel} has ${count} labor ${pluralizeFlexWord(
+    count,
+    "line"
+  )} totaling ${formatUsd(laborTotal)}.`;
+}
+
+function makeHumanTransportationAnswer(documentLabel, items, transportationTotal) {
+  const count = Array.isArray(items) ? items.length : 0;
+
+  if (!count) {
+    return `${documentLabel}: I do not see any transportation lines on this quote.`;
+  }
+
+  if (count === 1) {
+    return `${documentLabel} has ${formatFlexItemOneLine(
+      items[0]
+    )} for transportation.`;
+  }
+
+  return `${documentLabel} has ${count} transportation ${pluralizeFlexWord(
+    count,
+    "line"
+  )} totaling ${formatUsd(transportationTotal)}.`;
+}
+
+function makeHumanInventoryAnswer(documentLabel, detail, sections, inventoryTotal) {
+  const itemCount = detail?.counts?.inventoryItems || 0;
+  const sectionCount = Array.isArray(sections) ? sections.length : 0;
+
+  if (!itemCount) {
+    return `${documentLabel}: I do not see any rental inventory on this quote.`;
+  }
+
+  return `${documentLabel} has ${itemCount} rental inventory ${pluralizeFlexWord(
+    itemCount,
+    "item"
+  )} across ${sectionCount} ${pluralizeFlexWord(
+    sectionCount,
+    "section"
+  )}, totaling ${formatUsd(inventoryTotal)}.`;
+}
+
+function makeHumanTotalAnswer(documentLabel, invoiceTotal, categorySubtotal, balanceDue) {
+  return `${documentLabel} is ${formatUsd(invoiceTotal)} total, with ${formatUsd(
+    balanceDue || 0
+  )} still due. The category subtotal before final invoice adjustments is ${formatUsd(
+    categorySubtotal
+  )}.`;
+}
+
+
 function buildFlexAskAnswer(intent, detail, question) {
   const showContext = detail?.showContext || {};
   const summary = detail?.summary || {};
@@ -2154,7 +2282,7 @@ function buildFlexAskAnswer(intent, detail, question) {
     const items = summarizeItemsForAnswer(detail.laborItems, 50);
 
     return {
-      answer: `${documentLabel}: labor total is ${formatUsd(laborTotal)} across ${items.length} labor line(s).`,
+      answer: makeHumanLaborAnswer(documentLabel, items, laborTotal),
       headline: "Labor",
       total: laborTotal,
       totalFormatted: formatUsd(laborTotal),
@@ -2173,9 +2301,11 @@ function buildFlexAskAnswer(intent, detail, question) {
     const items = summarizeItemsForAnswer(detail.transportationItems, 50);
 
     return {
-      answer: `${documentLabel}: transportation total is ${formatUsd(
+      answer: makeHumanTransportationAnswer(
+        documentLabel,
+        items,
         transportationTotal
-      )} across ${items.length} transportation line(s).`,
+      ),
       headline: "Transportation",
       total: transportationTotal,
       totalFormatted: formatUsd(transportationTotal),
@@ -2194,14 +2324,7 @@ function buildFlexAskAnswer(intent, detail, question) {
         ? "1 related match"
         : `${itemSearch.relatedCount} related matches`;
 
-    const answer =
-      itemSearch.totalCount > 0
-        ? `${documentLabel}: ${itemSearch.familyLabel} found ${primaryText}${
-            itemSearch.relatedCount ? ` and ${relatedText}` : ""
-          }. Primary quantity total is ${itemSearch.totalPrimaryQuantity}. Primary matched value is ${itemSearch.primaryTotalFormatted}.`
-        : `${documentLabel}: I did not find any items matching ${
-            itemSearch.searchPhrase || "that item search"
-          }.`;
+    const answer = makeHumanItemSearchAnswer(documentLabel, itemSearch);
 
     return {
       answer,
@@ -2235,9 +2358,12 @@ function buildFlexAskAnswer(intent, detail, question) {
     );
 
     return {
-      answer: `${documentLabel}: inventory/rental total is ${formatUsd(
+      answer: makeHumanInventoryAnswer(
+        documentLabel,
+        detail,
+        sections,
         inventoryTotal
-      )} across ${detail.counts?.inventoryItems || 0} inventory item(s), grouped into ${sections.length} section(s).`,
+      ),
       headline: "Inventory",
       total: Math.round(inventoryTotal * 100) / 100,
       totalFormatted: formatUsd(inventoryTotal),
@@ -2250,11 +2376,12 @@ function buildFlexAskAnswer(intent, detail, question) {
     const categorySubtotal = financials.categorySubtotal ?? totals.document ?? 0;
 
     return {
-      answer: `${documentLabel}: invoice total is ${formatUsd(
-        invoiceTotal
-      )}. Category subtotal is ${formatUsd(categorySubtotal)}. Balance due is ${formatUsd(
+      answer: makeHumanTotalAnswer(
+        documentLabel,
+        invoiceTotal,
+        categorySubtotal,
         financials.balanceDue || 0
-      )}.`,
+      ),
       headline: "Quote Total",
       invoiceTotal,
       invoiceTotalFormatted: formatUsd(invoiceTotal),
@@ -2277,11 +2404,11 @@ function buildFlexAskAnswer(intent, detail, question) {
   }
 
   return {
-    answer: `${documentLabel}: invoice total is ${formatUsd(
+    answer: `${documentLabel} is ${formatUsd(
       financials.invoiceTotal || totals.document || 0
-    )}. Rental is ${formatUsd(totals.rental || 0)}, labor is ${formatUsd(
+    )} total: ${formatUsd(totals.rental || 0)} rental, ${formatUsd(
       totals.labor || 0
-    )}, and transportation is ${formatUsd(totals.transportation || 0)}.`,
+    )} labor, and ${formatUsd(totals.transportation || 0)} transportation.`,
     headline: "Document Summary",
     totals,
     financials,
