@@ -736,6 +736,100 @@
       `;
     }
 
+    function renderComparison(data) {
+      const docs = data.documents || {};
+      const financialRows = Array.isArray(data.financialRows) ? data.financialRows : [];
+      const sectionRows = Array.isArray(data.sectionRows) ? data.sectionRows : [];
+      const itemRows = Array.isArray(data.itemRows) ? data.itemRows : [];
+
+      const aLabel = docs.a?.documentNumber || "Quote A";
+      const bLabel = docs.b?.documentNumber || "Quote B";
+
+      return `
+        <div class="section">
+          <h3>Comparing</h3>
+          <div class="meta">
+            <span>${escapeHtml(aLabel)}: ${escapeHtml(docs.a?.showName || "")}</span>
+            <span>${escapeHtml(bLabel)}: ${escapeHtml(docs.b?.showName || "")}</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <h3>Financial Comparison</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th class="num">${escapeHtml(aLabel)}</th>
+                <th class="num">${escapeHtml(bLabel)}</th>
+                <th class="num">Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${financialRows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.label)}</td>
+                  <td class="num">${escapeHtml(row.aFormatted)}</td>
+                  <td class="num">${escapeHtml(row.bFormatted)}</td>
+                  <td class="num">${escapeHtml(row.deltaFormatted)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Section Changes</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th class="num">${escapeHtml(aLabel)}</th>
+                <th class="num">${escapeHtml(bLabel)}</th>
+                <th class="num">Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sectionRows.slice(0, 10).map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.name)}</td>
+                  <td class="num">${escapeHtml(row.aFormatted)}</td>
+                  <td class="num">${escapeHtml(row.bFormatted)}</td>
+                  <td class="num">${escapeHtml(row.deltaFormatted)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        ${itemRows.length ? `
+          <div class="section">
+            <h3>Top Item Changes</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th class="num">${escapeHtml(aLabel)} Qty</th>
+                  <th class="num">${escapeHtml(bLabel)} Qty</th>
+                  <th class="num">Value Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemRows.slice(0, 10).map((row) => `
+                  <tr>
+                    <td>${escapeHtml(row.name)}</td>
+                    <td class="num">${escapeHtml(row.aQuantity)}</td>
+                    <td class="num">${escapeHtml(row.bQuantity)}</td>
+                    <td class="num">${escapeHtml(row.valueDeltaFormatted)}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : ""}
+      `;
+    }
+
     function renderMatchCards(data) {
       const matches = Array.isArray(data.matches) ? data.matches : [];
       const initialDisplayCount = Number(data.initialDisplayCount || 5);
@@ -892,6 +986,8 @@
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.intent === "document_compare" || data.comparisonType) {
+        detailsEl.innerHTML = renderComparison(data);
       } else if (data.intent === "document_sections" || data.sectionType) {
         detailsEl.innerHTML = renderSectionSummary(data);
       } else if (data.intent === "document_money" || data.moneyType) {

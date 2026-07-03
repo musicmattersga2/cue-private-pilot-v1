@@ -1139,6 +1139,257 @@ function extractDocumentNumberFromQuestion(question) {
   return match ? match[0] : null;
 }
 
+function extractDocumentNumbersFromQuestion(question) {
+  const text = String(question || "");
+  const matches = text.match(/\b\d{2}-\d{3,6}\b/g) || [];
+  return [...new Set(matches)];
+}
+
+function normalizeCompareItemName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\w\s.+/-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchFlexDetailByDocumentNumber(documentNumber) {
+  const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+  if (!quoteLookup.found || !quoteLookup.elementId) {
+    return {
+      found: false,
+      documentNumber,
+      lookup: quoteLookup,
+    };
+  }
+
+  const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+  const detail = buildFlexDocumentDetail(intake);
+
+  return {
+    found: true,
+    documentNumber,
+    elementId: quoteLookup.elementId,
+    lookup: quoteLookup,
+    detail,
+  };
+}
+
+function getCompareDocumentLabel(detail) {
+  const showContext = detail?.showContext || {};
+  return [showContext.documentNumber, showContext.showName].filter(Boolean).join(" — ");
+}
+
+function getCompareFinancials(detail) {
+  const summary = detail?.summary || {};
+  const financials = summary.financials || {};
+  const totals = summary.totals || {};
+
+  return {
+    invoiceTotal: Number(financials.invoiceTotal || totals.document || 0),
+    invoiceTotalFormatted: formatUsd(financials.invoiceTotal || totals.document || 0),
+    categorySubtotal: Number(financials.categorySubtotal || totals.document || 0),
+    categorySubtotalFormatted: formatUsd(financials.categorySubtotal || totals.document || 0),
+    rental: Number(totals.rental || 0),
+    rentalFormatted: formatUsd(totals.rental || 0),
+    labor: Number(totals.labor || 0),
+    laborFormatted: formatUsd(totals.labor || 0),
+    transportation: Number(totals.transportation || 0),
+    transportationFormatted: formatUsd(totals.transportation || 0),
+    balanceDue: Number(financials.balanceDue || 0),
+    balanceDueFormatted: formatUsd(financials.balanceDue || 0),
+  };
+}
+
+function buildCompareMetricRows(detailA, detailB) {
+  const a = getCompareFinancials(detailA);
+  const b = getCompareFinancials(detailB);
+
+  const rows = [
+    ["Invoice total", "invoiceTotal"],
+    ["Category subtotal", "categorySubtotal"],
+    ["Rental", "rental"],
+    ["Labor", "labor"],
+    ["Transportation", "transportation"],
+    ["Balance due", "balanceDue"],
+  ];
+
+  return rows.map(([label, key]) => {
+    const valueA = Number(a[key] || 0);
+    const valueB = Number(b[key] || 0);
+    const delta = Math.round((valueB - valueA) * 100) / 100;
+
+    return {
+      label,
+      a: valueA,
+      aFormatted: formatUsd(valueA),
+      b: valueB,
+      bFormatted: formatUsd(valueB),
+      delta,
+      deltaFormatted: `${delta >= 0 ? "+" : "-"}${formatUsd(Math.abs(delta))}`,
+    };
+  });
+}
+
+function buildCompareSectionRows(detailA, detailB) {
+  const mapA = new Map();
+  const mapB = new Map();
+
+  for (const section of Array.isArray(detailA?.sections) ? detailA.sections : []) {
+    mapA.set(String(section.name || "Unnamed"), section);
+  }
+
+  for (const section of Array.isArray(detailB?.sections) ? detailB.sections : []) {
+    mapB.set(String(section.name || "Unnamed"), section);
+  }
+
+  const names = [...new Set([...mapA.keys(), ...mapB.keys()])];
+
+  return names
+    .map((name) => {
+      const a = mapA.get(name);
+      const b = mapB.get(name);
+      const totalA = Number(a?.total || 0);
+      const totalB = Number(b?.total || 0);
+      const delta = Math.round((totalB - totalA) * 100) / 100;
+
+      return {
+        name,
+        category: b?.category || a?.category || null,
+        a: totalA,
+        aFormatted: formatUsd(totalA),
+        b: totalB,
+        bFormatted: formatUsd(totalB),
+        delta,
+        deltaFormatted: `${delta >= 0 ? "+" : "-"}${formatUsd(Math.abs(delta))}`,
+        aItemCount: a?.itemCount || 0,
+        bItemCount: b?.itemCount || 0,
+      };
+    })
+    .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+}
+
+function buildCompareItemMap(detail) {
+  const items = [
+    ...(Array.isArray(detail?.inventoryItems) ? detail.inventoryItems : []),
+    ...(Array.isArray(detail?.laborItems) ? detail.laborItems : []),
+    ...(Array.isArray(detail?.transportationItems) ? detail.transportationItems : []),
+  ];
+
+  const map = new Map();
+
+  for (const item of items) {
+    const key = normalizeCompareItemName(item.name);
+    const existing = map.get(key) || {
+      name: item.name,
+      quantity: 0,
+      value: 0,
+      sections: new Set(),
+    };
+
+    existing.quantity += Number(item.quantity || 0);
+    existing.value += Number(item.priceExtended || 0);
+    if (item.sectionName) existing.sections.add(item.sectionName);
+
+    map.set(key, existing);
+  }
+
+  return map;
+}
+
+function buildCompareItemRows(detailA, detailB) {
+  const mapA = buildCompareItemMap(detailA);
+  const mapB = buildCompareItemMap(detailB);
+  const keys = [...new Set([...mapA.keys(), ...mapB.keys()])];
+
+  return keys
+    .map((key) => {
+      const a = mapA.get(key);
+      const b = mapB.get(key);
+      const qtyA = Number(a?.quantity || 0);
+      const qtyB = Number(b?.quantity || 0);
+      const valueA = Number(a?.value || 0);
+      const valueB = Number(b?.value || 0);
+
+      return {
+        name: b?.name || a?.name || key,
+        aQuantity: qtyA,
+        bQuantity: qtyB,
+        quantityDelta: qtyB - qtyA,
+        aValue: valueA,
+        aValueFormatted: formatUsd(valueA),
+        bValue: valueB,
+        bValueFormatted: formatUsd(valueB),
+        valueDelta: Math.round((valueB - valueA) * 100) / 100,
+        valueDeltaFormatted: `${valueB - valueA >= 0 ? "+" : "-"}${formatUsd(Math.abs(valueB - valueA))}`,
+        status: a && b ? "changed_or_same" : a ? "removed" : "added",
+      };
+    })
+    .filter((row) => row.quantityDelta !== 0 || Math.abs(row.valueDelta) >= 0.01 || row.status !== "changed_or_same")
+    .sort((x, y) => Math.abs(y.valueDelta) - Math.abs(x.valueDelta))
+    .slice(0, 25);
+}
+
+function buildFlexDocumentComparison(question, detailA, detailB) {
+  const labelA = getCompareDocumentLabel(detailA);
+  const labelB = getCompareDocumentLabel(detailB);
+  const financialRows = buildCompareMetricRows(detailA, detailB);
+  const sectionRows = buildCompareSectionRows(detailA, detailB);
+  const itemRows = buildCompareItemRows(detailA, detailB);
+
+  const invoiceRow = financialRows.find((row) => row.label === "Invoice total");
+  const laborRow = financialRows.find((row) => row.label === "Labor");
+  const rentalRow = financialRows.find((row) => row.label === "Rental");
+
+  const biggestSectionChanges = sectionRows
+    .filter((row) => Math.abs(row.delta) >= 0.01)
+    .slice(0, 5);
+
+  const answerParts = [
+    `${labelB} is ${invoiceRow?.deltaFormatted || "$0.00"} vs ${labelA} on invoice total.`,
+    rentalRow ? `Rental changed ${rentalRow.deltaFormatted}.` : null,
+    laborRow ? `Labor changed ${laborRow.deltaFormatted}.` : null,
+    biggestSectionChanges.length
+      ? `Biggest section changes: ${biggestSectionChanges
+          .slice(0, 3)
+          .map((row) => `${row.name} ${row.deltaFormatted}`)
+          .join(", ")}.`
+      : "No section-total changes found.",
+  ].filter(Boolean);
+
+  return {
+    headline: "Quote Comparison",
+    comparisonType: "two_quote_compare",
+    answer: answerParts.join(" "),
+    documents: {
+      a: {
+        label: labelA,
+        documentNumber: detailA?.showContext?.documentNumber || null,
+        showName: detailA?.showContext?.showName || null,
+        client: detailA?.showContext?.client || null,
+        venue: detailA?.showContext?.venue || null,
+        plannedStartDate: detailA?.showContext?.plannedStartDate || null,
+      },
+      b: {
+        label: labelB,
+        documentNumber: detailB?.showContext?.documentNumber || null,
+        showName: detailB?.showContext?.showName || null,
+        client: detailB?.showContext?.client || null,
+        venue: detailB?.showContext?.venue || null,
+        plannedStartDate: detailB?.showContext?.plannedStartDate || null,
+      },
+    },
+    financialRows,
+    sectionRows,
+    itemRows,
+    counts: {
+      changedSections: sectionRows.filter((row) => Math.abs(row.delta) >= 0.01).length,
+      changedItems: itemRows.length,
+    },
+  };
+}
+
 
 const FLEX_EQUIPMENT_FAMILIES = [
   {
@@ -2080,6 +2331,10 @@ function classifyFlexAskIntent(question) {
     return "document_transportation";
   }
 
+  if (/\b(compare|comparison|versus|vs\.?|difference|different|changed|changes|between)\b/i.test(text)) {
+    return "document_compare";
+  }
+
   if (/\b(paid|payment|payments|collected|received|deposit|balance|due|owed|outstanding|remaining|open|closed|real revenue|revenue quote|real quote|placeholder|zero|0 quote|\$0|category subtotal|subtotal|adjustment|discount|invoice total source)\b/i.test(text)) {
     return "document_money";
   }
@@ -2823,6 +3078,27 @@ function buildFlexAskBriefPayload(fullResult) {
     return payload;
   }
 
+  if (fullResult?.intent === "document_compare") {
+    payload.documents = result.documents || null;
+    payload.comparisonType = result.comparisonType || null;
+    payload.financialRows = result.financialRows || [];
+    payload.sectionRows = result.sectionRows || [];
+    payload.itemRows = result.itemRows || [];
+    payload.counts = result.counts || {};
+    payload.lines = (result.sectionRows || []).slice(0, 10).map((row) => ({
+      text: `${row.name} — ${row.aFormatted} → ${row.bFormatted} (${row.deltaFormatted})`,
+      name: row.name,
+      a: row.a,
+      aFormatted: row.aFormatted,
+      b: row.b,
+      bFormatted: row.bFormatted,
+      delta: row.delta,
+      deltaFormatted: row.deltaFormatted,
+      category: row.category,
+    }));
+    return payload;
+  }
+
   if (fullResult?.intent === "document_sections") {
     payload.sectionType = result.sectionType || null;
     payload.facts = result.facts || {};
@@ -3400,8 +3676,70 @@ function buildQuoteSearchSelectionResponse(question, intent, searchQuery, search
 }
 
 async function answerFlexAskQuestion(question) {
-  const documentNumber = extractDocumentNumberFromQuestion(question);
-  const intent = classifyFlexAskIntent(question);
+  const documentNumbers = extractDocumentNumbersFromQuestion(question);
+  const documentNumber = documentNumbers[0] || null;
+  const intent = documentNumbers.length >= 2 ? "document_compare" : classifyFlexAskIntent(question);
+
+  if (intent === "document_compare") {
+    if (documentNumbers.length < 2) {
+      return {
+        question,
+        intent,
+        needsClarification: true,
+        answer: "I need two FLEX quote numbers to compare, like 26-1747 and 26-0829.",
+      };
+    }
+
+    const [documentNumberA, documentNumberB] = documentNumbers;
+    const [resultA, resultB] = await Promise.all([
+      fetchFlexDetailByDocumentNumber(documentNumberA),
+      fetchFlexDetailByDocumentNumber(documentNumberB),
+    ]);
+
+    if (!resultA.found || !resultB.found) {
+      return {
+        question,
+        intent,
+        found: false,
+        answer: `I could not find ${
+          !resultA.found && !resultB.found
+            ? `${documentNumberA} or ${documentNumberB}`
+            : !resultA.found
+              ? documentNumberA
+              : documentNumberB
+        } in FLEX.`,
+        lookups: {
+          [documentNumberA]: resultA.lookup,
+          [documentNumberB]: resultB.lookup,
+        },
+      };
+    }
+
+    const comparison = buildFlexDocumentComparison(
+      question,
+      resultA.detail,
+      resultB.detail
+    );
+
+    return {
+      question,
+      intent,
+      found: true,
+      documentNumbers,
+      answer: comparison.answer,
+      result: comparison,
+      supportingData: {
+        documents: comparison.documents,
+        financialRows: comparison.financialRows,
+        sectionRows: comparison.sectionRows,
+        itemRows: comparison.itemRows,
+      },
+      lookups: {
+        [documentNumberA]: resultA.lookup,
+        [documentNumberB]: resultB.lookup,
+      },
+    };
+  }
 
   let quoteLookup = null;
 
