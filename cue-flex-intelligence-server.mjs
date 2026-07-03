@@ -3046,6 +3046,9 @@ function buildFlexAskBriefPayload(fullResult) {
   if (fullResult?.needsSelection) {
     payload.needsSelection = true;
     payload.searchQuery = fullResult.searchQuery || null;
+    payload.filters = fullResult.filters || null;
+    payload.filterDescriptions = fullResult.filterDescriptions || [];
+    payload.search = fullResult.search || null;
     payload.matches = Array.isArray(fullResult.matches) ? fullResult.matches : [];
     payload.matchCount = payload.matches.length;
     payload.initialDisplayCount = fullResult.initialDisplayCount || 5;
@@ -3423,6 +3426,167 @@ function extractQuoteSearchQueryFromQuestion(question) {
 }
 
 
+
+function parseFlexSearchFilters(questionOrQuery, options = {}) {
+  const text = String(questionOrQuery || "").toLowerCase();
+  const filters = {
+    year: options.year ? Number(options.year) : null,
+    quoteOnly: Boolean(options.quoteOnly || options.excludeInvoices),
+    invoiceOnly: Boolean(options.invoiceOnly),
+    currentOnly: Boolean(options.currentOnly),
+    futureOnly: Boolean(options.futureOnly),
+    openOnly: Boolean(options.openOnly),
+    paidOnly: Boolean(options.paidOnly),
+    revenueOnly: Boolean(options.revenueOnly),
+    includeInvoices: options.includeInvoices != null ? Boolean(options.includeInvoices) : true,
+  };
+
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  if (!filters.year && yearMatch) {
+    filters.year = Number(yearMatch[1]);
+  }
+
+  if (/\b(no invoices|don't show invoices|do not show invoices|hide invoices|exclude invoices|quotes only|only quotes|quote only)\b/i.test(text)) {
+    filters.quoteOnly = true;
+    filters.includeInvoices = false;
+  }
+
+  if (/\b(only invoices|invoice only|invoices only|show invoices)\b/i.test(text)) {
+    filters.invoiceOnly = true;
+    filters.quoteOnly = false;
+    filters.includeInvoices = true;
+  }
+
+  if (/\b(current|active|open\/current|current\/open|recent)\b/i.test(text)) {
+    filters.currentOnly = true;
+  }
+
+  if (/\b(future|upcoming)\b/i.test(text)) {
+    filters.futureOnly = true;
+  }
+
+  if (/\b(open|outstanding|balance due|unpaid)\b/i.test(text)) {
+    filters.openOnly = true;
+  }
+
+  if (/\b(paid|paid in full|closed)\b/i.test(text)) {
+    filters.paidOnly = true;
+  }
+
+  if (/\b(real revenue|revenue quote|over \$0|greater than \$0|not \$0|nonzero|non-zero)\b/i.test(text)) {
+    filters.revenueOnly = true;
+  }
+
+  return filters;
+}
+
+function flexSearchFiltersAreActive(filters) {
+  if (!filters) return false;
+
+  return Boolean(
+    filters.year ||
+      filters.quoteOnly ||
+      filters.invoiceOnly ||
+      filters.currentOnly ||
+      filters.futureOnly ||
+      filters.openOnly ||
+      filters.paidOnly ||
+      filters.revenueOnly ||
+      filters.includeInvoices === false
+  );
+}
+
+function matchPassesFlexSearchFilters(match, filters) {
+  if (!filters) return true;
+
+  const doc = String(match?.documentNumber || "");
+  const isInvoice = /^INV-/i.test(doc);
+  const isQuote = /^\d{2}-\d{3,6}$/i.test(doc);
+  const plannedTime = getDateTimestamp(match?.plannedStartDate);
+  const plannedYear = plannedTime ? new Date(plannedTime).getFullYear() : null;
+  const now = Date.now();
+
+  if (filters.quoteOnly && !isQuote) return false;
+  if (filters.includeInvoices === false && isInvoice) return false;
+  if (filters.invoiceOnly && !isInvoice) return false;
+  if (filters.year && plannedYear !== Number(filters.year)) return false;
+  if (filters.futureOnly && (!plannedTime || plannedTime < now)) return false;
+
+  if (filters.currentOnly) {
+    // "Current" is intentionally broad: current-era jobs, not old archive noise.
+    const jan2025 = Date.UTC(2025, 0, 1);
+    if (!plannedTime || plannedTime < jan2025) return false;
+  }
+
+  if (filters.openOnly && !(Number(match?.balanceDue || 0) > 0)) return false;
+  if (filters.paidOnly && !(Number(match?.balanceDue || 0) <= 0 && Number(match?.invoiceTotal || 0) > 0)) return false;
+  if (filters.revenueOnly && !(Number(match?.invoiceTotal || 0) > 0 || Number(match?.categorySubtotal || 0) > 0)) return false;
+
+  return true;
+}
+
+function describeFlexSearchFilters(filters) {
+  if (!filters || !flexSearchFiltersAreActive(filters)) return [];
+
+  const descriptions = [];
+
+  if (filters.year) descriptions.push(`${filters.year}`);
+  if (filters.quoteOnly || filters.includeInvoices === false) descriptions.push("quotes only");
+  if (filters.invoiceOnly) descriptions.push("invoices only");
+  if (filters.currentOnly) descriptions.push("current/recent");
+  if (filters.futureOnly) descriptions.push("future/upcoming");
+  if (filters.openOnly) descriptions.push("open balance");
+  if (filters.paidOnly) descriptions.push("paid");
+  if (filters.revenueOnly) descriptions.push("revenue > $0");
+
+  return descriptions;
+}
+
+function removeFilterWordsFromQuoteSearchQuery(value) {
+  let text = String(value || "");
+
+  const patterns = [
+    /\bshow\b/gi,
+    /\bonly\b/gi,
+    /\bcurrent\b/gi,
+    /\bactive\b/gi,
+    /\brecent\b/gi,
+    /\bfuture\b/gi,
+    /\bupcoming\b/gi,
+    /\bopen\b/gi,
+    /\bpaid\b/gi,
+    /\bunpaid\b/gi,
+    /\boutstanding\b/gi,
+    /\bbalance due\b/gi,
+    /\bquotes?\b/gi,
+    /\binvoices?\b/gi,
+    /\bdon't show invoices\b/gi,
+    /\bdo not show invoices\b/gi,
+    /\bhide invoices\b/gi,
+    /\bexclude invoices\b/gi,
+    /\bno invoices\b/gi,
+    /\bquotes only\b/gi,
+    /\bonly quotes\b/gi,
+    /\binvoices only\b/gi,
+    /\bonly invoices\b/gi,
+    /\breal revenue\b/gi,
+    /\brevenue quote\b/gi,
+    /\bover \$0\b/gi,
+    /\bgreater than \$0\b/gi,
+    /\bnot \$0\b/gi,
+    /\bnonzero\b/gi,
+    /\bnon-zero\b/gi,
+    /\b20\d{2}\b/g,
+  ];
+
+  for (const pattern of patterns) {
+    text = text.replace(pattern, " ");
+  }
+
+  return text.replace(/\s+/g, " ").trim();
+}
+
+
 function getDocumentNumberRank(documentNumber) {
   const doc = String(documentNumber || "");
 
@@ -3523,6 +3687,7 @@ function rankFlexQuoteMatches(matches, query) {
 
 async function searchFlexQuotes(query, options = {}) {
   const normalizedQuery = String(query || "").trim();
+  const filters = options.filters || parseFlexSearchFilters(normalizedQuery, options);
   const limit = Math.max(1, Math.min(Number(options.limit || 5), 25));
 
   if (!normalizedQuery) {
@@ -3530,6 +3695,8 @@ async function searchFlexQuotes(query, options = {}) {
       query: normalizedQuery,
       count: 0,
       matches: [],
+      filters,
+      filterDescriptions: describeFlexSearchFilters(filters),
       requestUrl: null,
     };
   }
@@ -3607,17 +3774,25 @@ async function searchFlexQuotes(query, options = {}) {
     }
   }
 
-  const rankedMatches = rankFlexQuoteMatches(matches, normalizedQuery).slice(0, limit);
+  const rankedAllMatches = rankFlexQuoteMatches(matches, normalizedQuery);
+  const filteredMatches = rankedAllMatches.filter((match) =>
+    matchPassesFlexSearchFilters(match, filters)
+  );
+  const rankedMatches = filteredMatches.slice(0, limit);
 
   return {
     query: normalizedQuery,
     count: rankedMatches.length,
     rawCount: results.length,
     enrichedCount: matches.length,
+    filteredCount: filteredMatches.length,
+    filters,
+    filterDescriptions: describeFlexSearchFilters(filters),
     ranking: {
       prefersQuotesOverInvoices: true,
       prefersNewerAndFutureJobs: true,
       invoiceResultsArePenalized: true,
+      filtersApplied: flexSearchFiltersAreActive(filters),
     },
     matches: rankedMatches,
     requestUrl: searchResult.requestUrl,
@@ -3666,10 +3841,14 @@ function buildQuoteSearchSelectionResponse(question, intent, searchQuery, search
       balanceDueFormatted: match.balanceDueFormatted,
       searchRank: match.searchRank,
     })),
+    filters: searchResult.filters || null,
+    filterDescriptions: searchResult.filterDescriptions || [],
     search: {
       query: searchResult.query,
       count: searchResult.count,
       rawCount: searchResult.rawCount,
+      enrichedCount: searchResult.enrichedCount,
+      filteredCount: searchResult.filteredCount,
       requestUrl: searchResult.requestUrl,
     },
   };
@@ -3757,7 +3936,9 @@ async function answerFlexAskQuestion(question) {
       };
     }
   } else {
-    const searchQuery = extractQuoteSearchQueryFromQuestion(question);
+    const searchFilters = parseFlexSearchFilters(question);
+    const rawSearchQuery = extractQuoteSearchQueryFromQuestion(question);
+    const searchQuery = removeFilterWordsFromQuoteSearchQuery(rawSearchQuery) || rawSearchQuery;
 
     if (!searchQuery) {
       return {
@@ -3769,7 +3950,11 @@ async function answerFlexAskQuestion(question) {
       };
     }
 
-    const searchResult = await searchFlexQuotes(searchQuery, { limit: 15, enrichLimit: 30 });
+    const searchResult = await searchFlexQuotes(searchQuery, {
+      limit: 15,
+      enrichLimit: 40,
+      filters: searchFilters,
+    });
 
     if (searchResult.matches.length !== 1) {
       return buildQuoteSearchSelectionResponse(
@@ -4536,6 +4721,19 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/flex/search-quotes") {
       const query = url.searchParams.get("query") || url.searchParams.get("q");
       const limit = url.searchParams.get("limit") || 5;
+      const filters = parseFlexSearchFilters(query, {
+        year: url.searchParams.get("year"),
+        quoteOnly:
+          url.searchParams.get("quoteOnly") === "true" ||
+          url.searchParams.get("excludeInvoices") === "true",
+        invoiceOnly: url.searchParams.get("invoiceOnly") === "true",
+        currentOnly: url.searchParams.get("currentOnly") === "true",
+        futureOnly: url.searchParams.get("futureOnly") === "true",
+        openOnly: url.searchParams.get("openOnly") === "true",
+        paidOnly: url.searchParams.get("paidOnly") === "true",
+        revenueOnly: url.searchParams.get("revenueOnly") === "true",
+        includeInvoices: url.searchParams.get("includeInvoices") !== "false",
+      });
 
       if (!query) {
         sendJson(res, 400, {
@@ -4544,7 +4742,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const result = await searchFlexQuotes(query, { limit });
+      const result = await searchFlexQuotes(query, { limit, filters });
 
       sendJson(res, 200, result);
       return;

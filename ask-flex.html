@@ -98,6 +98,97 @@
       padding: 24px;
     }
 
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .dash-card {
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 24px;
+      background: rgba(255,255,255,0.04);
+      padding: 18px;
+    }
+
+    .dash-card h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .dash-card p {
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .prompt-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .prompt-group {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 12px;
+      background: rgba(0,0,0,0.12);
+    }
+
+    .prompt-group-title {
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      font-weight: 900;
+      margin-bottom: 8px;
+    }
+
+    .prompt-link {
+      display: block;
+      color: var(--text);
+      border: 0;
+      background: transparent;
+      padding: 7px 0;
+      min-height: auto;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: left;
+      width: 100%;
+      cursor: pointer;
+    }
+
+    .prompt-link:hover {
+      color: var(--green);
+    }
+
+    .recent-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .recent-item {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.035);
+      color: var(--muted);
+      padding: 10px 11px;
+      min-height: auto;
+      font-size: 13px;
+      text-align: left;
+      width: 100%;
+    }
+
+    .recent-item:hover {
+      color: var(--text);
+      border-color: rgba(67, 209, 84, 0.28);
+    }
+
     .question-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -378,9 +469,13 @@
     }
 
     @media (max-width: 740px) {
-      header, .question-row {
+      header, .question-row, .dashboard {
         grid-template-columns: 1fr;
         display: grid;
+      }
+
+      .prompt-groups {
+        grid-template-columns: 1fr;
       }
 
       button {
@@ -411,8 +506,48 @@
     </header>
 
     <section class="panel">
+      <div class="dashboard">
+        <div class="dash-card">
+          <h2>Ask FLEX Command Center</h2>
+          <p>Search quotes by number or name, filter noisy results, inspect money, sections, gear, dates, labor, and compare quotes.</p>
+
+          <div class="prompt-groups">
+            <div class="prompt-group">
+              <div class="prompt-group-title">Search</div>
+              <button class="prompt-link" data-q="Show only 2026 NMR quotes and don't show invoices">2026 NMR quotes, no invoices</button>
+              <button class="prompt-link" data-q="Show only current NMR quotes">Current NMR quotes</button>
+              <button class="prompt-link" data-q="Search NMR Assembly World Cup 2026">NMR Assembly World Cup</button>
+            </div>
+            <div class="prompt-group">
+              <div class="prompt-group-title">Money</div>
+              <button class="prompt-link" data-q="Is 26-1747 paid?">Paid status</button>
+              <button class="prompt-link" data-q="What is the balance on 26-1747?">Balance due</button>
+              <button class="prompt-link" data-q="Why does the category subtotal not match the invoice total on 26-1747?">Subtotal vs invoice</button>
+            </div>
+            <div class="prompt-group">
+              <div class="prompt-group-title">Ops</div>
+              <button class="prompt-link" data-q="Give me an operational summary of 26-1747">Operational summary</button>
+              <button class="prompt-link" data-q="What sections are on 26-1747?">Sections</button>
+              <button class="prompt-link" data-q="When is load in for 26-1747?">Load in</button>
+            </div>
+            <div class="prompt-group">
+              <div class="prompt-group-title">Gear</div>
+              <button class="prompt-link" data-q="What video LED panels are on 26-1747?">LED panels</button>
+              <button class="prompt-link" data-q="Does 26-1747 have VX1000s?">Specific item</button>
+              <button class="prompt-link" data-q="What truss is on 26-1747?">Truss</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-card">
+          <h2>Recent Searches</h2>
+          <p>Your last few prompts on this browser.</p>
+          <div id="recentList" class="recent-list"></div>
+        </div>
+      </div>
+
       <div class="question-row">
-        <textarea id="question" spellcheck="true">What labor is on 26-1747?</textarea>
+        <textarea id="question" spellcheck="true">Show only 2026 NMR quotes and don\'t show invoices</textarea>
         <button id="askButton">Ask FLEX</button>
       </div>
 
@@ -455,12 +590,62 @@
     const warningsEl = document.getElementById("warnings");
     const rawEl = document.getElementById("raw");
 
+    function setPrompt(value, runNow = false) {
+      questionEl.value = value;
+      questionEl.focus();
+      if (runNow) askFlex();
+    }
+
     for (const chip of document.querySelectorAll(".chip")) {
       chip.addEventListener("click", () => {
-        questionEl.value = chip.dataset.q;
-        questionEl.focus();
+        setPrompt(chip.dataset.q);
       });
     }
+
+    for (const prompt of document.querySelectorAll(".prompt-link")) {
+      prompt.addEventListener("click", () => {
+        setPrompt(prompt.dataset.q, true);
+      });
+    }
+
+    function getRecentSearches() {
+      try {
+        return JSON.parse(localStorage.getItem("askFlexRecentSearches") || "[]");
+      } catch {
+        return [];
+      }
+    }
+
+    function saveRecentSearch(question) {
+      const existing = getRecentSearches().filter((item) => item !== question);
+      const next = [question, ...existing].slice(0, 7);
+      localStorage.setItem("askFlexRecentSearches", JSON.stringify(next));
+      renderRecentSearches();
+    }
+
+    function renderRecentSearches() {
+      const recentList = document.getElementById("recentList");
+      if (!recentList) return;
+
+      const recent = getRecentSearches();
+
+      if (!recent.length) {
+        recentList.innerHTML = `<div class="hint">No recent searches yet.</div>`;
+        return;
+      }
+
+      recentList.innerHTML = recent
+        .map((item) => `<button class="recent-item" data-q="${escapeHtml(item)}" type="button">${escapeHtml(item)}</button>`)
+        .join("");
+
+      for (const button of recentList.querySelectorAll(".recent-item")) {
+        button.addEventListener("click", () => {
+          setPrompt(button.dataset.q, true);
+        });
+      }
+    }
+
+    renderRecentSearches();
 
     questionEl.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -874,9 +1059,12 @@
         `;
       };
 
+      const filters = Array.isArray(data.filterDescriptions) ? data.filterDescriptions : [];
+
       return `
         <div class="section">
           <h3>Possible Quotes · showing ${Math.min(initialDisplayCount, matches.length)} of ${matches.length}</h3>
+          ${filters.length ? `<div class="meta">${filters.map((filter) => `<span>Filter: ${escapeHtml(filter)}</span>`).join("")}</div>` : ""}
           <div class="match-list">
             ${visibleMatches.map((match) => renderOneMatch(match)).join("")}
             ${hiddenMatches.map((match) => renderOneMatch(match, "extra-match hidden-match")).join("")}
@@ -1042,6 +1230,7 @@
           throw new Error(data.error || JSON.stringify(data, null, 2));
         }
 
+        saveRecentSearch(question);
         renderAnswer(data);
       } catch (error) {
         errorEl.textContent = error.message || "Ask FLEX failed.";
