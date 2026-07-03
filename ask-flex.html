@@ -642,6 +642,35 @@
       `;
     }
 
+    function renderMoneyFacts(data) {
+      const facts = data.facts || {};
+      const rows = [
+        ["Invoice total", facts.invoiceTotalFormatted || "$0.00"],
+        ["Category subtotal", facts.categorySubtotalFormatted || "$0.00"],
+        ["Applied payments", facts.totalAppliedPaymentsFormatted || "$0.00"],
+        ["Balance due", facts.balanceDueFormatted || "$0.00"],
+        ["Paid in full", facts.isPaid ? "Yes" : "No"],
+        ["Revenue signal", facts.hasRevenueSignal ? "Yes" : "No / $0 placeholder"],
+        ["Invoice total source", facts.invoiceTotalSource || "FLEX header / calculated fields"],
+      ];
+
+      return `
+        <div class="section">
+          <h3>Money Details</h3>
+          <table>
+            <tbody>
+              ${rows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     function renderMatchCards(data) {
       const matches = Array.isArray(data.matches) ? data.matches : [];
       const initialDisplayCount = Number(data.initialDisplayCount || 5);
@@ -798,7 +827,9 @@
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
-      } else if (data.intent === "document_context" || data.facts) {
+      } else if (data.intent === "document_money" || data.moneyType) {
+        detailsEl.innerHTML = renderMoneyFacts(data);
+      } else if (data.intent === "document_context") {
         detailsEl.innerHTML = renderContextFacts(data);
       } else if (data.intent === "document_item_search" || data.itemSearch) {
         detailsEl.innerHTML = renderSmartItemSearch(data);

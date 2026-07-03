@@ -2080,7 +2080,11 @@ function classifyFlexAskIntent(question) {
     return "document_transportation";
   }
 
-  if (/\b(total|price|cost|amount|balance|invoice total|quote total)\b/i.test(text)) {
+  if (/\b(paid|payment|payments|collected|received|deposit|balance|due|owed|outstanding|remaining|open|closed|real revenue|revenue quote|real quote|placeholder|zero|0 quote|\$0|category subtotal|subtotal|adjustment|discount|invoice total source)\b/i.test(text)) {
+    return "document_money";
+  }
+
+  if (/\b(total|price|cost|amount|invoice total|quote total)\b/i.test(text)) {
     return "document_total";
   }
 
@@ -2259,6 +2263,178 @@ function makeHumanTotalAnswer(documentLabel, invoiceTotal, categorySubtotal, bal
 }
 
 
+
+function classifyFlexMoneyQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(is|is this|is it|paid in full|paid\?)\b/i.test(text) && /\bpaid\b/i.test(text)) {
+    return "paid_status";
+  }
+
+  if (/\b(how much|what amount|amount|payments?|collected|received|deposit)\b/i.test(text) && /\b(paid|payment|payments|collected|received|deposit)\b/i.test(text)) {
+    return "payments";
+  }
+
+  if (/\bpaid\b/i.test(text)) {
+    return "paid_status";
+  }
+
+  if (/\b(balance|due|owed|outstanding|remaining)\b/i.test(text)) {
+    return "balance";
+  }
+
+  if (/\b(open|closed|still open|outstanding)\b/i.test(text)) {
+    return "open_status";
+  }
+
+  if (/\b(real revenue|revenue quote|real quote|placeholder|zero|0 quote|\$0)\b/i.test(text)) {
+    return "revenue_signal";
+  }
+
+  if (/\b(category subtotal|subtotal|match|why.*total|adjustment|discount|invoice total source)\b/i.test(text)) {
+    return "subtotal_vs_invoice";
+  }
+
+  return "money_summary";
+}
+
+function buildFlexMoneyAnswer(detail, question) {
+  const showContext = detail?.showContext || {};
+  const summary = detail?.summary || {};
+  const financials = summary?.financials || {};
+  const totals = summary?.totals || {};
+  const moneyType = classifyFlexMoneyQuestion(question);
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const invoiceTotal = Number(financials.invoiceTotal ?? totals.document ?? 0);
+  const categorySubtotal = Number(financials.categorySubtotal ?? totals.document ?? 0);
+  const totalAppliedPayments = Number(financials.totalAppliedPayments || 0);
+  const balanceDue = Number(financials.balanceDue || 0);
+  const discount = Number(financials.discount || 0);
+  const additionalDiscount = Number(financials.additionalDiscount || 0);
+  const salesTax = Number(financials.salesTax || 0);
+  const creditCardFee = Number(financials.creditCardFee || 0);
+  const invoiceTotalSource = financials.invoiceTotalSource || null;
+
+  const isPaid = invoiceTotal > 0 && balanceDue <= 0;
+  const hasPayments = totalAppliedPayments > 0;
+  const isZeroPlaceholder = invoiceTotal === 0 && categorySubtotal === 0;
+  const hasRevenueSignal = invoiceTotal > 0 || categorySubtotal > 0;
+  const subtotalDelta = Math.round((categorySubtotal - invoiceTotal) * 100) / 100;
+
+  const facts = {
+    invoiceTotal,
+    invoiceTotalFormatted: formatUsd(invoiceTotal),
+    categorySubtotal,
+    categorySubtotalFormatted: formatUsd(categorySubtotal),
+    totalAppliedPayments,
+    totalAppliedPaymentsFormatted: formatUsd(totalAppliedPayments),
+    balanceDue,
+    balanceDueFormatted: formatUsd(balanceDue),
+    discount,
+    discountFormatted: formatUsd(discount),
+    additionalDiscount,
+    additionalDiscountFormatted: formatUsd(additionalDiscount),
+    salesTax,
+    salesTaxFormatted: formatUsd(salesTax),
+    creditCardFee,
+    creditCardFeeFormatted: formatUsd(creditCardFee),
+    invoiceTotalSource,
+    isPaid,
+    hasPayments,
+    isZeroPlaceholder,
+    hasRevenueSignal,
+    subtotalDelta,
+    subtotalDeltaFormatted: formatUsd(Math.abs(subtotalDelta)),
+  };
+
+  if (moneyType === "paid_status") {
+    return {
+      headline: "Paid Status",
+      moneyType,
+      answer: isPaid
+        ? `Yes — ${documentLabel} appears to be paid in full.`
+        : `No — ${documentLabel} does not appear to be paid yet. Balance due is ${facts.balanceDueFormatted}.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "payments") {
+    return {
+      headline: "Payments",
+      moneyType,
+      answer: hasPayments
+        ? `${documentLabel} has ${facts.totalAppliedPaymentsFormatted} in applied payments. Balance due is ${facts.balanceDueFormatted}.`
+        : `${documentLabel} does not show any applied payments yet. Balance due is ${facts.balanceDueFormatted}.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "balance") {
+    return {
+      headline: "Balance Due",
+      moneyType,
+      answer: isPaid
+        ? `${documentLabel} is paid in full.`
+        : `${documentLabel} has ${facts.balanceDueFormatted} still due against a ${facts.invoiceTotalFormatted} invoice total.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "open_status") {
+    return {
+      headline: "Open Balance",
+      moneyType,
+      answer: balanceDue > 0
+        ? `${documentLabel} still appears financially open, with ${facts.balanceDueFormatted} due.`
+        : `${documentLabel} does not show an open balance.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "revenue_signal") {
+    return {
+      headline: "Revenue Signal",
+      moneyType,
+      answer: isZeroPlaceholder
+        ? `${documentLabel} looks like a $0 placeholder from the financial fields I can see.`
+        : `${documentLabel} looks like a revenue quote: invoice total is ${facts.invoiceTotalFormatted}, category subtotal is ${facts.categorySubtotalFormatted}, and balance due is ${facts.balanceDueFormatted}.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "subtotal_vs_invoice") {
+    let reason = "The category subtotal and invoice total match.";
+
+    if (subtotalDelta > 0) {
+      reason = `The category subtotal is ${facts.subtotalDeltaFormatted} higher than the invoice total, which usually means a final discount, adjustment, package price, or other invoice-level change was applied.`;
+    } else if (subtotalDelta < 0) {
+      reason = `The invoice total is ${facts.subtotalDeltaFormatted} higher than the category subtotal, which usually means tax, fees, or another invoice-level charge was added.`;
+    }
+
+    return {
+      headline: "Subtotal vs Invoice Total",
+      moneyType,
+      answer: `${documentLabel}: ${reason}`,
+      facts,
+    };
+  }
+
+  return {
+    headline: "Money Summary",
+    moneyType,
+    answer: `${documentLabel} is ${facts.invoiceTotalFormatted} total. ${facts.totalAppliedPaymentsFormatted} has been applied, leaving ${facts.balanceDueFormatted} due.`,
+    facts,
+  };
+}
+
+
 function buildFlexAskAnswer(intent, detail, question) {
   const showContext = detail?.showContext || {};
   const summary = detail?.summary || {};
@@ -2271,6 +2447,10 @@ function buildFlexAskAnswer(intent, detail, question) {
   ]
     .filter(Boolean)
     .join(" — ");
+
+  if (intent === "document_money") {
+    return buildFlexMoneyAnswer(detail, question);
+  }
 
   if (intent === "document_context") {
     return buildFlexContextAnswer(detail, question);
@@ -2470,6 +2650,42 @@ function buildFlexAskBriefPayload(fullResult) {
   if (fullResult?.needsClarification) {
     payload.needsClarification = true;
     payload.lines = [];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_money") {
+    payload.moneyType = result.moneyType || null;
+    payload.facts = result.facts || {};
+    payload.lines = [
+      {
+        label: "Invoice total",
+        value: result.facts?.invoiceTotalFormatted || "$0.00",
+      },
+      {
+        label: "Category subtotal",
+        value: result.facts?.categorySubtotalFormatted || "$0.00",
+      },
+      {
+        label: "Applied payments",
+        value: result.facts?.totalAppliedPaymentsFormatted || "$0.00",
+      },
+      {
+        label: "Balance due",
+        value: result.facts?.balanceDueFormatted || "$0.00",
+      },
+      {
+        label: "Paid in full",
+        value: result.facts?.isPaid ? "Yes" : "No",
+      },
+      {
+        label: "Revenue signal",
+        value: result.facts?.hasRevenueSignal ? "Yes" : "No / $0 placeholder",
+      },
+      {
+        label: "Invoice total source",
+        value: result.facts?.invoiceTotalSource || "FLEX header / calculated fields",
+      },
+    ];
     return payload;
   }
 
