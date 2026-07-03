@@ -243,6 +243,23 @@
       min-height: auto;
     }
 
+    .hidden-match {
+      display: none;
+    }
+
+    .show-more {
+      margin-top: 14px;
+      width: 100%;
+      min-height: 52px;
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.13);
+    }
+
+    .show-more:hover {
+      border-color: rgba(67, 209, 84, 0.38);
+    }
+
     .match-card:hover {
       border-color: rgba(67, 209, 84, 0.42);
       box-shadow: 0 0 0 4px rgba(67, 209, 84, 0.08);
@@ -627,6 +644,9 @@
 
     function renderMatchCards(data) {
       const matches = Array.isArray(data.matches) ? data.matches : [];
+      const initialDisplayCount = Number(data.initialDisplayCount || 5);
+      const visibleMatches = matches.slice(0, initialDisplayCount);
+      const hiddenMatches = matches.slice(initialDisplayCount);
 
       if (matches.length === 0) {
         return `
@@ -637,38 +657,47 @@
         `;
       }
 
+      const renderOneMatch = (match, extraClass = "") => {
+        const planned = formatDate(match.plannedStartDate);
+        const nextQuestion = replaceSearchPhraseWithDocumentNumber(
+          data.question,
+          data.searchQuery,
+          match.documentNumber
+        );
+
+        return `
+          <button class="match-card ${extraClass}" data-next-question="${escapeHtml(nextQuestion)}" type="button">
+            <div class="match-top">
+              <div>
+                <div class="match-name">${escapeHtml(match.name || "Untitled FLEX quote")}</div>
+              </div>
+              <div class="quote-pill">${escapeHtml(match.documentNumber || "No quote #")}</div>
+            </div>
+            <div class="match-meta">
+              ${match.client ? `<span>${escapeHtml(match.client)}</span>` : ""}
+              ${match.venue ? `<span>${escapeHtml(match.venue)}</span>` : ""}
+              ${planned ? `<span>Planned ${escapeHtml(planned)}</span>` : ""}
+              ${match.invoiceTotalFormatted ? `<span>Total ${escapeHtml(match.invoiceTotalFormatted)}</span>` : ""}
+              ${match.balanceDueFormatted ? `<span>Balance ${escapeHtml(match.balanceDueFormatted)}</span>` : ""}
+              ${match.searchRank != null ? `<span>Rank ${escapeHtml(match.searchRank)}</span>` : ""}
+            </div>
+            <div class="hint">Click to ask: ${escapeHtml(nextQuestion)}</div>
+          </button>
+        `;
+      };
+
       return `
         <div class="section">
-          <h3>Possible Quotes</h3>
+          <h3>Possible Quotes · showing ${Math.min(initialDisplayCount, matches.length)} of ${matches.length}</h3>
           <div class="match-list">
-            ${matches.map((match) => {
-              const planned = formatDate(match.plannedStartDate);
-              const nextQuestion = replaceSearchPhraseWithDocumentNumber(
-                data.question,
-                data.searchQuery,
-                match.documentNumber
-              );
-
-              return `
-                <button class="match-card" data-next-question="${escapeHtml(nextQuestion)}" type="button">
-                  <div class="match-top">
-                    <div>
-                      <div class="match-name">${escapeHtml(match.name || "Untitled FLEX quote")}</div>
-                    </div>
-                    <div class="quote-pill">${escapeHtml(match.documentNumber || "No quote #")}</div>
-                  </div>
-                  <div class="match-meta">
-                    ${match.client ? `<span>${escapeHtml(match.client)}</span>` : ""}
-                    ${match.venue ? `<span>${escapeHtml(match.venue)}</span>` : ""}
-                    ${planned ? `<span>Planned ${escapeHtml(planned)}</span>` : ""}
-                    ${match.invoiceTotalFormatted ? `<span>Total ${escapeHtml(match.invoiceTotalFormatted)}</span>` : ""}
-                    ${match.balanceDueFormatted ? `<span>Balance ${escapeHtml(match.balanceDueFormatted)}</span>` : ""}
-                  </div>
-                  <div class="hint">Click to ask: ${escapeHtml(nextQuestion)}</div>
-                </button>
-              `;
-            }).join("")}
+            ${visibleMatches.map((match) => renderOneMatch(match)).join("")}
+            ${hiddenMatches.map((match) => renderOneMatch(match, "extra-match hidden-match")).join("")}
           </div>
+          ${hiddenMatches.length ? `
+            <button id="showMoreMatches" class="show-more" type="button">
+              Show ${hiddenMatches.length} more match${hiddenMatches.length === 1 ? "" : "es"}
+            </button>
+          ` : ""}
         </div>
       `;
     }
@@ -748,6 +777,16 @@
           if (!nextQuestion) return;
           questionEl.value = nextQuestion;
           askFlex();
+        });
+      }
+
+      const showMoreButton = document.getElementById("showMoreMatches");
+      if (showMoreButton) {
+        showMoreButton.addEventListener("click", () => {
+          for (const card of document.querySelectorAll(".extra-match")) {
+            card.classList.remove("hidden-match");
+          }
+          showMoreButton.remove();
         });
       }
     }

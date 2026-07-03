@@ -2316,6 +2316,11 @@ function buildFlexAskBriefPayload(fullResult) {
     payload.searchQuery = fullResult.searchQuery || null;
     payload.matches = Array.isArray(fullResult.matches) ? fullResult.matches : [];
     payload.matchCount = payload.matches.length;
+    payload.initialDisplayCount = fullResult.initialDisplayCount || 5;
+    payload.hasMoreMatches =
+      fullResult.hasMoreMatches != null
+        ? Boolean(fullResult.hasMoreMatches)
+        : payload.matches.length > payload.initialDisplayCount;
     payload.headline = "Choose a FLEX Quote";
     payload.lines = payload.matches.map((match) => ({
       text: `${match.index}. ${match.documentNumber || "No quote #"} — ${match.name || "Untitled"} — ${match.client || "No client"} — ${match.invoiceTotalFormatted || "$0.00"}`,
@@ -2330,6 +2335,7 @@ function buildFlexAskBriefPayload(fullResult) {
       invoiceTotalFormatted: match.invoiceTotalFormatted,
       balanceDue: match.balanceDue,
       balanceDueFormatted: match.balanceDueFormatted,
+      searchRank: match.searchRank,
     }));
     return payload;
   }
@@ -2594,9 +2600,108 @@ function extractQuoteSearchQueryFromQuestion(question) {
   return text;
 }
 
+
+function getDocumentNumberRank(documentNumber) {
+  const doc = String(documentNumber || "");
+
+  // Quotes look like 26-1747. Invoices look like INV-08668.
+  if (/^\d{2}-\d{3,6}$/i.test(doc)) return 0;
+  if (/^INV-/i.test(doc)) return 2;
+  return 1;
+}
+
+function getDateTimestamp(value) {
+  if (!value) return 0;
+  const date = new Date(value);
+  const time = date.getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function getSearchRelevanceScore(match, query) {
+  const q = String(query || "").toLowerCase().trim();
+  const name = String(match?.name || "").toLowerCase();
+  const client = String(match?.client || "").toLowerCase();
+  const venue = String(match?.venue || "").toLowerCase();
+  const documentNumber = String(match?.documentNumber || "").toLowerCase();
+
+  if (!q) return 0;
+
+  let score = 0;
+  const tokens = q.split(/\s+/).filter(Boolean);
+
+  if (documentNumber === q) score += 1000;
+  if (name === q) score += 400;
+  if (name.includes(q)) score += 240;
+  if (client.includes(q)) score += 150;
+  if (venue.includes(q)) score += 80;
+
+  for (const token of tokens) {
+    if (name.includes(token)) score += 35;
+    if (client.includes(token)) score += 20;
+    if (venue.includes(token)) score += 12;
+    if (documentNumber.includes(token)) score += 25;
+  }
+
+  return score;
+}
+
+function rankFlexQuoteMatches(matches, query) {
+  const now = Date.now();
+  const oneYearMs = 365 * 24 * 60 * 60 * 1000;
+
+  return [...(Array.isArray(matches) ? matches : [])]
+    .map((match, originalIndex) => {
+      const plannedTime = getDateTimestamp(match.plannedStartDate);
+      const agePenalty = plannedTime
+        ? Math.max(0, Math.floor((now - plannedTime) / oneYearMs)) * 20
+        : 20;
+      const futureBonus = plannedTime && plannedTime >= now ? 60 : 0;
+      const currentEraBonus = plannedTime && plannedTime >= Date.UTC(2025, 0, 1) ? 40 : 0;
+      const quoteBonus = getDocumentNumberRank(match.documentNumber) === 0 ? 120 : 0;
+      const invoicePenalty = /^INV-/i.test(String(match.documentNumber || "")) ? 220 : 0;
+      const valueBonus = Number(match.invoiceTotal || 0) > 0 ? 15 : 0;
+      const relevanceScore = getSearchRelevanceScore(match, query);
+
+      return {
+        ...match,
+        searchRank: Math.round(
+          relevanceScore +
+            futureBonus +
+            currentEraBonus +
+            quoteBonus +
+            valueBonus -
+            invoicePenalty -
+            agePenalty
+        ),
+        _originalIndex: originalIndex,
+      };
+    })
+    .sort((a, b) => {
+      if (b.searchRank !== a.searchRank) return b.searchRank - a.searchRank;
+
+      const docRankA = getDocumentNumberRank(a.documentNumber);
+      const docRankB = getDocumentNumberRank(b.documentNumber);
+      if (docRankA !== docRankB) return docRankA - docRankB;
+
+      const dateA = getDateTimestamp(a.plannedStartDate);
+      const dateB = getDateTimestamp(b.plannedStartDate);
+      if (dateA !== dateB) return dateB - dateA;
+
+      return a._originalIndex - b._originalIndex;
+    })
+    .map((match, index) => {
+      const { _originalIndex, ...clean } = match;
+      return {
+        ...clean,
+        index: index + 1,
+      };
+    });
+}
+
+
 async function searchFlexQuotes(query, options = {}) {
   const normalizedQuery = String(query || "").trim();
-  const limit = Math.max(1, Math.min(Number(options.limit || 5), 10));
+  const limit = Math.max(1, Math.min(Number(options.limit || 5), 25));
 
   if (!normalizedQuery) {
     return {
@@ -2609,6 +2714,7 @@ async function searchFlexQuotes(query, options = {}) {
 
   const searchResult = await fetchFlexSearch(normalizedQuery);
   const results = normalizeFlexSearchResults(searchResult.data);
+  const enrichLimit = Math.max(limit, Math.min(Number(options.enrichLimit || 25), 40));
 
   const baseCandidates = results
     .map((result) => ({
@@ -2629,7 +2735,7 @@ async function searchFlexQuotes(query, options = {}) {
         null,
     }))
     .filter((candidate) => candidate.elementId)
-    .slice(0, limit);
+    .slice(0, enrichLimit);
 
   const matches = [];
 
@@ -2679,11 +2785,19 @@ async function searchFlexQuotes(query, options = {}) {
     }
   }
 
+  const rankedMatches = rankFlexQuoteMatches(matches, normalizedQuery).slice(0, limit);
+
   return {
     query: normalizedQuery,
-    count: matches.length,
+    count: rankedMatches.length,
     rawCount: results.length,
-    matches,
+    enrichedCount: matches.length,
+    ranking: {
+      prefersQuotesOverInvoices: true,
+      prefersNewerAndFutureJobs: true,
+      invoiceResultsArePenalized: true,
+    },
+    matches: rankedMatches,
     requestUrl: searchResult.requestUrl,
   };
 }
@@ -2714,8 +2828,10 @@ function buildQuoteSearchSelectionResponse(question, intent, searchQuery, search
       matches.length === 1
         ? `I found one possible FLEX quote for "${searchQuery}".`
         : `I found ${matches.length} possible FLEX quotes for "${searchQuery}". Which one do you mean?`,
+    initialDisplayCount: 5,
+    hasMoreMatches: matches.length > 5,
     matches: matches.map((match, index) => ({
-      index: index + 1,
+      index: match.index || index + 1,
       elementId: match.elementId,
       documentNumber: match.documentNumber,
       name: match.name,
@@ -2726,6 +2842,7 @@ function buildQuoteSearchSelectionResponse(question, intent, searchQuery, search
       invoiceTotalFormatted: match.invoiceTotalFormatted,
       balanceDue: match.balanceDue,
       balanceDueFormatted: match.balanceDueFormatted,
+      searchRank: match.searchRank,
     })),
     search: {
       query: searchResult.query,
@@ -2768,7 +2885,7 @@ async function answerFlexAskQuestion(question) {
       };
     }
 
-    const searchResult = await searchFlexQuotes(searchQuery, { limit: 5 });
+    const searchResult = await searchFlexQuotes(searchQuery, { limit: 15, enrichLimit: 30 });
 
     if (searchResult.matches.length !== 1) {
       return buildQuoteSearchSelectionResponse(
