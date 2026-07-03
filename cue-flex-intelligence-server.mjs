@@ -1333,6 +1333,35 @@ function buildFlexAskBriefPayload(fullResult) {
     warnings: summary?.warnings || [],
   };
 
+  if (fullResult?.needsSelection) {
+    payload.needsSelection = true;
+    payload.searchQuery = fullResult.searchQuery || null;
+    payload.matches = Array.isArray(fullResult.matches) ? fullResult.matches : [];
+    payload.matchCount = payload.matches.length;
+    payload.headline = "Choose a FLEX Quote";
+    payload.lines = payload.matches.map((match) => ({
+      text: `${match.index}. ${match.documentNumber || "No quote #"} — ${match.name || "Untitled"} — ${match.client || "No client"} — ${match.invoiceTotalFormatted || "$0.00"}`,
+      index: match.index,
+      documentNumber: match.documentNumber,
+      elementId: match.elementId,
+      name: match.name,
+      client: match.client,
+      venue: match.venue,
+      plannedStartDate: match.plannedStartDate,
+      invoiceTotal: match.invoiceTotal,
+      invoiceTotalFormatted: match.invoiceTotalFormatted,
+      balanceDue: match.balanceDue,
+      balanceDueFormatted: match.balanceDueFormatted,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.needsClarification) {
+    payload.needsClarification = true;
+    payload.lines = [];
+    return payload;
+  }
+
   if (fullResult?.intent === "document_labor") {
     payload.total = result.total || 0;
     payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
@@ -1413,30 +1442,275 @@ function buildFlexAskBriefPayload(fullResult) {
   return payload;
 }
 
+
+function extractQuoteSearchQueryFromQuestion(question) {
+  let text = String(question || "").trim();
+
+  // Remove quote-number patterns if present.
+  text = text.replace(/\b\d{2}-\d{3,6}\b/g, " ");
+
+  // Remove common question / intent words while leaving the likely quote name.
+  const removePatterns = [
+    /\bwhat\b/gi,
+    /\bwhat's\b/gi,
+    /\bshow\b/gi,
+    /\bme\b/gi,
+    /\bgive\b/gi,
+    /\btell\b/gi,
+    /\bfind\b/gi,
+    /\blook\b/gi,
+    /\bup\b/gi,
+    /\bsearch\b/gi,
+    /\bfor\b/gi,
+    /\bthe\b/gi,
+    /\ba\b/gi,
+    /\ban\b/gi,
+    /\bon\b/gi,
+    /\bin\b/gi,
+    /\bof\b/gi,
+    /\bis\b/gi,
+    /\bare\b/gi,
+    /\bthere\b/gi,
+    /\bany\b/gi,
+    /\bquote\b/gi,
+    /\bjob\b/gi,
+    /\bshow\b/gi,
+    /\bdocument\b/gi,
+    /\bflex\b/gi,
+    /\blabor\b/gi,
+    /\bcrew\b/gi,
+    /\bstaffing\b/gi,
+    /\btechs?\b/gi,
+    /\btechnicians?\b/gi,
+    /\binventory\b/gi,
+    /\bgear\b/gi,
+    /\bequipment\b/gi,
+    /\brentals?\b/gi,
+    /\bitems?\b/gi,
+    /\btransportation\b/gi,
+    /\btransport\b/gi,
+    /\btrucking\b/gi,
+    /\btrucks?\b/gi,
+    /\bdelivery\b/gi,
+    /\bpickup\b/gi,
+    /\btotal\b/gi,
+    /\bprice\b/gi,
+    /\bcost\b/gi,
+    /\bamount\b/gi,
+    /\bbalance\b/gi,
+    /\bsummary\b/gi,
+    /\babout\b/gi,
+  ];
+
+  for (const pattern of removePatterns) {
+    text = text.replace(pattern, " ");
+  }
+
+  text = text
+    .replace(/[?!.:,;()[\]{}"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text;
+}
+
+async function searchFlexQuotes(query, options = {}) {
+  const normalizedQuery = String(query || "").trim();
+  const limit = Math.max(1, Math.min(Number(options.limit || 5), 10));
+
+  if (!normalizedQuery) {
+    return {
+      query: normalizedQuery,
+      count: 0,
+      matches: [],
+      requestUrl: null,
+    };
+  }
+
+  const searchResult = await fetchFlexSearch(normalizedQuery);
+  const results = normalizeFlexSearchResults(searchResult.data);
+
+  const baseCandidates = results
+    .map((result) => ({
+      raw: result,
+      elementId: extractSearchResultId(result),
+      name:
+        result?.name ||
+        result?.displayName ||
+        result?.preferredDisplayString ||
+        result?.text ||
+        result?.label ||
+        null,
+      type:
+        result?.type ||
+        result?.definitionName ||
+        result?.className ||
+        result?.category ||
+        null,
+    }))
+    .filter((candidate) => candidate.elementId)
+    .slice(0, limit);
+
+  const matches = [];
+
+  for (const candidate of baseCandidates) {
+    try {
+      const intake = await fetchFlexShowIntake(candidate.elementId);
+      const summary = buildFlexDocumentSummary(intake);
+      const showContext = intake.showContext || {};
+
+      matches.push({
+        elementId: candidate.elementId,
+        documentNumber: showContext.documentNumber || null,
+        name: showContext.showName || candidate.name,
+        client: showContext.client || null,
+        venue: showContext.venue || null,
+        plannedStartDate: showContext.plannedStartDate || null,
+        plannedEndDate: showContext.plannedEndDate || null,
+        loadInDate: showContext.loadInDate || null,
+        loadOutDate: showContext.loadOutDate || null,
+        personResponsible: showContext.personResponsible || null,
+        projectManager: showContext.projectManager || null,
+        invoiceTotal: summary?.financials?.invoiceTotal || 0,
+        invoiceTotalFormatted: formatUsd(summary?.financials?.invoiceTotal || 0),
+        balanceDue: summary?.financials?.balanceDue || 0,
+        balanceDueFormatted: formatUsd(summary?.financials?.balanceDue || 0),
+        categorySubtotal: summary?.financials?.categorySubtotal || 0,
+        categorySubtotalFormatted: formatUsd(summary?.financials?.categorySubtotal || 0),
+        rawSearchName: candidate.name,
+        type: candidate.type,
+      });
+    } catch (error) {
+      matches.push({
+        elementId: candidate.elementId,
+        documentNumber: null,
+        name: candidate.name,
+        client: null,
+        venue: null,
+        plannedStartDate: null,
+        invoiceTotal: 0,
+        invoiceTotalFormatted: formatUsd(0),
+        balanceDue: 0,
+        balanceDueFormatted: formatUsd(0),
+        rawSearchName: candidate.name,
+        type: candidate.type,
+        enrichmentError: error.message || "Unable to enrich search result.",
+      });
+    }
+  }
+
+  return {
+    query: normalizedQuery,
+    count: matches.length,
+    rawCount: results.length,
+    matches,
+    requestUrl: searchResult.requestUrl,
+  };
+}
+
+function buildQuoteSearchSelectionResponse(question, intent, searchQuery, searchResult) {
+  const matches = Array.isArray(searchResult?.matches) ? searchResult.matches : [];
+
+  if (matches.length === 0) {
+    return {
+      question,
+      intent,
+      searchQuery,
+      found: false,
+      needsClarification: true,
+      answer: `I could not find any FLEX quotes matching "${searchQuery}".`,
+      matches: [],
+      search: searchResult,
+    };
+  }
+
+  return {
+    question,
+    intent,
+    searchQuery,
+    found: true,
+    needsSelection: true,
+    answer:
+      matches.length === 1
+        ? `I found one possible FLEX quote for "${searchQuery}".`
+        : `I found ${matches.length} possible FLEX quotes for "${searchQuery}". Which one do you mean?`,
+    matches: matches.map((match, index) => ({
+      index: index + 1,
+      elementId: match.elementId,
+      documentNumber: match.documentNumber,
+      name: match.name,
+      client: match.client,
+      venue: match.venue,
+      plannedStartDate: match.plannedStartDate,
+      invoiceTotal: match.invoiceTotal,
+      invoiceTotalFormatted: match.invoiceTotalFormatted,
+      balanceDue: match.balanceDue,
+      balanceDueFormatted: match.balanceDueFormatted,
+    })),
+    search: {
+      query: searchResult.query,
+      count: searchResult.count,
+      rawCount: searchResult.rawCount,
+      requestUrl: searchResult.requestUrl,
+    },
+  };
+}
+
 async function answerFlexAskQuestion(question) {
   const documentNumber = extractDocumentNumberFromQuestion(question);
   const intent = classifyFlexAskIntent(question);
 
-  if (!documentNumber) {
-    return {
-      question,
-      intent,
-      needsClarification: true,
-      answer:
-        "I need a FLEX quote number like 26-1747 to answer that question in this first Ask FLEX version.",
-    };
-  }
+  let quoteLookup = null;
 
-  const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+  if (documentNumber) {
+    quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
 
-  if (!quoteLookup.found || !quoteLookup.elementId) {
-    return {
-      question,
-      intent,
-      documentNumber,
-      found: false,
-      answer: `I could not find a FLEX quote for ${documentNumber}.`,
-      lookup: quoteLookup,
+    if (!quoteLookup.found || !quoteLookup.elementId) {
+      return {
+        question,
+        intent,
+        documentNumber,
+        found: false,
+        answer: `I could not find a FLEX quote for ${documentNumber}.`,
+        lookup: quoteLookup,
+      };
+    }
+  } else {
+    const searchQuery = extractQuoteSearchQueryFromQuestion(question);
+
+    if (!searchQuery) {
+      return {
+        question,
+        intent,
+        needsClarification: true,
+        answer:
+          "I need either a FLEX quote number like 26-1747 or enough of a quote name to search for it.",
+      };
+    }
+
+    const searchResult = await searchFlexQuotes(searchQuery, { limit: 5 });
+
+    if (searchResult.matches.length !== 1) {
+      return buildQuoteSearchSelectionResponse(
+        question,
+        intent,
+        searchQuery,
+        searchResult
+      );
+    }
+
+    const match = searchResult.matches[0];
+
+    quoteLookup = {
+      documentNumber: match.documentNumber,
+      found: true,
+      elementId: match.elementId,
+      name: match.name,
+      type: match.type || null,
+      matches: searchResult.matches,
+      requestUrl: searchResult.requestUrl,
+      rawCount: searchResult.rawCount,
+      searchQuery,
     };
   }
 
@@ -1447,7 +1721,7 @@ async function answerFlexAskQuestion(question) {
   return {
     question,
     intent,
-    documentNumber,
+    documentNumber: detail.showContext?.documentNumber || documentNumber || quoteLookup.documentNumber || null,
     found: true,
     elementId: quoteLookup.elementId,
     showContext: detail.showContext,
@@ -1844,6 +2118,7 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/sales-goals-row",
     "/api/flex/document-detail",
     "/api/flex/find-quote",
+    "/api/flex/search-quotes",
     "/api/flex/ask",
     "/api/flex/ask-brief",
   ].includes(pathname);
@@ -2174,6 +2449,23 @@ const server = http.createServer(async (req, res) => {
       const summary = buildFlexDocumentSummary(intake);
 
       sendJson(res, 200, summary);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/search-quotes") {
+      const query = url.searchParams.get("query") || url.searchParams.get("q");
+      const limit = url.searchParams.get("limit") || 5;
+
+      if (!query) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: query",
+        });
+        return;
+      }
+
+      const result = await searchFlexQuotes(query, { limit });
+
+      sendJson(res, 200, result);
       return;
     }
 
