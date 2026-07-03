@@ -1859,6 +1859,216 @@ function buildFlexSmartItemSearch(detail, question) {
   };
 }
 
+
+function formatFlexDateTime(value) {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatFlexDate(value) {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function classifyFlexContextQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(pm|project manager)\b/i.test(text)) {
+    return "project_manager";
+  }
+
+  if (/\b(owner|owns|responsible|person responsible|salesperson|sales person|account manager)\b/i.test(text)) {
+    return "owner";
+  }
+
+  if (/\b(client|customer)\b/i.test(text)) {
+    return "client";
+  }
+
+  if (/\b(venue|where|location|site)\b/i.test(text)) {
+    return "venue";
+  }
+
+  if (/\b(load[- ]?in|load in|loadin)\b/i.test(text)) {
+    return "load_in";
+  }
+
+  if (/\b(load[- ]?out|load out|loadout|strike)\b/i.test(text)) {
+    return "load_out";
+  }
+
+  if (/\b(start|planned start|begins|begin)\b/i.test(text)) {
+    return "planned_start";
+  }
+
+  if (/\b(end|planned end|ends|finish|finishes)\b/i.test(text)) {
+    return "planned_end";
+  }
+
+  if (/\b(date|dates|when|schedule|timeline)\b/i.test(text)) {
+    return "dates";
+  }
+
+  return "overview";
+}
+
+function buildFlexContextAnswer(detail, question) {
+  const showContext = detail?.showContext || {};
+  const contextType = classifyFlexContextQuestion(question);
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const personResponsible = showContext.personResponsible || null;
+  const projectManager = showContext.projectManager || null;
+  const client = showContext.client || null;
+  const venue = showContext.venue || null;
+  const plannedStart = showContext.plannedStartDate || null;
+  const plannedEnd = showContext.plannedEndDate || null;
+  const loadIn = showContext.loadInDate || null;
+  const loadOut = showContext.loadOutDate || null;
+
+  const facts = {
+    personResponsible,
+    projectManager,
+    client,
+    venue,
+    plannedStart,
+    plannedStartFormatted: formatFlexDateTime(plannedStart),
+    plannedEnd,
+    plannedEndFormatted: formatFlexDateTime(plannedEnd),
+    loadIn,
+    loadInFormatted: formatFlexDateTime(loadIn),
+    loadOut,
+    loadOutFormatted: formatFlexDateTime(loadOut),
+  };
+
+  if (contextType === "owner") {
+    return {
+      headline: "Quote Owner",
+      contextType,
+      answer: `${documentLabel}: person responsible is ${personResponsible || "not assigned"}. Project manager is ${projectManager || "not assigned"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "project_manager") {
+    return {
+      headline: "Project Manager",
+      contextType,
+      answer: `${documentLabel}: project manager is ${projectManager || "not assigned"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "client") {
+    return {
+      headline: "Client",
+      contextType,
+      answer: `${documentLabel}: client is ${client || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "venue") {
+    return {
+      headline: "Venue",
+      contextType,
+      answer: `${documentLabel}: venue is ${venue || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "load_in") {
+    return {
+      headline: "Load In",
+      contextType,
+      answer: `${documentLabel}: load in is ${facts.loadInFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "load_out") {
+    return {
+      headline: "Load Out",
+      contextType,
+      answer: `${documentLabel}: load out is ${facts.loadOutFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "planned_start") {
+    return {
+      headline: "Planned Start",
+      contextType,
+      answer: `${documentLabel}: planned start is ${facts.plannedStartFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "planned_end") {
+    return {
+      headline: "Planned End",
+      contextType,
+      answer: `${documentLabel}: planned end is ${facts.plannedEndFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  const dateParts = [
+    facts.plannedStartFormatted && facts.plannedEndFormatted
+      ? `planned ${facts.plannedStartFormatted} to ${facts.plannedEndFormatted}`
+      : null,
+    facts.loadInFormatted ? `load in ${facts.loadInFormatted}` : null,
+    facts.loadOutFormatted ? `load out ${facts.loadOutFormatted}` : null,
+  ].filter(Boolean);
+
+  if (contextType === "dates") {
+    return {
+      headline: "Dates",
+      contextType,
+      answer: `${documentLabel}: ${dateParts.length ? dateParts.join("; ") : "no dates are listed."}`,
+      facts,
+    };
+  }
+
+  return {
+    headline: "Quote Context",
+    contextType,
+    answer: `${documentLabel}: ${client || "No client listed"}${venue ? ` at ${venue}` : ""}. Person responsible is ${personResponsible || "not assigned"}; PM is ${projectManager || "not assigned"}.`,
+    facts,
+  };
+}
+
+
 function classifyFlexAskIntent(question) {
   const text = String(question || "").toLowerCase();
 
@@ -1872,6 +2082,10 @@ function classifyFlexAskIntent(question) {
 
   if (/\b(total|price|cost|amount|balance|invoice total|quote total)\b/i.test(text)) {
     return "document_total";
+  }
+
+  if (/\b(owner|owns|responsible|person responsible|salesperson|sales person|account manager|pm|project manager|client|customer|venue|where|location|site|date|dates|when|schedule|timeline|load[- ]?in|load[- ]?out|loadin|loadout|strike|planned start|planned end)\b/i.test(text)) {
+    return "document_context";
   }
 
   const hasItemQuestionShape = FLEX_ITEM_QUESTION_PATTERNS.some((pattern) =>
@@ -1929,6 +2143,10 @@ function buildFlexAskAnswer(intent, detail, question) {
   ]
     .filter(Boolean)
     .join(" — ");
+
+  if (intent === "document_context") {
+    return buildFlexContextAnswer(detail, question);
+  }
 
   if (intent === "document_labor") {
     const laborSection = getSectionByCategoryOrName(detail, "labor", /labor/i);
@@ -2119,6 +2337,46 @@ function buildFlexAskBriefPayload(fullResult) {
   if (fullResult?.needsClarification) {
     payload.needsClarification = true;
     payload.lines = [];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_context") {
+    payload.contextType = result.contextType || null;
+    payload.facts = result.facts || {};
+    payload.lines = [
+      {
+        label: "Person responsible",
+        value: result.facts?.personResponsible || "Not assigned",
+      },
+      {
+        label: "Project manager",
+        value: result.facts?.projectManager || "Not assigned",
+      },
+      {
+        label: "Client",
+        value: result.facts?.client || "Not listed",
+      },
+      {
+        label: "Venue",
+        value: result.facts?.venue || "Not listed",
+      },
+      {
+        label: "Planned start",
+        value: result.facts?.plannedStartFormatted || "Not listed",
+      },
+      {
+        label: "Planned end",
+        value: result.facts?.plannedEndFormatted || "Not listed",
+      },
+      {
+        label: "Load in",
+        value: result.facts?.loadInFormatted || "Not listed",
+      },
+      {
+        label: "Load out",
+        value: result.facts?.loadOutFormatted || "Not listed",
+      },
+    ];
     return payload;
   }
 
