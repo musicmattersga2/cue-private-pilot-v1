@@ -5544,7 +5544,7 @@ const server = http.createServer(async (req, res) => {
       },
     ];
     
-    async function enrichActiveShowWithFlex(show) {
+    function extractActiveShowDocumentNumbers(show) {
       const textToScan = [
         show.id,
         show.name,
@@ -5561,11 +5561,136 @@ const server = http.createServer(async (req, res) => {
         .join(" ");
 
       const quoteMatches = textToScan.match(/\b\d{2}-\d{3,6}\b/g) || [];
-      const documentNumbers = [...new Set(quoteMatches.map((item) => item.trim()))];
-      const documentNumber = documentNumbers[0] || "";
+      return [...new Set(quoteMatches.map((item) => item.trim()))];
+    }
+
+    function getFlexSoldDepartments(detail) {
+      return Array.from(
+        new Set(
+          [
+            ...(detail.sections || []).map((section) => section.name),
+            ...((detail.summary && detail.summary.lineItems) || []).map(
+              (item) => item.name
+            ),
+          ]
+            .filter(Boolean)
+            .map((item) => String(item).trim())
+        )
+      );
+    }
+
+    function sumFlexNumber(values) {
+      return Math.round(
+        values.reduce((sum, value) => sum + Number(value || 0), 0) * 100
+      ) / 100;
+    }
+
+    function buildCombinedFlexTotals(verifiedDocuments) {
+      const totalsList = verifiedDocuments.map((doc) => doc.totals || {});
+      const financialsList = verifiedDocuments.map((doc) => doc.financials || {});
+
+      return {
+        totals: {
+          document: sumFlexNumber(totalsList.map((item) => item.document)),
+          rental: sumFlexNumber(totalsList.map((item) => item.rental)),
+          labor: sumFlexNumber(totalsList.map((item) => item.labor)),
+          transportation: sumFlexNumber(totalsList.map((item) => item.transportation)),
+          other: sumFlexNumber(totalsList.map((item) => item.other)),
+          categorySubtotal: sumFlexNumber(totalsList.map((item) => item.categorySubtotal)),
+        },
+        financials: {
+          invoiceTotal: sumFlexNumber(financialsList.map((item) => item.invoiceTotal)),
+          balanceDue: sumFlexNumber(financialsList.map((item) => item.balanceDue)),
+          totalAppliedPayments: sumFlexNumber(financialsList.map((item) => item.totalAppliedPayments)),
+          categorySubtotal: sumFlexNumber(financialsList.map((item) => item.categorySubtotal)),
+        },
+        counts: {
+          sections: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.sections || 0), 0),
+          flattenedRows: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.flattenedRows || 0), 0),
+          inventoryItems: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.inventoryItems || 0), 0),
+          laborItems: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.laborItems || 0), 0),
+          transportationItems: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.transportationItems || 0), 0),
+        },
+      };
+    }
+
+    async function resolveActiveShowFlexDocument(documentNumber) {
+      try {
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          return {
+            status: "Missing",
+            approvalNeeded: true,
+            documentNumber,
+            elementId: null,
+            showName: null,
+            client: null,
+            venue: null,
+            plannedStartDate: null,
+            plannedEndDate: null,
+            loadInDate: null,
+            loadOutDate: null,
+            soldDepartments: [],
+            totals: null,
+            financials: null,
+            counts: null,
+            quoteLookup,
+            message: `No FLEX quote found for ${documentNumber}.`,
+          };
+        }
+
+        const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+        const soldDepartments = getFlexSoldDepartments(detail);
+
+        return {
+          status: "Verified",
+          approvalNeeded: false,
+          documentNumber,
+          elementId: quoteLookup.elementId,
+          showName:
+            detail.showContext?.showName || quoteLookup.name || null,
+          client: detail.showContext?.client || null,
+          venue: detail.showContext?.venue || null,
+          plannedStartDate: detail.showContext?.plannedStartDate || null,
+          plannedEndDate: detail.showContext?.plannedEndDate || null,
+          loadInDate: detail.showContext?.loadInDate || null,
+          loadOutDate: detail.showContext?.loadOutDate || null,
+          soldDepartments,
+          totals: detail.summary?.totals || null,
+          financials: detail.summary?.financials || null,
+          counts: detail.counts || null,
+          quoteLookup,
+        };
+      } catch (error) {
+        return {
+          status: "Error",
+          approvalNeeded: true,
+          documentNumber,
+          elementId: null,
+          showName: null,
+          client: null,
+          venue: null,
+          plannedStartDate: null,
+          plannedEndDate: null,
+          loadInDate: null,
+          loadOutDate: null,
+          soldDepartments: [],
+          totals: null,
+          financials: null,
+          counts: null,
+          quoteLookup: null,
+          message: error.message || "FLEX enrichment failed.",
+        };
+      }
+    }
+
+    async function enrichActiveShowWithFlex(show) {
+      const documentNumbers = extractActiveShowDocumentNumbers(show);
       const lastPullAt = new Date().toISOString();
 
-      if (!documentNumber) {
+      if (!documentNumbers.length) {
         return {
           ...show,
           flex: {
@@ -5583,7 +5708,9 @@ const server = http.createServer(async (req, res) => {
             loadOutDate: null,
             soldDepartments: [],
             totals: null,
+            financials: null,
             counts: null,
+            documents: [],
             lastPullAt,
             message:
               "No FLEX document number found in this Active Shows row. Needs direct FLEX ID, command sheet, quote document, or PM approval.",
@@ -5593,110 +5720,74 @@ const server = http.createServer(async (req, res) => {
         };
       }
 
-      try {
-        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+      const documents = await Promise.all(
+        documentNumbers.map((documentNumber) =>
+          resolveActiveShowFlexDocument(documentNumber)
+        )
+      );
 
-        if (!quoteLookup.found || !quoteLookup.elementId) {
-          return {
-            ...show,
-            flex: {
-              status: "Missing",
-              approvalNeeded: true,
-              documentNumber,
-              documentNumbers,
-              elementId: null,
-              showName: null,
-              client: null,
-              venue: null,
-              plannedStartDate: null,
-              plannedEndDate: null,
-              loadInDate: null,
-              loadOutDate: null,
-              soldDepartments: [],
-              totals: null,
-              counts: null,
-              lastPullAt,
-              quoteLookup,
-              message: `No FLEX quote found for ${documentNumber}.`,
-            },
-            flexSignal: `FLEX Missing - ${documentNumber} did not resolve to a FLEX element. Treat as trucking / Drive hint only.`,
-          };
-        }
+      const verifiedDocuments = documents.filter(
+        (document) => document.status === "Verified"
+      );
+      const unresolvedDocuments = documents.filter(
+        (document) => document.status !== "Verified"
+      );
+      const primary = verifiedDocuments[0] || documents[0];
+      const soldDepartments = Array.from(
+        new Set(
+          verifiedDocuments.flatMap((document) => document.soldDepartments || [])
+        )
+      );
+      const combined = buildCombinedFlexTotals(verifiedDocuments);
 
-        const intake = await fetchFlexShowIntake(quoteLookup.elementId);
-        const detail = buildFlexDocumentDetail(intake);
+      const status = verifiedDocuments.length === 0
+        ? unresolvedDocuments.some((document) => document.status === "Error")
+          ? "Error"
+          : "Missing"
+        : unresolvedDocuments.length > 0
+          ? "Partial"
+          : "Verified";
 
-        const soldDepartments = Array.from(
-          new Set(
-            [
-              ...(detail.sections || []).map((section) => section.name),
-              ...((detail.summary && detail.summary.lineItems) || []).map(
-                (item) => item.name
-              ),
-            ]
-              .filter(Boolean)
-              .map((item) => String(item).trim())
-          )
-        );
+      const approvalNeeded = status !== "Verified";
+      const checkedText = `${verifiedDocuments.length}/${documentNumbers.length}`;
+      const unresolvedText = unresolvedDocuments.length
+        ? ` Unresolved: ${unresolvedDocuments
+            .map((document) => `${document.documentNumber} ${document.status}`)
+            .join(", ")}.`
+        : "";
 
-        const flexVerifiedSignal = `FLEX Verified - ${documentNumber} / ${
-          quoteLookup.elementId
-        } / sold scope: ${
-          soldDepartments.join(", ") || "No departments found"
-        }.`;
+      const flexSignal = verifiedDocuments.length
+        ? `FLEX ${status} - ${checkedText} quote${documentNumbers.length === 1 ? "" : "s"} verified. Primary: ${primary.documentNumber} / ${primary.elementId}. Combined sold scope: ${soldDepartments.join(", ") || "No departments found"}.${unresolvedText}`
+        : `FLEX ${status} - ${documentNumbers.join(", ")} did not fully resolve. Treat trucking / Drive evidence as hints only.${unresolvedText}`;
 
-        return {
-          ...show,
-          flex: {
-            status: "Verified",
-            approvalNeeded: false,
-            documentNumber,
-            documentNumbers,
-            elementId: quoteLookup.elementId,
-            showName:
-              detail.showContext?.showName || quoteLookup.name || show.name,
-            client: detail.showContext?.client || null,
-            venue: detail.showContext?.venue || null,
-            plannedStartDate: detail.showContext?.plannedStartDate || null,
-            plannedEndDate: detail.showContext?.plannedEndDate || null,
-            loadInDate: detail.showContext?.loadInDate || null,
-            loadOutDate: detail.showContext?.loadOutDate || null,
-            soldDepartments,
-            totals: detail.summary?.totals || null,
-            financials: detail.summary?.financials || null,
-            counts: detail.counts || null,
-            lastPullAt,
-            quoteLookup,
-          },
-          flexSignal: flexVerifiedSignal,
-        };
-      } catch (error) {
-        return {
-          ...show,
-          flex: {
-            status: "Error",
-            approvalNeeded: true,
-            documentNumber,
-            documentNumbers,
-            elementId: null,
-            showName: null,
-            client: null,
-            venue: null,
-            plannedStartDate: null,
-            plannedEndDate: null,
-            loadInDate: null,
-            loadOutDate: null,
-            soldDepartments: [],
-            totals: null,
-            counts: null,
-            lastPullAt,
-            message: error.message || "FLEX enrichment failed.",
-          },
-          flexSignal: `FLEX Error - attempted ${documentNumber}, but pull failed: ${
-            error.message || "unknown error"
-          }`,
-        };
-      }
+      return {
+        ...show,
+        flex: {
+          status,
+          approvalNeeded,
+          documentNumber: primary?.documentNumber || documentNumbers[0] || null,
+          documentNumbers,
+          elementId: primary?.elementId || null,
+          showName: primary?.showName || show.name,
+          client: primary?.client || null,
+          venue: primary?.venue || null,
+          plannedStartDate: primary?.plannedStartDate || null,
+          plannedEndDate: primary?.plannedEndDate || null,
+          loadInDate: primary?.loadInDate || null,
+          loadOutDate: primary?.loadOutDate || null,
+          soldDepartments,
+          totals: combined.totals,
+          financials: combined.financials,
+          counts: combined.counts,
+          documents,
+          verifiedDocumentCount: verifiedDocuments.length,
+          unresolvedDocumentCount: unresolvedDocuments.length,
+          lastPullAt,
+          quoteLookup: primary?.quoteLookup || null,
+          message: unresolvedText.trim() || null,
+        },
+        flexSignal,
+      };
     }
 
     async function buildActiveShowsResponse(sourceLabel) {
@@ -5706,6 +5797,7 @@ const server = http.createServer(async (req, res) => {
 
       const flexSummary = {
         verified: shows.filter((show) => show.flex?.status === "Verified").length,
+        partial: shows.filter((show) => show.flex?.status === "Partial").length,
         missing: shows.filter((show) => show.flex?.status === "Missing").length,
         error: shows.filter((show) => show.flex?.status === "Error").length,
         approvalNeeded: shows.filter((show) => show.flex?.approvalNeeded).length,
@@ -5717,7 +5809,7 @@ const server = http.createServer(async (req, res) => {
         flexAuthority: "live",
         generatedAt: new Date().toISOString(),
         message:
-          "Active Shows now enriches rows with live FLEX search, header fetch, and line-item pull when a FLEX/document number is available.",
+          "Active Shows now enriches rows with live FLEX search, header fetch, and line-item pull for every FLEX/document number found on each row.",
         flexSummary,
         shows,
       };
