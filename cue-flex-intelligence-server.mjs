@@ -4566,6 +4566,873 @@ function redirectToLogin(res) {
   });
   res.end();
 }
+
+
+const TRUCKING_SHEET_ID =
+  process.env.TRUCKING_SHEET_ID || "1CY6wk2Heuw0JxO4inMaLnCd9bhCQa4NpLuAG9FO6nDo";
+
+const TRUCKING_WEEKLY_RUNS_SHEET =
+  process.env.TRUCKING_WEEKLY_RUNS_SHEET || "Weekly Runs";
+
+function parseCsvRows(csvText) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let insideQuotes = false;
+
+  for (let index = 0; index < csvText.length; index += 1) {
+    const char = csvText[index];
+    const next = csvText[index + 1];
+
+    if (char === '"' && insideQuotes && next === '"') {
+      value += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+
+    if (char === "," && !insideQuotes) {
+      row.push(value);
+      value = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !insideQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+
+      row.push(value);
+      value = "";
+
+      if (row.some((cell) => String(cell || "").trim() !== "")) {
+        rows.push(row);
+      }
+
+      row = [];
+      continue;
+    }
+
+    value += char;
+  }
+
+  row.push(value);
+
+  if (row.some((cell) => String(cell || "").trim() !== "")) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function normalizeHeaderKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function rowsToObjects(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return [];
+
+  const headerRowIndex = rows.findIndex((row) =>
+    row.some((cell) => /quote|runs|driver|truck|trailer|info|lpo/i.test(String(cell || "")))
+  );
+
+  if (headerRowIndex < 0) return [];
+
+  const headers = rows[headerRowIndex].map((header) => String(header || "").trim());
+  const dataRows = rows.slice(headerRowIndex + 1);
+
+  return dataRows.map((row) => {
+    const object = {};
+
+    headers.forEach((header, index) => {
+      const key = normalizeHeaderKey(header);
+      if (!key) return;
+      object[key] = row[index] || "";
+      object[header] = row[index] || "";
+    });
+
+    return object;
+  });
+}
+
+function getFirstCell(row, names) {
+  for (const name of names) {
+    const key = normalizeHeaderKey(name);
+
+    if (row[key] != null && String(row[key]).trim() !== "") {
+      return row[key];
+    }
+
+    if (row[name] != null && String(row[name]).trim() !== "") {
+      return row[name];
+    }
+  }
+
+  return "";
+}
+
+function safeIncludes(haystack, needle) {
+  if (!needle) return false;
+  return String(haystack || "").toLowerCase().includes(String(needle || "").toLowerCase());
+}
+
+async function fetchWeeklyRunsRowsFromGoogleSheet() {
+  const sheetName = encodeURIComponent(TRUCKING_WEEKLY_RUNS_SHEET);
+
+  const urls = [
+    `https://docs.google.com/spreadsheets/d/${TRUCKING_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${sheetName}`,
+    `https://docs.google.com/spreadsheets/d/${TRUCKING_SHEET_ID}/export?format=csv&sheet=${sheetName}`,
+  ];
+
+  let lastError = null;
+
+  for (const csvUrl of urls) {
+    try {
+      console.log("[TRUCKING SHEET]", TRUCKING_WEEKLY_RUNS_SHEET);
+
+      const response = await fetch(csvUrl);
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(`Google Sheets CSV request failed: ${response.status} ${response.statusText}`);
+      }
+
+      if (/<!doctype html>|<html/i.test(text)) {
+        throw new Error("Google Sheets returned HTML instead of CSV. The sheet may not be accessible to this local server.");
+      }
+
+      const csvRows = parseCsvRows(text);
+      const rowObjects = rowsToObjects(csvRows);
+
+      if (!rowObjects.length) {
+        throw new Error("No parseable Weekly Runs rows found in CSV.");
+      }
+
+      return rowObjects;
+    } catch (error) {
+      lastError = error;
+      console.warn("[TRUCKING SHEET WARNING]", error.message);
+    }
+  }
+
+  throw lastError || new Error("Unable to fetch Weekly Runs CSV.");
+}
+
+function normalizeLiveTruckingRow(row) {
+  const quote = getFirstCell(row, ["QUOTE", "Quote", "quote", "Job", "Job #"]);
+  const runName = getFirstCell(row, ["Runs", "Run", "Run Name", "run"]);
+  const date = getFirstCell(row, ["Date", "date"]);
+  const when = getFirstCell(row, ["When", "Time", "when"]);
+  const truck = getFirstCell(row, ["Truck", "truck", "Unit"]);
+  const trailer = getFirstCell(row, ["Trailer", "trailer"]);
+  const where = getFirstCell(row, ["Where", "Location", "Venue", "where"]);
+  const stage = getFirstCell(row, ["Stage", "stage"]);
+  const notes = getFirstCell(row, ["Notes", "Note", "notes"]);
+
+  const driverName = getFirstCell(row, [
+    "Who",
+    "Driver",
+    "Driver Name",
+    "Name",
+  ]);
+
+  const driverConfirmedRaw = getFirstCell(row, [
+    "Driver Confirmed",
+    "Driver Confirmed?",
+    "Confirmed",
+  ]) || driverName;
+
+  const infoSentRaw = getFirstCell(row, [
+    "Info Sent",
+    "Info Sent?",
+    "Info",
+  ]);
+
+  const lpoSentRaw = getFirstCell(row, [
+    "LPO Sent",
+    "LPO Sent?",
+    "LPO",
+  ]);
+
+  const combined = `${runName} ${notes} ${truck} ${trailer} ${where} ${stage}`;
+
+  return {
+    quote: String(quote || "").trim(),
+    driverName: String(driverName || "").trim(),
+    runName: String(runName || "").trim(),
+    date: String(date || "").trim(),
+    when: String(when || "").trim(),
+    driverConfirmed: normalizeTruckingBoolean(driverConfirmedRaw),
+    infoSent: normalizeTruckingBoolean(infoSentRaw),
+    lpoSent: normalizeTruckingBoolean(lpoSentRaw),
+    truck: String(truck || "").trim(),
+    trailer: String(trailer || "").trim(),
+    where: String(where || "").trim(),
+    stage: String(stage || "").trim(),
+    maybeTruck: /maybe truck/i.test(combined),
+    needDriver: /need driver/i.test(combined),
+    notes: String(notes || "").trim(),
+  };
+}
+
+async function matchLiveTruckingRows({ showId, showName, quoteNumbers }) {
+  const quoteSet = new Set(
+    (Array.isArray(quoteNumbers) ? quoteNumbers : [])
+      .map((quote) => String(quote || "").trim())
+      .filter(Boolean)
+  );
+
+  const weeklyRunsRows = await fetchWeeklyRunsRowsFromGoogleSheet();
+
+  const showWords = String(showName || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word.length >= 4);
+
+  const matchedRows = weeklyRunsRows
+    .map(normalizeLiveTruckingRow)
+    .filter((row) => {
+      const quoteMatch = row.quote && quoteSet.has(row.quote);
+
+      const nameText = `${row.runName} ${row.where} ${row.stage} ${row.notes}`.toLowerCase();
+      const nameMatch =
+        showWords.length >= 2 &&
+        showWords.filter((word) => nameText.includes(word)).length >= 2;
+
+      return quoteMatch || nameMatch;
+    });
+
+  return matchedRows;
+}
+
+async function matchTruckingRowsWithFallback({ showId, showName, quoteNumbers }) {
+  try {
+    const liveRows = await matchLiveTruckingRows({
+      showId,
+      showName,
+      quoteNumbers,
+    });
+
+    return {
+      source: "Trucking Schedule / Weekly Runs",
+      safeRows: liveRows,
+      usedFallback: false,
+    };
+  } catch (error) {
+    console.warn("[TRUCKING FALLBACK]", error.message);
+
+    return {
+      source: "trucking-weekly-runs-safe-mock",
+      safeRows: matchSafeTruckingRows({
+        showId,
+        showName,
+        quoteNumbers,
+      }),
+      usedFallback: true,
+      fallbackReason: error.message,
+    };
+  }
+}
+
+
+const SAFE_TRUCKING_ROWS = [
+  // Desibels Raleigh
+  {
+    quote: "26-1603",
+    driverName: "Driver assigned",
+    showKey: "desibels-raleigh",
+    runName: "Desibels Raleigh - Lighting & Rigging",
+    date: "7/3",
+    when: "LI: 6 AM LO: 11 PM",
+    driverConfirmed: true,
+    infoSent: true,
+    lpoSent: true,
+    truck: "Salem Sleeper 20528 #2",
+    trailer: "5320 Dock 7",
+    where: "Martin Marietta Center for the Performing Arts, Raleigh, NC",
+    notes: "Driver/truck mapped; Info and LPO sent."
+  },
+  {
+    quote: "26-1624",
+    driverName: "Driver assigned",
+    showKey: "desibels-raleigh",
+    runName: "Desibels Raleigh - Audio & Video",
+    date: "7/3",
+    when: "LI: 7 AM LO: 11 PM",
+    driverConfirmed: true,
+    infoSent: true,
+    lpoSent: true,
+    truck: "1108",
+    trailer: "5316 Dock 14",
+    where: "Martin Marietta Center for the Performing Arts, Raleigh, NC",
+    notes: "Driver/truck mapped; Info and LPO sent."
+  },
+
+  // Production Design Associates
+  {
+    quote: "26-1777",
+    driverName: "Geneva Gardner",
+    showKey: "production-design-associates",
+    runName: "Production Design Associates - Depart / Charleston",
+    date: "7/5",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: true,
+    truck: "2605",
+    trailer: "",
+    where: "Credit One Stadium / Charleston",
+    notes: "Trucking begins before folder date suggests."
+  },
+  {
+    quote: "26-1777",
+    driverName: "Geneva Gardner",
+    showKey: "production-design-associates",
+    runName: "Production Design Associates - Load In",
+    date: "7/6",
+    when: "LI",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: true,
+    truck: "2605",
+    trailer: "",
+    where: "Credit One Stadium / Charleston",
+    notes: "Info Sent remains false."
+  },
+  {
+    quote: "26-1777",
+    driverName: "Geneva Gardner",
+    showKey: "production-design-associates",
+    runName: "Production Design Associates - Load Out",
+    date: "7/7",
+    when: "LO",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: true,
+    truck: "2605",
+    trailer: "",
+    where: "Credit One Stadium / Charleston",
+    notes: "Info Sent remains false."
+  },
+
+  // Sound Haven
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LI Continuum - SL320 - Sound Haven",
+    date: "7/27",
+    when: "LI: 8 AM",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    notes: "Info/LPO false."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LI Continuum - SL320 - Sound Haven - Flatbed",
+    date: "7/27",
+    when: "LI: 8 AM",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    notes: "Info/LPO false."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LI Continuum - SL320 - Sound Haven - Maybe Truck",
+    date: "7/27",
+    when: "LI: 12 PM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "26",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LO Continuum - SL320 - Sound Haven",
+    date: "8/3",
+    when: "TBD",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    notes: "Load-out timing/confirmation still needs review."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LO Continuum - SL320 - Sound Haven - Flatbed",
+    date: "8/3",
+    when: "TBD",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    needDriver: true,
+    notes: "NEED DRIVER."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LO Continuum - SL320 - Sound Haven - Maybe Truck",
+    date: "8/3",
+    when: "TBD",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "26",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+
+  // Summer X Games
+  ...["26-0714", "26-0715", "26-0716"].flatMap((quote) => [
+    {
+      quote,
+      showKey: "summer-x-games-nola",
+      runName: `Departs Summer X Games // NOLA 26 - ${quote}`,
+      date: "7/22",
+      when: "AM",
+      driverConfirmed: true,
+      infoSent: false,
+      lpoSent: false,
+      truck: "Sleeper",
+      trailer: "53",
+      where: "Smoothie King Arena, New Orleans, LA",
+      notes: "Main truck mapped; Info/LPO false."
+    },
+    {
+      quote,
+      showKey: "summer-x-games-nola",
+      runName: `LI Summer X Games // NOLA 26 - ${quote}`,
+      date: "7/23",
+      when: "8:00 AM",
+      driverConfirmed: true,
+      infoSent: false,
+      lpoSent: false,
+      truck: "Sleeper",
+      trailer: "53",
+      where: "Smoothie King Arena, New Orleans, LA",
+      notes: "Main truck mapped; Info/LPO false."
+    },
+    {
+      quote,
+      showKey: "summer-x-games-nola",
+      runName: `LO Summer X Games // NOLA 26 - ${quote}`,
+      date: "7/25",
+      when: "11:00 PM",
+      driverConfirmed: true,
+      infoSent: false,
+      lpoSent: false,
+      truck: "Sleeper",
+      trailer: "53",
+      where: "Smoothie King Arena, New Orleans, LA",
+      notes: "Main truck mapped; Info/LPO false."
+    }
+  ]),
+  {
+    quote: "26-0717",
+    driverName: "TBD",
+    showKey: "summer-x-games-nola",
+    runName: "Departs Summer X Games // NOLA 26 - Maybe Truck",
+    date: "7/22",
+    when: "AM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Sleeper",
+    trailer: "53",
+    where: "Smoothie King Arena, New Orleans, LA",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+  {
+    quote: "26-0717",
+    driverName: "TBD",
+    showKey: "summer-x-games-nola",
+    runName: "LI Summer X Games // NOLA 26 - Maybe Truck",
+    date: "7/23",
+    when: "8:00 AM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Sleeper",
+    trailer: "53",
+    where: "Smoothie King Arena, New Orleans, LA",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+  {
+    quote: "26-0717",
+    driverName: "TBD",
+    showKey: "summer-x-games-nola",
+    runName: "LO Summer X Games // NOLA 26 - Maybe Truck",
+    date: "7/25",
+    when: "11:00 PM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Sleeper",
+    trailer: "53",
+    where: "Smoothie King Arena, New Orleans, LA",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+
+  // FIFA / early mock signal rows. Phase 2 will replace this with the live sheet.
+  {
+    quote: "26-0071",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "FIFA Finals Watch Party / Piedmont Park",
+    date: "7/18",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "Piedmont Park / Atlanta",
+    notes: "FIFA row mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1752",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "Stage 2 Audio - FIFA Finals Watch Party",
+    date: "7/18",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "Piedmont Park / Atlanta",
+    notes: "FIFA Stage 2 Audio trucking mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1759",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "Stage 2 Video - FIFA Finals Watch Party",
+    date: "7/18",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "Piedmont Park / Atlanta",
+    notes: "FIFA Stage 2 Video trucking mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1804",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "WAC FIFA Watch Party / Calaway Plaza",
+    date: "7/9",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "16' Box Truck",
+    trailer: "",
+    where: "Woodruff Arts Center",
+    notes: "WAC FIFA row mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1225",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "FIFA @ Coca-Cola / Centennial Park",
+    date: "6/4",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "26' Box Truck",
+    trailer: "",
+    where: "Centennial Park / Atlanta",
+    notes: "Filmworks/Coke row mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1637",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "FIFA Viewing HQ - Video Distribution",
+    date: "6/9",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "FIFA Viewing HQ",
+    notes: "HQ video distribution row mapped; Info/LPO false."
+  }
+];
+
+function normalizeTruckingBoolean(value) {
+  if (typeof value === "boolean") return value;
+  const text = String(value || "").trim().toLowerCase();
+  return text === "true" || text === "yes" || text === "y";
+}
+
+function summarizeTruckingRows(rows, quoteNumbers = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  const summary = {
+    rowsFound: safeRows.length,
+    quoteNumbersRequested: quoteNumbers,
+    quoteNumbersMatched: [...new Set(safeRows.map((row) => row.quote).filter(Boolean))],
+    driverConfirmedTrue: 0,
+    driverConfirmedFalse: 0,
+    infoSentTrue: 0,
+    infoSentFalse: 0,
+    lpoSentTrue: 0,
+    lpoSentFalse: 0,
+    maybeTruckRows: 0,
+    needDriverRows: 0,
+    tbdRows: 0,
+    dates: [...new Set(safeRows.map((row) => row.date).filter(Boolean))],
+  };
+
+  for (const row of safeRows) {
+    if (normalizeTruckingBoolean(row.driverConfirmed)) {
+      summary.driverConfirmedTrue += 1;
+    } else {
+      summary.driverConfirmedFalse += 1;
+    }
+
+    if (normalizeTruckingBoolean(row.infoSent)) {
+      summary.infoSentTrue += 1;
+    } else {
+      summary.infoSentFalse += 1;
+    }
+
+    if (normalizeTruckingBoolean(row.lpoSent)) {
+      summary.lpoSentTrue += 1;
+    } else {
+      summary.lpoSentFalse += 1;
+    }
+
+    if (row.maybeTruck || /maybe truck/i.test(String(row.runName || ""))) {
+      summary.maybeTruckRows += 1;
+    }
+
+    if (row.needDriver || /need driver/i.test(String(row.runName || row.notes || ""))) {
+      summary.needDriverRows += 1;
+    }
+
+    if (/tbd/i.test(String(row.when || row.truck || row.notes || ""))) {
+      summary.tbdRows += 1;
+    }
+  }
+
+  let status = "GREEN - Trucking aligned";
+  const findings = [];
+  const actions = [];
+
+  if (summary.rowsFound === 0) {
+    status = "RED - No trucking rows found";
+    findings.push("No trucking rows were found for the requested FLEX quote numbers or show name.");
+    actions.push("Brian Kee / PM to confirm whether transportation should exist in Weekly Runs.");
+  } else {
+    findings.push(`${summary.rowsFound} trucking row${summary.rowsFound === 1 ? "" : "s"} found.`);
+    findings.push(`${summary.quoteNumbersMatched.length} quote number${summary.quoteNumbersMatched.length === 1 ? "" : "s"} matched in trucking.`);
+
+    if (summary.infoSentFalse > 0) {
+      status = "MAGENTA - Trucking admin incomplete";
+      findings.push(`${summary.infoSentFalse} row${summary.infoSentFalse === 1 ? "" : "s"} still have Info Sent = FALSE.`);
+      actions.push("Brian Kee / PM to confirm Info Sent status.");
+    }
+
+    if (summary.lpoSentFalse > 0) {
+      status = "MAGENTA - Trucking admin incomplete";
+      findings.push(`${summary.lpoSentFalse} row${summary.lpoSentFalse === 1 ? "" : "s"} still have LPO Sent = FALSE.`);
+      actions.push("Brian Kee / PM to confirm LPO Sent status.");
+    }
+
+    if (summary.maybeTruckRows > 0) {
+      status = "MAGENTA - Maybe Truck unresolved";
+      findings.push(`${summary.maybeTruckRows} Maybe Truck row${summary.maybeTruckRows === 1 ? "" : "s"} found.`);
+      actions.push("Resolve Maybe Truck rows or mark them not needed.");
+    }
+
+    if (summary.needDriverRows > 0) {
+      status = "RED - NEED DRIVER";
+      findings.push(`${summary.needDriverRows} NEED DRIVER row${summary.needDriverRows === 1 ? "" : "s"} found.`);
+      actions.push("Assign/confirm driver coverage for NEED DRIVER rows.");
+    }
+  }
+
+  return {
+    ...summary,
+    status,
+    findings,
+    actions,
+  };
+}
+
+
+function buildFlexVsTruckingComparison({ quoteNumbers, truckingSummary }) {
+  const requestedQuotes = [...new Set(
+    (Array.isArray(quoteNumbers) ? quoteNumbers : [])
+      .map((quote) => String(quote || "").trim())
+      .filter(Boolean)
+  )];
+
+  const matchedQuotes = truckingSummary?.quoteNumbersMatched || [];
+  const rowsFound = Number(truckingSummary?.rowsFound || 0);
+  const infoFalse = Number(truckingSummary?.infoSentFalse || 0);
+  const lpoFalse = Number(truckingSummary?.lpoSentFalse || 0);
+  const maybeTruckRows = Number(truckingSummary?.maybeTruckRows || 0);
+  const needDriverRows = Number(truckingSummary?.needDriverRows || 0);
+
+  const missingQuotes = requestedQuotes.filter(
+    (quote) => !matchedQuotes.includes(quote)
+  );
+
+  let status = "GREEN - FLEX and trucking aligned";
+  const findings = [];
+  const actions = [];
+
+  findings.push(`FLEX quote/workstream hints checked: ${requestedQuotes.length}.`);
+  findings.push(`Trucking matched ${matchedQuotes.length} quote number${matchedQuotes.length === 1 ? "" : "s"}.`);
+  findings.push(`Weekly Runs returned ${rowsFound} row${rowsFound === 1 ? "" : "s"}.`);
+
+  if (requestedQuotes.length > 0 && matchedQuotes.length === 0) {
+    status = "RED - FLEX transport not represented in trucking";
+    findings.push("No trucking rows matched the requested FLEX quote numbers.");
+    actions.push("Brian Kee / PM to confirm whether transportation rows need to be created or linked.");
+  } else if (missingQuotes.length > 0) {
+    status = "MAGENTA - Some FLEX quotes missing trucking rows";
+    findings.push(`Missing trucking matches for: ${missingQuotes.join(", ")}.`);
+    actions.push("Confirm whether each missing quote has transportation scope or should be excluded from trucking.");
+  }
+
+  if (infoFalse > 0 || lpoFalse > 0) {
+    if (!status.startsWith("RED")) {
+      status = "MAGENTA - Trucking mapped, admin incomplete";
+    }
+
+    if (infoFalse > 0) {
+      findings.push(`${infoFalse} trucking row${infoFalse === 1 ? "" : "s"} still have Info Sent = FALSE.`);
+      actions.push("Confirm Info Sent status for incomplete trucking rows.");
+    }
+
+    if (lpoFalse > 0) {
+      findings.push(`${lpoFalse} trucking row${lpoFalse === 1 ? "" : "s"} still have LPO Sent = FALSE.`);
+      actions.push("Confirm LPO Sent status for incomplete trucking rows.");
+    }
+  }
+
+  if (maybeTruckRows > 0) {
+    if (!status.startsWith("RED")) {
+      status = "MAGENTA - Maybe Truck unresolved";
+    }
+
+    findings.push(`${maybeTruckRows} Maybe Truck row${maybeTruckRows === 1 ? "" : "s"} found.`);
+    actions.push("Resolve Maybe Truck rows or mark them not needed.");
+  }
+
+  if (needDriverRows > 0) {
+    status = "RED - NEED DRIVER";
+    findings.push(`${needDriverRows} NEED DRIVER row${needDriverRows === 1 ? "" : "s"} found.`);
+    actions.push("Assign/confirm driver coverage for NEED DRIVER rows.");
+  }
+
+  if (status.startsWith("GREEN")) {
+    findings.push("FLEX transportation appears represented in Weekly Runs with no current trucking exceptions.");
+    actions.push("No trucking action required beyond normal monitoring.");
+  }
+
+  return {
+    status,
+    requestedQuotes,
+    matchedQuotes,
+    missingQuotes,
+    rowsFound,
+    infoFalse,
+    lpoFalse,
+    maybeTruckRows,
+    needDriverRows,
+    findings,
+    actions,
+  };
+}
+
+function matchSafeTruckingRows({ showId, showName, quoteNumbers }) {
+  const quotes = (Array.isArray(quoteNumbers) ? quoteNumbers : [])
+    .map((quote) => String(quote || "").trim())
+    .filter(Boolean);
+
+  const nameText = String(showName || "").toLowerCase();
+  const showIdText = String(showId || "").toLowerCase();
+
+  const rows = SAFE_TRUCKING_ROWS.filter((row) => {
+    const quoteMatch = quotes.length ? quotes.includes(row.quote) : false;
+    const showIdMatch = showIdText && row.showKey === showIdText;
+    const nameMatch =
+      nameText &&
+      (
+        String(row.runName || "").toLowerCase().includes(nameText) ||
+        String(row.where || "").toLowerCase().includes(nameText)
+      );
+
+    return quoteMatch || showIdMatch || nameMatch;
+  });
+
+  return rows.map((row) => ({
+    quote: row.quote,
+    driverName: row.driverName || (row.needDriver ? "NEED DRIVER" : row.driverConfirmed ? "Assigned" : "TBD"),
+    runName: row.runName,
+    date: row.date,
+    when: row.when,
+    driverConfirmed: Boolean(row.driverConfirmed),
+    infoSent: Boolean(row.infoSent),
+    lpoSent: Boolean(row.lpoSent),
+    truck: row.truck || "",
+    trailer: row.trailer || "",
+    where: row.where || "",
+    maybeTruck: Boolean(row.maybeTruck),
+    needDriver: Boolean(row.needDriver),
+    notes: row.notes || "",
+  }));
+}
+
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -4578,6 +5445,141 @@ const server = http.createServer(async (req, res) => {
       res.end(renderLoginPage());
       return;
     }
+    // Active Shows dashboard route. Uses readFileSync because this server imports callback-style fs.
+    if (req.method === "GET" && url.pathname === "/active-shows") {
+      const html = fs.readFileSync(
+        path.resolve("./active-shows.html"),
+        "utf8"
+      );
+
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(html);
+      return;
+    }
+    
+    const mockActiveShows = [
+      {
+        id: "desibels-raleigh",
+        name: "Desibels Raleigh",
+        timing: "Live / Active Today",
+        priority: "High",
+        readinessStatus: "RED - Day-of attention",
+        changeSignal: "Cyan - trucking/docs improved",
+        topIssue:
+          "Final day-of checks; confirm V2 patch relationship and show command sheet owner.",
+        nextAction:
+          "PM to validate final tech package, onsite labor, and day-of execution notes.",
+        flexSignal:
+          "FLEX match needed from authoritative FLEX engine. Trucking hints: 26-1603; 26-1624.",
+        trucking:
+          "Driver/truck mapped. Use trucking only as execution evidence.",
+      },
+      {
+        id: "fifa-final-piedmont",
+        name: "FIFA Final Piedmont Park",
+        timing: "16 days out",
+        priority: "High",
+        readinessStatus: "MAGENTA - Needs confirmation",
+        changeSignal: "Cyan - new global PDF / coverage improved",
+        topIssue:
+          "Need to confirm global A001 PDF against ROS, logistics, production grid, LED engineering, and trucking.",
+        nextAction:
+          "Pull authoritative FLEX scope and separate each quote/workstream.",
+        flexSignal:
+          "Ask FLEX should identify official FLEX records; trucking hints include multiple quote numbers.",
+        trucking:
+          "Many rows mapped; Info Sent / LPO Sent remain FALSE.",
+      },
+      {
+        id: "sound-haven",
+        name: "Sound Haven",
+        timing: "27 days out",
+        priority: "High",
+        readinessStatus: "MAGENTA - Needs follow-up",
+        changeSignal: "Cyan - rigging/trucking improved",
+        topIssue:
+          "Rigging control improved, but PM owner and final tech/labor coverage are unclear.",
+        nextAction:
+          "Confirm PM owner, final v2.0 tech pack, rigging sign-off, and trucking Info/LPO.",
+        flexSignal:
+          "Use Ask FLEX to confirm official FLEX record. Trucking hint: 26-1421.",
+        trucking:
+          "Maybe truck rows; load-out NEED DRIVER; Info/LPO FALSE.",
+      },
+      {
+        id: "summer-x-games-nola",
+        name: "Summer X Games NOLA",
+        timing: "20 days out",
+        priority: "High",
+        readinessStatus: "MAGENTA - Strong docs, open ops gaps",
+        changeSignal: "Cyan - logistics/trucking coverage found",
+        topIssue:
+          "Strong V2.5 package, but logistics/trucking need validation and Info/LPO are FALSE.",
+        nextAction:
+          "Pull official FLEX scope and compare audio, lighting, LED/cameras, and maybe truck.",
+        flexSignal:
+          "Trucking hints: 26-0714; 26-0715; 26-0716; 26-0717.",
+        trucking:
+          "Drivers mapped for main trucks; maybe truck unresolved; Info/LPO FALSE.",
+      },
+      {
+        id: "production-design-associates",
+        name: "Production Design Associates",
+        timing: "Date check / trucking starts 7/5",
+        priority: "High",
+        readinessStatus: "RED - Very soon trucking/date conflict",
+        changeSignal: "Cyan - trucking found",
+        topIssue:
+          "Folder date suggests 7/26, but trucking begins 7/5 with load-in 7/6.",
+        nextAction:
+          "Confirm real event date, Charleston trucking tie-in, folder naming, PM owner, and Info Sent FALSE.",
+        flexSignal:
+          "Use Ask FLEX to confirm whether 26-1777 is authoritative FLEX record.",
+        trucking:
+          "Runs found on 7/5, 7/6, 7/7. Driver/LPO true; Info Sent FALSE.",
+      },
+    ];
+    
+    if (req.method === "GET" && url.pathname === "/api/active-shows") {
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+    
+      res.end(
+        JSON.stringify({
+          ok: true,
+          source: "mock",
+          shows: mockActiveShows,
+        })
+      );
+    
+      return;
+    }
+    
+    if (req.method === "POST" && url.pathname === "/api/active-shows/sync") {
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+    
+      res.end(
+        JSON.stringify({
+          ok: true,
+          source: "mock-sync",
+          message:
+            "Mock sync complete. Next step is wiring this to Ask FLEX + FLEX Intake Engine.",
+          shows: mockActiveShows,
+        })
+      );
+    
+      return;
+    }
+
 
     if (req.method === "POST" && url.pathname === "/api/login") {
       const rawBody = await readRequestBody(req);
@@ -5164,6 +6166,121 @@ console.log("[CUE AI MODEL SELECT]", {
       return;
     }
 
+
+    if (
+      (req.method === "GET" || req.method === "POST") &&
+      url.pathname === "/api/active-shows/test-flex-match"
+    ) {
+      try {
+        const documentNumber =
+          url.searchParams.get("documentNumber") || "26-1777";
+
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          sendJson(res, 404, {
+            ok: false,
+            error: `No FLEX quote found for ${documentNumber}`,
+            quoteLookup,
+          });
+          return;
+        }
+
+        const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+
+        sendJson(res, 200, {
+          ok: true,
+          source: "flex",
+          documentNumber,
+          quoteLookup,
+          showContext: detail.showContext,
+          summary: detail.summary,
+          counts: detail.counts,
+          sections: detail.sections,
+          laborItems: detail.laborItems,
+          transportationItems: detail.transportationItems,
+        });
+
+        return;
+      } catch (error) {
+        sendJson(res, 500, {
+          ok: false,
+          error: error.message || "Unable to test FLEX match.",
+        });
+        return;
+      }
+    }
+
+
+    if (
+      (req.method === "GET" || req.method === "POST") &&
+      url.pathname === "/api/active-shows/trucking-sync"
+    ) {
+      try {
+        let body = {};
+
+        if (req.method === "POST") {
+          const rawBody = await readRequestBody(req);
+          body = rawBody ? JSON.parse(rawBody) : {};
+        }
+
+        const showId = body.showId || url.searchParams.get("showId") || "";
+        const showName = body.showName || url.searchParams.get("showName") || "";
+        const queryQuoteNumbers =
+          url.searchParams.get("quoteNumbers") ||
+          url.searchParams.get("quotes") ||
+          "";
+
+        const quoteNumbers = Array.isArray(body.quoteNumbers)
+          ? body.quoteNumbers
+          : String(queryQuoteNumbers)
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+
+        const truckingResult = await matchTruckingRowsWithFallback({
+          showId,
+          showName,
+          quoteNumbers,
+        });
+
+        const summary = summarizeTruckingRows(
+          truckingResult.safeRows,
+          quoteNumbers
+        );
+
+        const comparison = buildFlexVsTruckingComparison({
+          quoteNumbers,
+          truckingSummary: summary,
+        });
+
+        sendJson(res, 200, {
+          ok: true,
+          source: truckingResult.source,
+          usedFallback: truckingResult.usedFallback,
+          fallbackReason: truckingResult.fallbackReason || null,
+          note: truckingResult.usedFallback
+            ? "Using safe mock fallback because the live Weekly Runs sheet was not readable from this local server."
+            : "Live data pulled from Trucking Schedule / Weekly Runs.",
+          showId,
+          showName,
+          quoteNumbers,
+          summary,
+          comparison,
+          safeRows: truckingResult.safeRows,
+        });
+
+        return;
+      } catch (error) {
+        sendJson(res, 500, {
+          ok: false,
+          error: error.message || "Unable to sync trucking.",
+        });
+        return;
+      }
+    }
+
     sendJson(res, 404, {
       error: "Not found",
     });
@@ -5184,7 +6301,6 @@ server.listen(PORT, () => {
     console.log("Password gate enabled.");
   }
 });
-
 
 
 

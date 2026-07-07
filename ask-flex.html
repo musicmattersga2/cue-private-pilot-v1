@@ -189,6 +189,76 @@
       border-color: rgba(67, 209, 84, 0.28);
     }
 
+    .filter-bar {
+      margin: 16px 0 14px;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 22px;
+      background: rgba(255,255,255,0.035);
+      padding: 14px;
+    }
+
+    .filter-bar-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .filter-title {
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+      font-weight: 900;
+    }
+
+    .clear-filters {
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      border-radius: 999px;
+      min-height: auto;
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+
+    .clear-filters:hover {
+      color: var(--text);
+      border-color: rgba(67, 209, 84, 0.30);
+    }
+
+    .filter-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .filter-toggle {
+      border: 1px solid rgba(255,255,255,0.11);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      border-radius: 999px;
+      min-height: auto;
+      padding: 9px 11px;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .filter-toggle.active {
+      background: rgba(67, 209, 84, 0.16);
+      border-color: rgba(67, 209, 84, 0.48);
+      color: var(--text);
+      box-shadow: 0 0 0 3px rgba(67, 209, 84, 0.06);
+    }
+
+    .filter-preview {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      margin-top: 10px;
+    }
+
     .question-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -546,8 +616,28 @@
         </div>
       </div>
 
+      <div class="filter-bar">
+        <div class="filter-bar-top">
+          <div>
+            <div class="filter-title">Search Filters</div>
+            <div class="filter-preview" id="filterPreview">No filters active.</div>
+          </div>
+          <button id="clearFilters" class="clear-filters" type="button">Clear</button>
+        </div>
+        <div class="filter-toggles">
+          <button class="filter-toggle" type="button" data-filter="year2026" data-phrase="2026">2026</button>
+          <button class="filter-toggle" type="button" data-filter="current" data-phrase="current">Current</button>
+          <button class="filter-toggle" type="button" data-filter="noInvoices" data-phrase="don't show invoices">No invoices</button>
+          <button class="filter-toggle" type="button" data-filter="quotesOnly" data-phrase="quotes only">Quotes only</button>
+          <button class="filter-toggle" type="button" data-filter="open" data-phrase="open balance">Open balance</button>
+          <button class="filter-toggle" type="button" data-filter="paid" data-phrase="paid">Paid</button>
+          <button class="filter-toggle" type="button" data-filter="revenue" data-phrase="revenue quote">Revenue > $0</button>
+          <button class="filter-toggle" type="button" data-filter="future" data-phrase="future">Future</button>
+        </div>
+      </div>
+
       <div class="question-row">
-        <textarea id="question" spellcheck="true">Show only 2026 NMR quotes and don\'t show invoices</textarea>
+        <textarea id="question" spellcheck="true">Search NMR Assembly World Cup</textarea>
         <button id="askButton">Ask FLEX</button>
       </div>
 
@@ -589,6 +679,103 @@
     const detailsEl = document.getElementById("details");
     const warningsEl = document.getElementById("warnings");
     const rawEl = document.getElementById("raw");
+
+    const filterPreviewEl = document.getElementById("filterPreview");
+    const clearFiltersButton = document.getElementById("clearFilters");
+    const activeFilters = new Set();
+
+    const filterLabels = {
+      year2026: "2026",
+      current: "Current",
+      noInvoices: "No invoices",
+      quotesOnly: "Quotes only",
+      open: "Open balance",
+      paid: "Paid",
+      revenue: "Revenue > $0",
+      future: "Future",
+    };
+
+    const filterPhrases = {
+      year2026: "2026",
+      current: "current",
+      noInvoices: "don't show invoices",
+      quotesOnly: "quotes only",
+      open: "open balance",
+      paid: "paid",
+      revenue: "revenue quote",
+      future: "future",
+    };
+
+    function updateFilterPreview() {
+      const labels = [...activeFilters].map((key) => filterLabels[key] || key);
+
+      if (filterPreviewEl) {
+        filterPreviewEl.textContent = labels.length
+          ? `Active: ${labels.join(" · ")}`
+          : "No filters active.";
+      }
+
+      for (const button of document.querySelectorAll(".filter-toggle")) {
+        button.classList.toggle("active", activeFilters.has(button.dataset.filter));
+      }
+    }
+
+    function buildQuestionWithActiveFilters(question) {
+      const base = String(question || "").trim();
+      const phrases = [...activeFilters]
+        .map((key) => filterPhrases[key])
+        .filter(Boolean);
+
+      if (!phrases.length) return base;
+
+      const lowerBase = base.toLowerCase();
+      const missingPhrases = phrases.filter(
+        (phrase) => !lowerBase.includes(String(phrase).toLowerCase())
+      );
+
+      if (!missingPhrases.length) return base;
+
+      return `${base} (${missingPhrases.join(", ")})`;
+    }
+
+    for (const button of document.querySelectorAll(".filter-toggle")) {
+      button.addEventListener("click", () => {
+        const key = button.dataset.filter;
+
+        if (key === "paid" && !activeFilters.has("paid")) {
+          activeFilters.delete("open");
+        }
+
+        if (key === "open" && !activeFilters.has("open")) {
+          activeFilters.delete("paid");
+        }
+
+        if (key === "quotesOnly" && !activeFilters.has("quotesOnly")) {
+          activeFilters.delete("noInvoices");
+        }
+
+        if (key === "noInvoices" && !activeFilters.has("noInvoices")) {
+          activeFilters.delete("quotesOnly");
+        }
+
+        if (activeFilters.has(key)) {
+          activeFilters.delete(key);
+        } else {
+          activeFilters.add(key);
+        }
+
+        updateFilterPreview();
+      });
+    }
+
+    if (clearFiltersButton) {
+      clearFiltersButton.addEventListener("click", () => {
+        activeFilters.clear();
+        updateFilterPreview();
+      });
+    }
+
+    updateFilterPreview();
 
     function setPrompt(value, runNow = false) {
       questionEl.value = value;
@@ -1202,6 +1389,7 @@
 
     async function askFlex() {
       const question = questionEl.value.trim();
+      const effectiveQuestion = buildQuestionWithActiveFilters(question);
 
       if (!question) return;
 
@@ -1211,7 +1399,7 @@
       errorEl.textContent = "";
 
       try {
-        const url = `/api/flex/ask-brief?question=${encodeURIComponent(question)}`;
+        const url = `/api/flex/ask-brief?question=${encodeURIComponent(effectiveQuestion)}`;
         const response = await fetch(url, {
           method: "GET",
           credentials: "same-origin",
@@ -1230,7 +1418,7 @@
           throw new Error(data.error || JSON.stringify(data, null, 2));
         }
 
-        saveRecentSearch(question);
+        saveRecentSearch(effectiveQuestion);
         renderAnswer(data);
       } catch (error) {
         errorEl.textContent = error.message || "Ask FLEX failed.";

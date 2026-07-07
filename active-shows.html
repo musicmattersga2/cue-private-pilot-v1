@@ -1,0 +1,2827 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CUE Active Shows</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #1b2230;
+      --panel2: #121824;
+      --panel3: #243044;
+      --border: #333c4d;
+      --muted: #9aa4b2;
+      --text: #ffffff;
+      --green: #00e676;
+      --cyan: #75eaff;
+      --red: #ff8b8b;
+      --magenta: #ff8be0;
+      --yellow: #ffe779;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      padding: 22px 24px;
+      background: #151a24;
+      border-bottom: 1px solid #333;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button {
+      padding: 11px 14px;
+      background: var(--green);
+      border: 0;
+      border-radius: 9px;
+      font-weight: bold;
+      cursor: pointer;
+      color: #041006;
+    }
+
+    button.secondary {
+      background: #233044;
+      color: #ffffff;
+      border: 1px solid #3b4658;
+    }
+
+    button.trucking-action {
+      background: rgba(55, 48, 32, 0.95);
+      color: #ffe070;
+      border: 1px solid rgba(255, 224, 112, 0.50);
+      box-shadow: inset 0 0 0 1px rgba(255, 224, 112, 0.06);
+    }
+
+    button.trucking-action:hover {
+      background: rgba(72, 62, 39, 0.98);
+      border-color: rgba(255, 224, 112, 0.72);
+    }
+
+    button.trucking-action.querying {
+      background: rgba(85, 72, 42, 0.98);
+      color: #fff1a8;
+    }
+
+    button.small {
+      padding: 9px 11px;
+      font-size: 12px;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    #status {
+      margin: 16px 24px 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .dashboard-note {
+      margin: 10px 24px 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+      gap: 16px;
+      padding: 20px 24px 28px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      min-height: 310px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(117, 234, 255, 0.45);
+      background: #202839;
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 21px;
+      line-height: 1.1;
+    }
+
+    .small-muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 5px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: bold;
+      margin: 6px 6px 6px 0;
+    }
+
+    .red { background: #4a1515; color: var(--red); }
+    .magenta { background: #401538; color: var(--magenta); }
+    .yellow { background: #3b3514; color: var(--yellow); }
+    .green { background: #123a24; color: #8dffae; }
+    .cyan { background: #103846; color: var(--cyan); }
+
+    .label {
+      margin-top: 12px;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .value {
+      margin-top: 4px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .card .value {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .score-wrap {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .score-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .score-number {
+      font-weight: 800;
+      font-size: 18px;
+    }
+
+    .score-track {
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: #303747;
+    }
+
+    .score-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--cyan);
+    }
+
+    .score-fill.red { background: #ff6b6b; }
+    .score-fill.magenta { background: #ff7ad9; }
+    .score-fill.yellow { background: #ffe070; }
+    .score-fill.green { background: #66f2a3; }
+
+    .score-note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .card-footer {
+      margin-top: auto;
+      padding-top: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .key-info {
+      margin-top: 12px;
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+    }
+
+    .key-info-row {
+      display: grid;
+      grid-template-columns: 76px 1fr;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    .key-info-k {
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+    }
+
+    .key-info-v {
+      color: #f3f7ff;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .modal-meta-grid {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      max-width: 1650px;
+    }
+
+    .modal-meta-item {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 7px;
+      min-width: 0;
+      max-width: 320px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.055);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+    }
+
+    .modal-meta-item.wide {
+      max-width: 420px;
+    }
+
+    .modal-meta-item .k {
+      color: var(--muted);
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      white-space: nowrap;
+    }
+
+    .modal-meta-item .v {
+      color: #f3f7ff;
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+
+    .open-link {
+      color: var(--cyan);
+      font-weight: 700;
+      margin-left: 8px;
+    }
+
+    .card-footer button.small {
+      margin: 0;
+      padding: 7px 9px;
+    }
+
+    .progress {
+      color: #8dffae;
+      font-weight: 700;
+    }
+
+    .flex-asking {
+      margin-top: 10px;
+      padding: 9px 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(117, 234, 255, 0.28);
+      background: rgba(117, 234, 255, 0.075);
+      color: #b9f6ff;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .trucking-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 224, 112, 0.30);
+      background: rgba(255, 224, 112, 0.07);
+    }
+
+    .trucking-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: #ffe070;
+    }
+
+    .action-queue-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 139, 139, 0.22);
+      background: rgba(255, 139, 139, 0.055);
+    }
+
+    .action-queue-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: #ffb1b1;
+    }
+
+    .action-list {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .action-item {
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      background: rgba(255, 255, 255, 0.045);
+      border-radius: 12px;
+      padding: 10px;
+    }
+
+    .action-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .action-title {
+      font-weight: 900;
+      color: #ffffff;
+      line-height: 1.25;
+    }
+
+    .action-meta {
+      color: #9aa4b2;
+      font-size: 12px;
+      line-height: 1.35;
+      margin-top: 4px;
+    }
+
+    .severity-red {
+      background: #4a1515;
+      color: #ff8b8b;
+    }
+
+    .severity-magenta {
+      background: #401538;
+      color: #ff8be0;
+    }
+
+    .severity-yellow {
+      background: #3b3514;
+      color: #ffe779;
+    }
+
+    .severity-green {
+      background: #123a24;
+      color: #8dffae;
+    }
+
+    .comparison-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 230, 118, 0.28);
+      background: rgba(0, 230, 118, 0.065);
+    }
+
+    .comparison-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: #8dffae;
+    }
+
+    .date-compare-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(117, 234, 255, 0.26);
+      background: rgba(117, 234, 255, 0.055);
+    }
+
+    .date-compare-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: #75eaff;
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .comparison-stat {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 10px;
+      padding: 8px;
+    }
+
+    .comparison-stat .k {
+      color: #9aa4b2;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .comparison-stat .v {
+      margin-top: 3px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .trucking-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .trucking-stat {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 10px;
+      padding: 8px;
+    }
+
+    .trucking-stat .k {
+      color: #9aa4b2;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .trucking-stat .v {
+      margin-top: 3px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .trucking-row-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .trucking-row-table th,
+    .trucking-row-table td {
+      border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+      padding: 6px 4px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .trucking-row-table th {
+      color: #9aa4b2;
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.05em;
+    }
+
+    .flex-spinner {
+      width: 13px;
+      height: 13px;
+      border: 2px solid rgba(117, 234, 255, 0.25);
+      border-top-color: #75eaff;
+      border-radius: 50%;
+      animation: cueSpin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    @keyframes cueSpin {
+      to { transform: rotate(360deg); }
+    }
+
+    .card.flex-busy {
+      border-color: rgba(117, 234, 255, 0.55);
+      box-shadow: 0 0 0 1px rgba(117, 234, 255, 0.16), 0 0 28px rgba(117, 234, 255, 0.10);
+    }
+
+    button.querying {
+      background: #75eaff;
+      color: #061216;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(0, 0, 0, 0.72);
+      z-index: 1000;
+    }
+
+    .modal-backdrop.open {
+      display: block;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 24px;
+      display: none;
+      background: #111721;
+      border: 1px solid #3b4658;
+      border-radius: 20px;
+      overflow: hidden;
+      z-index: 1001;
+      box-shadow: 0 20px 80px rgba(0, 0, 0, 0.55);
+    }
+
+    .modal.open {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .modal-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid #333c4d;
+      background: #151d2b;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    .modal-title h2 {
+      margin: 0 0 6px;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      overflow: auto;
+      padding: 22px 24px 36px;
+      display: grid;
+      grid-template-columns: minmax(320px, 0.9fr) minmax(480px, 1.4fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    @media (max-width: 1100px) {
+      .modal-body {
+        grid-template-columns: 1fr;
+      }
+
+      .modal {
+        inset: 10px;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+
+    .detail-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .detail-panel h3 {
+      margin: 0 0 10px;
+      color: var(--cyan);
+      font-size: 16px;
+    }
+
+    .workstream-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .workstream-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      border: 1px solid #334154;
+      background: #121824;
+      color: #cfe7ff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .workstream-chip.pulled {
+      border-color: rgba(0, 230, 118, 0.35);
+      background: rgba(0, 230, 118, 0.08);
+      color: #8dffae;
+    }
+
+    .workstream-chip.placeholder {
+      border-color: rgba(255, 224, 112, 0.35);
+      background: rgba(255, 224, 112, 0.08);
+      color: #ffe070;
+    }
+
+    .rollup-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(117, 234, 255, 0.30);
+      background: rgba(117, 234, 255, 0.07);
+    }
+
+    .rollup-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: var(--cyan);
+    }
+
+    .rollup-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .rollup-stat {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.04);
+      border-radius: 10px;
+      padding: 8px;
+    }
+
+    .rollup-stat .k {
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .rollup-stat .v {
+      margin-top: 3px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .finding-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 230, 118, 0.30);
+      background: rgba(0, 230, 118, 0.07);
+    }
+
+    .finding-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: #8dffae;
+    }
+
+    .finding-panel ul {
+      margin: 8px 0 0 18px;
+      padding: 0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .finding-panel li {
+      margin-bottom: 6px;
+    }
+
+    details.raw-flex-details {
+      margin-top: 14px;
+      border-radius: 12px;
+      border: 1px solid #334154;
+      background: var(--panel2);
+      overflow: hidden;
+    }
+
+    details.raw-flex-details summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 12px;
+      color: var(--cyan);
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    details.raw-flex-details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    details.raw-flex-details summary::after {
+      content: "Show detail";
+      float: right;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    details.raw-flex-details[open] summary::after {
+      content: "Hide detail";
+    }
+
+    .raw-flex-inner {
+      padding: 0 12px 12px 12px;
+    }
+
+    .flex-panel {
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid #334154;
+      background: var(--panel2);
+    }
+
+    .flex-panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+      color: var(--cyan);
+    }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      border-bottom: 1px solid #2a3444;
+      padding: 6px 4px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .mini-table th {
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.05em;
+    }
+
+    .error { color: var(--red); }
+    .success { color: #8dffae; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>CUE Active Shows</h1>
+      <div class="subtitle">Phase 1: key dates + venue bubbles · Query FLEX from the card · click a show to go deeper · Trucking comes next</div>
+    </div>
+
+    <div class="header-actions">
+      <button onclick="loadShows()">Load Active Shows</button>
+      <button onclick="syncShows()" class="secondary">Sync FLEX / Trucking</button>
+    </div>
+  </header>
+
+  <div id="status">Page loaded. Ready.</div>
+  <div class="dashboard-note">Dashboard cards show only the most important readiness info. Click a card for full show detail.</div>
+  <div id="shows" class="grid"></div>
+
+  <div id="modalBackdrop" class="modal-backdrop" onclick="closeShowDetail()"></div>
+  <section id="showModal" class="modal" aria-modal="true" role="dialog">
+    <div id="modalHeader" class="modal-header"></div>
+    <div id="modalBody" class="modal-body"></div>
+  </section>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const showsEl = document.getElementById("shows");
+    const modalBackdropEl = document.getElementById("modalBackdrop");
+    const showModalEl = document.getElementById("showModal");
+    const modalHeaderEl = document.getElementById("modalHeader");
+    const modalBodyEl = document.getElementById("modalBody");
+
+    const flexDocumentHints = {
+      "desibels-raleigh": ["26-1603", "26-1624"],
+      "fifa-final-piedmont": ["26-0071", "26-1752", "26-1759", "26-1804", "26-1225", "26-1637"],
+      "sound-haven": ["26-1421"],
+      "summer-x-games-nola": ["26-0714", "26-0715", "26-0716", "26-0717"],
+      "production-design-associates": ["26-1777"]
+    };
+
+    const flexWorkstreamLabels = {
+      "26-1603": "Audio",
+      "26-1624": "Lighting / Video",
+      "26-0071": "FIFA Main / Placeholder",
+      "26-1752": "Stage 2 Audio",
+      "26-1759": "Stage 2 Video",
+      "26-1804": "WAC / Calaway Plaza",
+      "26-1225": "Filmworks / Coke",
+      "26-1637": "FIFA HQ / Distribution",
+      "26-1421": "Sound Haven",
+      "26-0714": "Audio",
+      "26-0715": "Lighting",
+      "26-0716": "LED",
+      "26-0717": "Cameras",
+      "26-1777": "PDA Video"
+    };
+
+    let activeShows = [];
+    let selectedShowId = null;
+
+    function statusClass(status) {
+      const text = String(status || "").toLowerCase();
+
+      if (text.includes("red")) return "red";
+      if (text.includes("magenta")) return "magenta";
+      if (text.includes("yellow")) return "yellow";
+      if (text.includes("green")) return "green";
+
+      return "cyan";
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function yesNo(value) {
+      return value ? "Yes" : "No";
+    }
+
+    function displayDriver(row) {
+      if (row.needDriver) return "NEED DRIVER";
+      if (row.driverName && String(row.driverName).trim()) return row.driverName;
+      if (row.driverConfirmed) return "Assigned";
+      return "TBD";
+    }
+
+    function formatMoney(value) {
+      return "$" + Number(value || 0).toLocaleString(undefined, {
+        minimumFractionDigits: Number(value || 0) % 1 === 0 ? 0 : 2,
+        maximumFractionDigits: 2
+      });
+    }
+
+    function parseFlexDate(value) {
+      if (!value) return null;
+
+      const raw = String(value).trim();
+
+      if (/^\d{12,}$/.test(raw)) {
+        const msDate = new Date(Number(raw));
+        return Number.isNaN(msDate.getTime()) ? null : msDate;
+      }
+
+      const localMatch = raw.match(
+        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/
+      );
+
+      if (localMatch) {
+        const [, year, month, day, hour, minute, second] = localMatch;
+        return new Date(
+          Number(year),
+          Number(month) - 1,
+          Number(day),
+          Number(hour),
+          Number(minute),
+          Number(second || 0)
+        );
+      }
+
+      const date = new Date(raw);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    function formatFlexDateTime(value) {
+      const date = parseFlexDate(value);
+      if (!date) return value ? String(value) : "TBD";
+
+      return date.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true
+      });
+    }
+
+    function formatFlexDateRange(startValue, endValue) {
+      const start = formatFlexDateTime(startValue);
+      const end = formatFlexDateTime(endValue);
+
+      if (start === "TBD" && end === "TBD") return "TBD";
+      if (start !== "TBD" && end === "TBD") return start;
+      if (start === "TBD" && end !== "TBD") return end;
+
+      return `${start} → ${end}`;
+    }
+
+    function formatFlexDateShort(value) {
+      const date = parseFlexDate(value);
+      if (!date) return value ? String(value) : "TBD";
+
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      });
+    }
+
+    function getEarliestDate(values) {
+      const dates = values
+        .map((value) => ({ raw: value, parsed: parseFlexDate(value) }))
+        .filter((item) => item.parsed);
+
+      if (!dates.length) return null;
+
+      dates.sort((a, b) => a.parsed.getTime() - b.parsed.getTime());
+      return dates[0].raw;
+    }
+
+    function getLatestDate(values) {
+      const dates = values
+        .map((value) => ({ raw: value, parsed: parseFlexDate(value) }))
+        .filter((item) => item.parsed);
+
+      if (!dates.length) return null;
+
+      dates.sort((a, b) => b.parsed.getTime() - a.parsed.getTime());
+      return dates[0].raw;
+    }
+
+    function firstNonEmpty(values, fallback = "TBD") {
+      const found = values.find((value) => value != null && String(value).trim() !== "");
+      return found || fallback;
+    }
+
+    function getShowKeyInfo(show) {
+      const pulls = getPulledFlexData(show);
+      const contexts = pulls.map((data) => data.showContext || {});
+
+      const start =
+        getEarliestDate(contexts.map((context) => context.plannedStartDate)) ||
+        getEarliestDate(contexts.map((context) => context.loadInDate));
+
+      const end =
+        getLatestDate(contexts.map((context) => context.plannedEndDate)) ||
+        getLatestDate(contexts.map((context) => context.loadOutDate));
+
+      const loadIn = getEarliestDate(contexts.map((context) => context.loadInDate));
+      const loadOut = getLatestDate(contexts.map((context) => context.loadOutDate));
+      const venue = firstNonEmpty(contexts.map((context) => context.venue), "Venue TBD");
+      const client = firstNonEmpty(contexts.map((context) => context.client), "Client TBD");
+      const pm = firstNonEmpty(contexts.map((context) => context.projectManager), "PM TBD");
+      const shipping = firstNonEmpty(contexts.map((context) => context.shippingMethod), "Shipping TBD");
+
+      return {
+        start: start ? formatFlexDateShort(start) : "TBD",
+        end: end ? formatFlexDateShort(end) : "TBD",
+        loadIn: loadIn ? formatFlexDateTime(loadIn) : "TBD",
+        loadOut: loadOut ? formatFlexDateTime(loadOut) : "TBD",
+        venue,
+        client,
+        pm,
+        shipping,
+        hasFlexData: pulls.length > 0,
+      };
+    }
+
+    function renderKeyInfoRows(show, mode = "card") {
+      const info = getShowKeyInfo(show);
+
+      if (mode === "card") {
+        return `
+          <div class="key-info">
+            <div class="key-info-row">
+              <div class="key-info-k">Start</div>
+              <div class="key-info-v">${escapeHtml(info.start)}</div>
+            </div>
+            <div class="key-info-row">
+              <div class="key-info-k">End</div>
+              <div class="key-info-v">${escapeHtml(info.end)}</div>
+            </div>
+            <div class="key-info-row">
+              <div class="key-info-k">Venue</div>
+              <div class="key-info-v">${escapeHtml(info.venue)}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      const hints = getFlexHints(show);
+      const pulledCount = getPulledFlexData(show).length;
+      const flexProgress = hints.length ? `${pulledCount} of ${hints.length}` : "No FLEX hints";
+
+      return `
+        <div class="modal-meta-grid">
+          <div class="modal-meta-item">
+            <div class="k">Start</div>
+            <div class="v">${escapeHtml(info.start)}</div>
+          </div>
+          <div class="modal-meta-item">
+            <div class="k">End</div>
+            <div class="v">${escapeHtml(info.end)}</div>
+          </div>
+          <div class="modal-meta-item wide">
+            <div class="k">Venue</div>
+            <div class="v" title="${escapeHtml(info.venue)}">${escapeHtml(info.venue)}</div>
+          </div>
+          <div class="modal-meta-item wide">
+            <div class="k">Client</div>
+            <div class="v" title="${escapeHtml(info.client)}">${escapeHtml(info.client)}</div>
+          </div>
+          <div class="modal-meta-item">
+            <div class="k">Load In</div>
+            <div class="v">${escapeHtml(info.loadIn)}</div>
+          </div>
+          <div class="modal-meta-item">
+            <div class="k">Load Out</div>
+            <div class="v">${escapeHtml(info.loadOut)}</div>
+          </div>
+          <div class="modal-meta-item">
+            <div class="k">PM</div>
+            <div class="v">${escapeHtml(info.pm)}</div>
+          </div>
+          <div class="modal-meta-item">
+            <div class="k">FLEX</div>
+            <div class="v">${escapeHtml(flexProgress)}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function getFlexHints(show) {
+      return Array.isArray(show.flexDocumentNumbers) && show.flexDocumentNumbers.length
+        ? show.flexDocumentNumbers
+        : flexDocumentHints[show.id] || [];
+    }
+
+    function getPulledFlexData(show) {
+      const pulls = show.flexPulls || {};
+      return Object.values(pulls)
+        .map((pull) => pull?.data)
+        .filter(Boolean);
+    }
+
+    function getSectionNames(data) {
+      const sections = Array.isArray(data?.sections) ? data.sections : [];
+      return sections.map((section) => section.name).filter(Boolean);
+    }
+
+    function sectionExists(data, pattern) {
+      return getSectionNames(data).some((name) => pattern.test(String(name || "")));
+    }
+
+    function summarizeFlexScope(data) {
+      const sectionNames = getSectionNames(data);
+      const counts = data?.counts || {};
+
+      return {
+        sectionNames,
+        hasTransportation: Number(counts.transportationItems || 0) > 0 || sectionExists(data, /transport/i),
+        hasLabor: Number(counts.laborItems || 0) > 0 || sectionExists(data, /labor/i),
+        hasInventory: Number(counts.inventoryItems || 0) > 0,
+        inventoryCount: Number(counts.inventoryItems || 0),
+        laborCount: Number(counts.laborItems || 0),
+        transportationCount: Number(counts.transportationItems || 0),
+      };
+    }
+
+    function clampScore(value) {
+      return Math.max(0, Math.min(100, Math.round(Number(value || 0))));
+    }
+
+    function scoreColor(score) {
+      const value = Number(score || 0);
+
+      if (value < 55) return "red";
+      if (value < 75) return "magenta";
+      if (value < 90) return "yellow";
+      return "green";
+    }
+
+    function buildPhaseOneReadinessScore(show, data) {
+      const showContext = data?.showContext || {};
+      const summary = data?.summary || {};
+      const financials = summary?.financials || {};
+      const scope = summarizeFlexScope(data);
+
+      let score = 100;
+      const reasons = [];
+
+      if (!showContext.documentNumber) {
+        score -= 25;
+        reasons.push("FLEX document number did not resolve cleanly");
+      }
+
+      if (!showContext.projectManager) {
+        score -= 12;
+        reasons.push("No PM assigned in FLEX");
+      }
+
+      if (!showContext.client) {
+        score -= 8;
+        reasons.push("Client missing in FLEX");
+      }
+
+      if (!showContext.plannedStartDate && !showContext.loadInDate) {
+        score -= 12;
+        reasons.push("FLEX date coverage is weak");
+      }
+
+      if (scope.hasTransportation) {
+        score -= 6;
+        reasons.push("Transportation sold; Phase 2 trucking confirmation required");
+      }
+
+      if (scope.hasLabor) {
+        score -= 5;
+        reasons.push("Labor sold; staffing/coverage confirmation required");
+      }
+
+      if (Number(financials.invoiceTotal || 0) === 0 && Number(financials.categorySubtotal || 0) === 0) {
+        score -= 15;
+        reasons.push("FLEX financial scope appears to be $0 / placeholder");
+      }
+
+      if (show.id === "production-design-associates") {
+        score -= 25;
+        reasons.push("Date/source conflict confirmed by FLEX");
+      }
+
+      if (show.id === "fifa-final-piedmont") {
+        score -= 18;
+        reasons.push("Multiple FIFA workstreams need quote separation");
+      }
+
+      if (show.id === "summer-x-games-nola") {
+        score -= 10;
+        reasons.push("Multi-department scope needs workstream routing");
+      }
+
+      if (show.id === "sound-haven") {
+        score -= 8;
+        reasons.push("Phase 2 trucking/staffing exceptions are known from current board");
+      }
+
+      return {
+        score: clampScore(score),
+        color: scoreColor(score),
+        reasons,
+      };
+    }
+
+    function getShowScore(show) {
+      if (show.readinessScore != null) return Number(show.readinessScore);
+      if (show.score != null) return Number(show.score);
+      return null;
+    }
+
+    function isShowAskingFlex(show) {
+      if (show.flexQuerying) return true;
+
+      const pulls = show.flexPulls || {};
+      return Object.values(pulls).some((pull) => pull?.loading);
+    }
+
+    function renderFlexAskingIndicator(show) {
+      if (!isShowAskingFlex(show)) return "";
+
+      return `
+        <div class="flex-asking">
+          <span class="flex-spinner"></span>
+          <span>Asking FLEX… pulling official quote data</span>
+        </div>
+      `;
+    }
+
+    function renderReadinessScore(scoreResult) {
+      const score = Number(scoreResult?.score || 0);
+      const color = scoreColor(score);
+
+      return `
+        <div class="score-wrap">
+          <div class="score-row">
+            <span>Phase 1 Readiness Score</span>
+            <span class="score-number">${escapeHtml(score)}/100</span>
+          </div>
+          <div class="score-track">
+            <div class="score-fill ${color}" style="width:${escapeHtml(score)}%"></div>
+          </div>
+          <div class="score-note">FLEX-only score. Trucking confidence is added in Phase 2.</div>
+        </div>
+      `;
+    }
+
+    function buildPhaseOneStatusRecommendation(show, data) {
+      const showContext = data?.showContext || {};
+      const scope = summarizeFlexScope(data);
+      const scoreResult = buildPhaseOneReadinessScore(show, data);
+
+      const reasons = [];
+
+      if (!showContext.projectManager) {
+        reasons.push("No PM assigned in FLEX");
+      }
+
+      if (scope.hasTransportation) {
+        reasons.push("Transportation sold in FLEX");
+      }
+
+      if (scope.hasLabor) {
+        reasons.push("Labor sold in FLEX");
+      }
+
+      for (const reason of scoreResult.reasons) {
+        if (!reasons.includes(reason)) reasons.push(reason);
+      }
+
+      if (show.id === "production-design-associates") {
+        return {
+          status: "RED - FLEX/date conflict confirmed",
+          confidence: "High",
+          score: scoreResult.score,
+          scoreColor: scoreResult.color,
+          reasons: [
+            "FLEX confirms the active work is scheduled Jul 2–Jul 8",
+            "Drive/folder date appears to imply 7/26",
+            "Load-in is Jul 6 in FLEX",
+          ],
+        };
+      }
+
+      if (show.id === "fifa-final-piedmont") {
+        return {
+          status: "MAGENTA - Multi-quote FLEX mapping needed",
+          confidence: "Medium",
+          score: scoreResult.score,
+          scoreColor: scoreResult.color,
+          reasons: [
+            "Multiple FIFA quote/workstream hints exist",
+            "FLEX pulls need to be separated by workstream before final readiness",
+          ],
+        };
+      }
+
+      if (show.id === "summer-x-games-nola") {
+        return {
+          status: "MAGENTA - Multi-department FLEX scope needs routing",
+          confidence: "Medium-High",
+          score: scoreResult.score,
+          scoreColor: scoreResult.color,
+          reasons: [
+            "FLEX scope spans multiple production departments",
+            "Separate audio, lighting, LED/camera, and maybe-truck workstreams",
+          ],
+        };
+      }
+
+      if (show.id === "sound-haven") {
+        return {
+          status: "MAGENTA - FLEX scope confirmed, ops follow-up needed",
+          confidence: "Medium-High",
+          score: scoreResult.score,
+          scoreColor: scoreResult.color,
+          reasons: [
+            "FLEX confirms active scope",
+            "Trucking/staffing checks are required in Phase 2",
+          ],
+        };
+      }
+
+      if (reasons.length) {
+        return {
+          status: "MAGENTA - FLEX review needed",
+          confidence: "Medium",
+          score: scoreResult.score,
+          scoreColor: scoreResult.color,
+          reasons,
+        };
+      }
+
+      return {
+        status: "GREEN - FLEX scope pulled",
+        confidence: "Medium",
+        score: scoreResult.score,
+        scoreColor: scoreResult.color,
+        reasons: ["FLEX record was pulled successfully and no Phase 1-only issue was detected"],
+      };
+    }
+
+    function buildCueReadinessFinding(show, data) {
+      const showContext = data?.showContext || {};
+      const summary = data?.summary || {};
+      const financials = summary?.financials || {};
+      const counts = data?.counts || {};
+      const findings = [];
+      const actions = [];
+
+      const documentNumber = showContext.documentNumber || data?.documentNumber || "Unknown FLEX document";
+      const showName = showContext.showName || "Matched FLEX record";
+
+      findings.push(`FLEX confirms ${documentNumber} as ${showName}.`);
+
+      const sectionNames = getSectionNames(data);
+      if (sectionNames.length) {
+        findings.push(`Sold scope includes ${sectionNames.join(", ")}.`);
+      }
+
+      if (
+        Number(financials.invoiceTotal || 0) === 0 &&
+        Number(financials.categorySubtotal || 0) === 0
+      ) {
+        findings.push("FLEX appears to be a $0 / placeholder or parent quote. Treat this as mapping context, not final sold scope.");
+      }
+
+      if (!showContext.projectManager) {
+        findings.push("No Project Manager is assigned in FLEX.");
+        actions.push("Confirm PM ownership or mark this as intentionally PM-light.");
+      }
+
+      if (counts.transportationItems > 0 || sectionExists(data, /transport/i)) {
+        findings.push("Transportation is sold in FLEX, so trucking needs to stay linked and verified.");
+        actions.push("Compare FLEX transportation against Weekly Runs and confirm Info Sent / LPO Sent.");
+      }
+
+      if (counts.laborItems > 0 || sectionExists(data, /labor/i)) {
+        findings.push(`Labor is sold in FLEX (${counts.laborItems || 0} labor line${Number(counts.laborItems || 0) === 1 ? "" : "s"}).`);
+        actions.push("Confirm labor coverage and whether staffing ownership is mapped.");
+      }
+
+      if (counts.inventoryItems > 0) {
+        findings.push(`Rental/equipment scope includes ${counts.inventoryItems} inventory item${Number(counts.inventoryItems) === 1 ? "" : "s"}.`);
+      }
+
+      if (show.id === "production-design-associates") {
+        findings.push("FLEX confirms the show timing is much earlier than the folder name implied: planned Jul 2–Jul 8 with load-in Jul 6.");
+        actions.push("Keep this RED until the folder date/source conflict and Info Sent status are resolved.");
+      }
+
+      if (show.id === "sound-haven") {
+        actions.push("Resolve Maybe Truck / NEED DRIVER / Info-LPO false exceptions against the trucking sheet.");
+      }
+
+      if (show.id === "summer-x-games-nola") {
+        actions.push("Separate audio, lighting, LED/camera, and maybe-truck quotes into workstreams.");
+      }
+
+      if (show.id === "fifa-final-piedmont") {
+        actions.push("Separate FIFA workstreams by quote number before treating the combined readiness as one show.");
+      }
+
+      return {
+        findings,
+        actions
+      };
+    }
+
+    function renderPhaseOneStatus(show, data) {
+      const recommendation = buildPhaseOneStatusRecommendation(show, data);
+
+      const reasonItems = recommendation.reasons
+        .map((reason) => `<li>${escapeHtml(reason)}</li>`)
+        .join("");
+
+      return `
+        <div class="label">Phase 1 Status Recommendation</div>
+        <div class="value">
+          <span class="pill ${statusClass(recommendation.status)}">${escapeHtml(recommendation.status)}</span>
+          <span class="pill cyan">Confidence: ${escapeHtml(recommendation.confidence)}</span>
+        </div>
+        ${renderReadinessScore(recommendation)}
+        <ul>${reasonItems}</ul>
+      `;
+    }
+
+    function renderCueReadinessFinding(show, data) {
+      const finding = buildCueReadinessFinding(show, data);
+
+      const findingItems = finding.findings
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      const actionItems = finding.actions.length
+        ? finding.actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>No extra action generated yet.</li>`;
+
+      return `
+        <div class="finding-panel">
+          <h3>CUE Readiness Finding</h3>
+          ${renderPhaseOneStatus(show, data)}
+
+          <div class="label">What CUE sees</div>
+          <ul>${findingItems}</ul>
+
+          <div class="label">Recommended next moves</div>
+          <ul>${actionItems}</ul>
+        </div>
+      `;
+    }
+
+    function renderWorkstreamChips(show) {
+      const hints = getFlexHints(show);
+      if (!hints.length) return "";
+
+      const pulled = show.flexPulls || {};
+
+      const chips = hints
+        .map((documentNumber) => {
+          const pullData = pulled[documentNumber]?.data;
+          const isPulled = Boolean(pullData);
+          const invoiceTotal = Number(pullData?.summary?.financials?.invoiceTotal || 0);
+          const categorySubtotal = Number(pullData?.summary?.financials?.categorySubtotal || 0);
+          const isPlaceholder = isPulled && invoiceTotal === 0 && categorySubtotal === 0;
+          const label = flexWorkstreamLabels[documentNumber] || "Quote";
+          const chipClass = isPlaceholder ? "placeholder" : isPulled ? "pulled" : "";
+          const suffix = isPlaceholder ? " · $0 / Placeholder" : isPulled ? " ✓" : "";
+          return `<span class="workstream-chip ${chipClass}">${escapeHtml(documentNumber)} · ${escapeHtml(label)}${escapeHtml(suffix)}</span>`;
+        })
+        .join("");
+
+      return `<div class="workstream-row">${chips}</div>`;
+    }
+
+    function flexButtonsForShow(show) {
+      const hints = getFlexHints(show);
+
+      if (!hints.length) {
+        return `<button class="small secondary" disabled>No FLEX Hint Yet</button>`;
+      }
+
+      return hints
+        .map((documentNumber) => {
+          return `<button class="small" onclick="event.stopPropagation(); pullFlexForShow('${show.id}', '${documentNumber}')">Pull FLEX ${documentNumber}</button>`;
+        })
+        .join(" ");
+    }
+
+    function buildShowRollup(show) {
+      const pulls = getPulledFlexData(show);
+
+      if (!pulls.length) return null;
+
+      const rollup = {
+        pulledCount: pulls.length,
+        invoiceTotal: 0,
+        categorySubtotal: 0,
+        inventoryItems: 0,
+        laborLines: 0,
+        transportationLines: 0,
+        departments: new Set(),
+        clients: new Set(),
+      };
+
+      for (const data of pulls) {
+        const summary = data.summary || {};
+        const financials = summary.financials || {};
+        const counts = data.counts || {};
+        const showContext = data.showContext || {};
+
+        rollup.invoiceTotal += Number(financials.invoiceTotal || 0);
+        rollup.categorySubtotal += Number(financials.categorySubtotal || 0);
+        rollup.inventoryItems += Number(counts.inventoryItems || 0);
+        rollup.laborLines += Number(counts.laborItems || 0);
+        rollup.transportationLines += Number(counts.transportationItems || 0);
+
+        if (showContext.client) rollup.clients.add(showContext.client);
+
+        for (const name of getSectionNames(data)) {
+          rollup.departments.add(name);
+        }
+      }
+
+      return {
+        ...rollup,
+        departments: Array.from(rollup.departments),
+        clients: Array.from(rollup.clients),
+      };
+    }
+
+    function renderShowRollup(show) {
+      const rollup = buildShowRollup(show);
+      if (!rollup) return "";
+
+      const departments = rollup.departments.length
+        ? rollup.departments.join(", ")
+        : "No sections returned yet";
+
+      return `
+        <div class="rollup-panel">
+          <h3>Show-Level FLEX Rollup</h3>
+          <div class="value">
+            Quotes Pulled: ${escapeHtml(rollup.pulledCount)} of ${escapeHtml(getFlexHints(show).length || rollup.pulledCount)}.
+          </div>
+
+          <div class="rollup-grid">
+            <div class="rollup-stat">
+              <div class="k">Invoice Total</div>
+              <div class="v">${formatMoney(rollup.invoiceTotal)}</div>
+            </div>
+            <div class="rollup-stat">
+              <div class="k">Category Subtotal</div>
+              <div class="v">${formatMoney(rollup.categorySubtotal)}</div>
+            </div>
+            <div class="rollup-stat">
+              <div class="k">Inventory Items</div>
+              <div class="v">${escapeHtml(rollup.inventoryItems)}</div>
+            </div>
+            <div class="rollup-stat">
+              <div class="k">Labor Lines / Transportation Lines</div>
+              <div class="v">${escapeHtml(rollup.laborLines)} / ${escapeHtml(rollup.transportationLines)}</div>
+            </div>
+          </div>
+
+          <div class="label">Departments / Sections Sold</div>
+          <div class="value">${escapeHtml(departments)}</div>
+        </div>
+      `;
+    }
+
+    function renderShowLevelFinding(show) {
+      const pulls = getPulledFlexData(show);
+      if (!pulls.length) return "";
+
+      const rollup = buildShowRollup(show);
+      const hints = getFlexHints(show);
+      const completion = hints.length ? `${pulls.length} of ${hints.length}` : `${pulls.length}`;
+
+      const findings = [];
+      const actions = [];
+
+      findings.push(`FLEX pulled ${completion} known quote/workstream${hints.length === 1 ? "" : "s"}.`);
+
+      if (rollup.departments.length) {
+        findings.push(`Combined sold scope includes ${rollup.departments.join(", ")}.`);
+      }
+
+      if (rollup.transportationLines > 0) {
+        findings.push(`Transportation appears on ${rollup.transportationLines} pulled FLEX line${rollup.transportationLines === 1 ? "" : "s"}.`);
+        actions.push("Phase 2: compare transportation against Weekly Runs.");
+      }
+
+      if (rollup.laborLines > 0) {
+        findings.push(`Labor appears on ${rollup.laborLines} pulled FLEX line${rollup.laborLines === 1 ? "" : "s"}.`);
+        actions.push("Confirm staffing ownership/coverage after FLEX mapping is complete.");
+      }
+
+      if (show.id === "fifa-final-piedmont") {
+        actions.push("Keep workstreams separated by quote before treating FIFA as one readiness result.");
+      }
+
+      if (show.id === "summer-x-games-nola") {
+        actions.push("Keep audio, lighting, LED, and cameras separated before trucking comparison.");
+      }
+
+      if (show.id === "production-design-associates") {
+        findings.push("FLEX confirms date/source conflict: active FLEX work is earlier than folder/index date.");
+        actions.push("Resolve folder date/source conflict before clearing RED status.");
+      }
+
+      const findingItems = findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+      const actionItems = actions.length
+        ? actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+        : `<li>Ready for Phase 2 trucking comparison.</li>`;
+
+      return `
+        <div class="finding-panel">
+          <h3>Show-Level CUE Readiness</h3>
+          <div class="label">What CUE sees</div>
+          <ul>${findingItems}</ul>
+          <div class="label">Recommended next moves</div>
+          <ul>${actionItems}</ul>
+        </div>
+      `;
+    }
+
+    function renderRawFlexDetails(show) {
+      if (!show.flexPulls) return "";
+
+      const panels = Object.entries(show.flexPulls).map(([documentNumber, pull]) => {
+        if (pull.loading) {
+          return `
+            <details class="raw-flex-details" open>
+              <summary>Authoritative FLEX Pull ${escapeHtml(documentNumber)}</summary>
+              <div class="raw-flex-inner">
+                <div class="value">Loading authoritative FLEX data...</div>
+              </div>
+            </details>
+          `;
+        }
+
+        if (pull.error) {
+          return `
+            <details class="raw-flex-details" open>
+              <summary>Authoritative FLEX Pull ${escapeHtml(documentNumber)}</summary>
+              <div class="raw-flex-inner">
+                <div class="value error">${escapeHtml(pull.error)}</div>
+              </div>
+            </details>
+          `;
+        }
+
+        const data = pull.data || {};
+        const showContext = data.showContext || {};
+        const summary = data.summary || {};
+        const financials = summary.financials || {};
+        const counts = data.counts || {};
+        const sections = Array.isArray(data.sections) ? data.sections : [];
+
+        const sectionRows = sections
+          .slice(0, 8)
+          .map((section) => {
+            return `
+              <tr>
+                <td>${escapeHtml(section.name)}</td>
+                <td>${escapeHtml(section.category)}</td>
+                <td>${escapeHtml(section.itemCount)}</td>
+                <td>${formatMoney(section.total)}</td>
+              </tr>
+            `;
+          })
+          .join("");
+
+        return `
+          <details class="raw-flex-details">
+            <summary>Authoritative FLEX Pull ${escapeHtml(documentNumber)}</summary>
+            <div class="raw-flex-inner">
+              <div class="flex-panel">
+                <h3>Authoritative FLEX Pull ${escapeHtml(documentNumber)}</h3>
+
+                <div class="label">FLEX Document</div>
+                <div class="value">${escapeHtml(showContext.documentNumber)} · ${escapeHtml(showContext.showName)}</div>
+
+                <div class="label">Client / Shipping</div>
+                <div class="value">${escapeHtml(showContext.client || "Client TBD")} · ${escapeHtml(showContext.shippingMethod || "Shipping TBD")}</div>
+
+                <div class="label">Dates</div>
+                <div class="value">
+                  Planned: ${escapeHtml(formatFlexDateRange(showContext.plannedStartDate, showContext.plannedEndDate))}<br />
+                  Load In: ${escapeHtml(formatFlexDateTime(showContext.loadInDate))}<br />
+                  Load Out: ${escapeHtml(formatFlexDateTime(showContext.loadOutDate))}
+                </div>
+
+                <div class="label">Financial / Scope</div>
+                <div class="value">
+                  Invoice Total: ${formatMoney(financials.invoiceTotal)}<br />
+                  Category Subtotal: ${formatMoney(financials.categorySubtotal)}<br />
+                  Inventory Items: ${escapeHtml(counts.inventoryItems || 0)} · Labor Lines: ${escapeHtml(counts.laborItems || 0)} · Transportation Lines: ${escapeHtml(counts.transportationItems || 0)}
+                </div>
+
+                <table class="mini-table">
+                  <thead>
+                    <tr>
+                      <th>Section</th>
+                      <th>Type</th>
+                      <th>Items</th>
+                      <th>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>${sectionRows}</tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+        `;
+      });
+
+      return panels.join("");
+    }
+
+    function getFirstPulledFindingData(show) {
+      const pulls = getPulledFlexData(show);
+      return pulls[0] || null;
+    }
+
+    function enrichShowsWithFlexHints(shows) {
+      return (shows || []).map((show) => {
+        return {
+          ...show,
+          flexDocumentNumbers: getFlexHints(show)
+        };
+      });
+    }
+
+    function renderShows(shows) {
+      showsEl.innerHTML = "";
+
+      if (!shows || !shows.length) {
+        statusEl.textContent = "No shows returned.";
+        return;
+      }
+
+      statusEl.textContent = `Loaded ${shows.length} active shows.`;
+
+      shows.forEach((show) => {
+        const div = document.createElement("div");
+        div.className = `card ${isShowAskingFlex(show) ? "flex-busy" : ""}`;
+        div.dataset.openShow = show.id;
+
+        const score = getShowScore(show);
+        const hints = getFlexHints(show);
+        const pulledCount = getPulledFlexData(show).length;
+        const flexProgress = hints.length ? `${pulledCount}/${hints.length} FLEX` : "No FLEX hints";
+        const truckingLine = renderTruckingHomeLine(show);
+        const scoreHtml = score != null ? renderReadinessScore({ score }) : "";
+
+        div.innerHTML = `
+          <h2>${escapeHtml(show.name || "Unnamed Show")}</h2>
+          <div>${escapeHtml(show.timing || "Timing TBD")} · ${escapeHtml(show.priority || "Priority TBD")}</div>
+
+          <div>
+            <span class="pill ${statusClass(show.readinessStatus)}">${escapeHtml(show.readinessStatus || "UNKNOWN")}</span>
+            <span class="pill cyan">${escapeHtml(show.changeSignal || "No recent change")}</span>
+          </div>
+
+          ${scoreHtml}
+          ${renderKeyInfoRows(show, "card")}
+          ${renderFlexAskingIndicator(show)}
+
+          <div class="label">Top Issue</div>
+          <div class="value">${escapeHtml(show.topIssue || "")}</div>
+
+          <div class="label">Next Action</div>
+          <div class="value">${escapeHtml(show.nextAction || "")}</div>
+
+          ${truckingLine ? `<div class="label">Trucking</div><div class="value">${escapeHtml(truckingLine)}</div>` : ""}
+
+          <div class="card-footer">
+            <span class="progress">${escapeHtml(flexProgress)}</span>
+            <span>
+              <button class="small ${isShowAskingFlex(show) ? "querying" : ""}" data-query-flex="${escapeHtml(show.id)}">${isShowAskingFlex(show) ? "Asking FLEX…" : "Query FLEX"}</button>
+              <span class="open-link">Open show →</span>
+            </span>
+          </div>
+        `;
+
+        showsEl.appendChild(div);
+      });
+    }
+
+    function getPulledQuoteNumbers(show) {
+      const pulled = show.flexPulls || {};
+      const pulledQuotes = Object.keys(pulled).filter((quote) => pulled[quote]?.data);
+      return pulledQuotes.length ? pulledQuotes : getFlexHints(show);
+    }
+
+    function isShowAskingTrucking(show) {
+      return Boolean(show.truckingQuerying);
+    }
+
+    function renderTruckingHomeLine(show) {
+      const trucking = show.truckingSync;
+      if (!trucking?.summary) return "";
+
+      const summary = trucking.summary;
+      const runs = Number(summary.rowsFound || 0);
+      const driverGaps = Number(summary.driverConfirmedFalse || 0);
+      const infoOpen = Number(summary.infoSentFalse || 0);
+      const lpoOpen = Number(summary.lpoSentFalse || 0);
+      const maybeTrucks = Number(summary.maybeTruckRows || 0);
+      const needDriver = Number(summary.needDriverRows || 0);
+      const dateComparison = buildDateComparison(show);
+
+      if (!runs) {
+        return "Trucking: no runs found yet";
+      }
+
+      const parts = [`${runs} run${runs === 1 ? "" : "s"}`];
+
+      if (needDriver > 0) {
+        parts.push(`${needDriver} NEED DRIVER`);
+      } else if (driverGaps > 0) {
+        parts.push(`${driverGaps} driver gap${driverGaps === 1 ? "" : "s"}`);
+      } else {
+        parts.push("drivers mapped");
+      }
+
+      if (infoOpen > 0 && lpoOpen > 0) {
+        parts.push("Info/LPO still open");
+      } else if (infoOpen > 0) {
+        parts.push("Info still open");
+      } else if (lpoOpen > 0) {
+        parts.push("LPO still open");
+      } else {
+        parts.push("Info/LPO sent");
+      }
+
+      if (maybeTrucks > 0) {
+        parts.push(`${maybeTrucks} maybe truck${maybeTrucks === 1 ? "" : "s"}`);
+      }
+
+      if (dateComparison.isMismatch) {
+        parts.push("date mismatch");
+      }
+
+      const actions = buildTruckingActionQueue(show);
+      const urgent = actions.filter((action) => action.severity === "red").length;
+      const attention = actions.filter((action) => action.severity === "magenta").length;
+
+      if (urgent > 0) {
+        parts.push(`${urgent} urgent action${urgent === 1 ? "" : "s"}`);
+      } else if (attention > 0) {
+        parts.push(`${attention} action${attention === 1 ? "" : "s"}`);
+      }
+
+      return `Trucking: ${parts.join(" · ")}`;
+    }
+
+    function parseLooseTruckingDate(value, flexReferenceYear = 2026) {
+      if (!value) return null;
+
+      const raw = String(value).trim();
+
+      const mmdd = raw.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+      if (mmdd) {
+        const month = Number(mmdd[1]);
+        const day = Number(mmdd[2]);
+        let year = flexReferenceYear;
+
+        if (mmdd[3]) {
+          year = Number(mmdd[3]);
+          if (year < 100) year += 2000;
+        }
+
+        const date = new Date(year, month - 1, day);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+
+      return parseFlexDate(raw);
+    }
+
+    function dayKey(date) {
+      if (!date) return "";
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    }
+
+    function getFlexDateWindow(show) {
+      const pulls = getPulledFlexData(show);
+      const contexts = pulls.map((data) => data.showContext || {});
+
+      const loadIn = getEarliestDate(contexts.map((context) => context.loadInDate));
+      const loadOut = getLatestDate(contexts.map((context) => context.loadOutDate));
+      const plannedStart = getEarliestDate(contexts.map((context) => context.plannedStartDate));
+      const plannedEnd = getLatestDate(contexts.map((context) => context.plannedEndDate));
+
+      return {
+        startRaw: loadIn || plannedStart || null,
+        endRaw: loadOut || plannedEnd || null,
+        start: parseFlexDate(loadIn || plannedStart),
+        end: parseFlexDate(loadOut || plannedEnd),
+      };
+    }
+
+    function buildDateComparison(show) {
+      const trucking = show.truckingSync;
+      const rows = Array.isArray(trucking?.safeRows) ? trucking.safeRows : [];
+      const flexWindow = getFlexDateWindow(show);
+      const referenceYear =
+        flexWindow.start?.getFullYear() ||
+        flexWindow.end?.getFullYear() ||
+        2026;
+
+      const truckingDates = rows
+        .map((row) => parseLooseTruckingDate(row.date, referenceYear))
+        .filter(Boolean);
+
+      const uniqueTruckingDays = [...new Set(truckingDates.map(dayKey))];
+
+      if (!rows.length) {
+        return {
+          status: "UNKNOWN - No trucking rows",
+          isMismatch: false,
+          flexWindowLabel: flexWindow.start || flexWindow.end
+            ? `${formatFlexDateShort(flexWindow.startRaw)} → ${formatFlexDateShort(flexWindow.endRaw)}`
+            : "TBD",
+          truckingDatesLabel: "No trucking rows",
+          findings: ["No trucking rows are available to compare against FLEX dates."],
+          actions: ["Run Query Trucking after FLEX is pulled."],
+        };
+      }
+
+      if (!flexWindow.start && !flexWindow.end) {
+        return {
+          status: "YELLOW - FLEX dates unavailable",
+          isMismatch: false,
+          flexWindowLabel: "TBD",
+          truckingDatesLabel: uniqueTruckingDays.join(", "),
+          findings: ["Trucking dates exist, but FLEX load-in/load-out dates were not available for comparison."],
+          actions: ["Pull or confirm the authoritative FLEX quote dates."],
+        };
+      }
+
+      const start = flexWindow.start || flexWindow.end;
+      const end = flexWindow.end || flexWindow.start;
+      const startTime = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+      const endTime = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime();
+
+      const outsideDates = truckingDates.filter((date) => {
+        const t = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        return t < startTime || t > endTime;
+      });
+
+      const flexWindowLabel = `${formatFlexDateShort(flexWindow.startRaw)} → ${formatFlexDateShort(flexWindow.endRaw)}`;
+      const truckingDatesLabel = uniqueTruckingDays.length
+        ? uniqueTruckingDays.join(", ")
+        : "TBD";
+
+      if (outsideDates.length) {
+        const outsideLabels = [...new Set(outsideDates.map(dayKey))].join(", ");
+
+        return {
+          status: "RED - Date mismatch",
+          isMismatch: true,
+          flexWindowLabel,
+          truckingDatesLabel,
+          findings: [
+            `FLEX date window is ${flexWindowLabel}.`,
+            `Trucking rows include dates outside that FLEX window: ${outsideLabels}.`,
+          ],
+          actions: [
+            "Confirm whether the trucking rows are attached to the correct show/workstream.",
+            "Resolve date/source conflict before clearing readiness.",
+          ],
+        };
+      }
+
+      return {
+        status: "GREEN - Dates align",
+        isMismatch: false,
+        flexWindowLabel,
+        truckingDatesLabel,
+        findings: [
+          `FLEX date window is ${flexWindowLabel}.`,
+          `Trucking dates fall inside the FLEX date window: ${truckingDatesLabel}.`,
+        ],
+        actions: ["No date mismatch detected from the current FLEX and trucking data."],
+      };
+    }
+
+    function renderDateComparison(show) {
+      if (!show.truckingSync) return "";
+
+      const comparison = buildDateComparison(show);
+      const findingItems = comparison.findings
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      const actionItems = comparison.actions
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      return `
+        <div class="date-compare-panel">
+          <h3>Schedule Check</h3>
+          <div>
+            <span class="pill ${statusClass(comparison.status)}">${escapeHtml(comparison.status)}</span>
+          </div>
+
+          <div class="comparison-grid">
+            <div class="comparison-stat">
+              <div class="k">FLEX Window</div>
+              <div class="v">${escapeHtml(comparison.flexWindowLabel)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">Trucking Dates</div>
+              <div class="v">${escapeHtml(comparison.truckingDatesLabel)}</div>
+            </div>
+          </div>
+
+          <div class="label">Finding</div>
+          <ul>${findingItems}</ul>
+
+          <div class="label">Recommended next moves</div>
+          <ul>${actionItems}</ul>
+        </div>
+      `;
+    }
+
+    function buildTruckingConfidenceScore(data, show = null) {
+      const comparison = data?.comparison || {};
+      const summary = data?.summary || {};
+
+      let score = 100;
+      const reasons = [];
+
+      if (!summary.rowsFound) {
+        score -= 60;
+        reasons.push("No Weekly Runs rows found");
+      }
+
+      if ((comparison.missingQuotes || []).length > 0) {
+        score -= 20;
+        reasons.push("Some FLEX quote/workstreams are missing trucking matches");
+      }
+
+      if (Number(summary.infoSentFalse || 0) > 0) {
+        score -= Math.min(24, Number(summary.infoSentFalse || 0) * 2);
+        reasons.push("Info Sent is still false on trucking rows");
+      }
+
+      if (Number(summary.lpoSentFalse || 0) > 0) {
+        score -= Math.min(24, Number(summary.lpoSentFalse || 0) * 2);
+        reasons.push("LPO Sent is still false on trucking rows");
+      }
+
+      if (Number(summary.maybeTruckRows || 0) > 0) {
+        score -= Math.min(18, Number(summary.maybeTruckRows || 0) * 6);
+        reasons.push("Maybe Truck rows are unresolved");
+      }
+
+      if (Number(summary.needDriverRows || 0) > 0) {
+        score -= 35;
+        reasons.push("NEED DRIVER rows are present");
+      }
+
+      if (show && data?.safeRows?.length) {
+        const dateComparison = buildDateComparison(show);
+
+        if (dateComparison.isMismatch) {
+          score -= 25;
+          reasons.push("Trucking dates fall outside the FLEX date window");
+        }
+      }
+
+      const finalScore = clampScore(score);
+
+      return {
+        score: finalScore,
+        color: scoreColor(finalScore),
+        reasons,
+      };
+    }
+
+    function renderTruckingConfidenceScore(data, show = null) {
+      const result = buildTruckingConfidenceScore(data, show);
+
+      const reasons = result.reasons.length
+        ? `<div class="score-note">${escapeHtml(result.reasons.slice(0, 3).join(" · "))}</div>`
+        : `<div class="score-note">Trucking execution is aligned from the data currently pulled.</div>`;
+
+      return `
+        <div class="score-wrap">
+          <div class="score-row">
+            <span>Phase 2 Trucking Confidence</span>
+            <span class="score-number">${escapeHtml(result.score)}/100</span>
+          </div>
+          <div class="score-track">
+            <div class="score-fill ${result.color}" style="width:${escapeHtml(result.score)}%"></div>
+          </div>
+          ${reasons}
+        </div>
+      `;
+    }
+
+    function renderFlexVsTruckingComparison(show) {
+      const data = show.truckingSync;
+      const comparison = data?.comparison;
+
+      if (!comparison) return "";
+
+      const findingItems = (comparison.findings || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      const actionItems = (comparison.actions || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      return `
+        <div class="comparison-panel">
+          <h3>CUE Trucking Readiness</h3>
+          <div>
+            <span class="pill ${statusClass(comparison.status)}">${escapeHtml(comparison.status || "UNKNOWN")}</span>
+          </div>
+
+          ${renderTruckingConfidenceScore(data, show)}
+          <div class="comparison-grid">
+            <div class="comparison-stat">
+              <div class="k">Quotes Checked</div>
+              <div class="v">${escapeHtml((comparison.requestedQuotes || []).length)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">Trucking Quote Matches</div>
+              <div class="v">${escapeHtml((comparison.matchedQuotes || []).length)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">Runs Found</div>
+              <div class="v">${escapeHtml(comparison.rowsFound || 0)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">Missing Quotes</div>
+              <div class="v">${escapeHtml((comparison.missingQuotes || []).length)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">Info Not Sent</div>
+              <div class="v">${escapeHtml(comparison.infoFalse || 0)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">LPO Not Sent</div>
+              <div class="v">${escapeHtml(comparison.lpoFalse || 0)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">Maybe Truck</div>
+              <div class="v">${escapeHtml(comparison.maybeTruckRows || 0)}</div>
+            </div>
+            <div class="comparison-stat">
+              <div class="k">NEED DRIVER</div>
+              <div class="v">${escapeHtml(comparison.needDriverRows || 0)}</div>
+            </div>
+          </div>
+
+          <div class="label">Finding</div>
+          <ul>${findingItems || "<li>No comparison finding yet.</li>"}</ul>
+
+          <div class="label">Recommended next moves</div>
+          <ul>${actionItems || "<li>No comparison action needed yet.</li>"}</ul>
+        </div>
+      `;
+    }
+
+    function buildTruckingActionQueue(show) {
+      const data = show.truckingSync;
+      if (!data?.summary) return [];
+
+      const summary = data.summary;
+      const comparison = data.comparison || {};
+      const actions = [];
+
+      const rowsFound = Number(summary.rowsFound || 0);
+      const infoFalse = Number(summary.infoSentFalse || 0);
+      const lpoFalse = Number(summary.lpoSentFalse || 0);
+      const maybeTruckRows = Number(summary.maybeTruckRows || 0);
+      const needDriverRows = Number(summary.needDriverRows || 0);
+      const driverGaps = Number(summary.driverConfirmedFalse || 0);
+      const missingQuotes = Array.isArray(comparison.missingQuotes)
+        ? comparison.missingQuotes
+        : [];
+
+      let dateComparison = null;
+      try {
+        dateComparison = buildDateComparison(show);
+      } catch {
+        dateComparison = null;
+      }
+
+      if (!rowsFound) {
+        actions.push({
+          severity: "red",
+          title: "No trucking runs found",
+          owner: "Brian Kee / PM",
+          action: "Confirm whether Weekly Runs needs trucking rows for this show or whether transportation is intentionally not required.",
+          why: "FLEX or show planning may indicate movement, but no execution rows are currently mapped."
+        });
+      }
+
+      if (needDriverRows > 0) {
+        actions.push({
+          severity: "red",
+          title: `${needDriverRows} NEED DRIVER row${needDriverRows === 1 ? "" : "s"}`,
+          owner: "Brian Kee",
+          action: "Assign or confirm driver coverage for the NEED DRIVER rows.",
+          why: "Driver coverage is a hard dependency for the trucking plan."
+        });
+      }
+
+      if (maybeTruckRows > 0) {
+        actions.push({
+          severity: "magenta",
+          title: `${maybeTruckRows} Maybe Truck row${maybeTruckRows === 1 ? "" : "s"} unresolved`,
+          owner: "Brian Kee / Warehouse / PM",
+          action: "Decide whether each Maybe Truck is real, then either assign it or remove it from the plan.",
+          why: "Maybe Truck rows create uncertainty in fleet capacity and warehouse planning."
+        });
+      }
+
+      if (infoFalse > 0) {
+        actions.push({
+          severity: "magenta",
+          title: `Info Sent still open on ${infoFalse} run${infoFalse === 1 ? "" : "s"}`,
+          owner: "Brian Kee / PM",
+          action: "Confirm Info Sent status or mark intentionally pending.",
+          why: "The dashboard should know whether trucking details have been communicated."
+        });
+      }
+
+      if (lpoFalse > 0) {
+        actions.push({
+          severity: "magenta",
+          title: `LPO Sent still open on ${lpoFalse} run${lpoFalse === 1 ? "" : "s"}`,
+          owner: "Brian Kee",
+          action: "Confirm LPO status for open rows.",
+          why: "Open LPO status can block clean trucking execution and vendor/payment tracking."
+        });
+      }
+
+      if (driverGaps > 0 && needDriverRows === 0) {
+        actions.push({
+          severity: "yellow",
+          title: `${driverGaps} driver confirmation gap${driverGaps === 1 ? "" : "s"}`,
+          owner: "Brian Kee",
+          action: "Confirm whether these rows have assigned drivers or are intentionally pending.",
+          why: "These are not marked NEED DRIVER, but the confirmation signal is incomplete."
+        });
+      }
+
+      if (missingQuotes.length > 0) {
+        actions.push({
+          severity: "magenta",
+          title: `${missingQuotes.length} FLEX quote/workstream${missingQuotes.length === 1 ? "" : "s"} missing trucking match`,
+          owner: "Brian Kee / PM",
+          action: `Review missing trucking matches: ${missingQuotes.join(", ")}.`,
+          why: "A pulled FLEX workstream may have transportation scope that is not represented in Weekly Runs."
+        });
+      }
+
+      if (dateComparison?.isMismatch) {
+        actions.push({
+          severity: "red",
+          title: "Trucking dates do not align with FLEX dates",
+          owner: "PM / Brian Kee",
+          action: "Confirm whether the trucking rows are attached to the correct show/workstream and resolve the source date conflict.",
+          why: "Date mismatch changes urgency and can cause the dashboard to understate risk."
+        });
+      }
+
+      if (!actions.length && rowsFound > 0) {
+        actions.push({
+          severity: "green",
+          title: "No immediate trucking actions found",
+          owner: "Brian Kee / PM",
+          action: "Continue normal monitoring.",
+          why: "Runs are mapped and no major trucking exceptions were detected from the current data."
+        });
+      }
+
+      return actions;
+    }
+
+    function countUrgentTruckingActions(show) {
+      const actions = buildTruckingActionQueue(show);
+      return actions.filter((action) => action.severity === "red").length;
+    }
+
+    function renderTruckingActionQueue(show) {
+      if (!show.truckingSync?.summary) return "";
+
+      const actions = buildTruckingActionQueue(show);
+      const urgentCount = actions.filter((action) => action.severity === "red").length;
+      const needsAttentionCount = actions.filter((action) => action.severity === "magenta").length;
+
+      const items = actions.map((item) => {
+        return `
+          <div class="action-item">
+            <div class="action-top">
+              <div class="action-title">${escapeHtml(item.title)}</div>
+              <span class="pill severity-${escapeHtml(item.severity)}">${escapeHtml(item.severity.toUpperCase())}</span>
+            </div>
+            <div class="action-meta"><strong>Owner:</strong> ${escapeHtml(item.owner)}</div>
+            <div class="action-meta"><strong>Action:</strong> ${escapeHtml(item.action)}</div>
+            <div class="action-meta"><strong>Why it matters:</strong> ${escapeHtml(item.why)}</div>
+          </div>
+        `;
+      }).join("");
+
+      return `
+        <div class="action-queue-panel">
+          <h3>Trucking Action Queue</h3>
+          <div>
+            <span class="pill ${urgentCount ? "red" : needsAttentionCount ? "magenta" : "green"}">
+              ${escapeHtml(urgentCount)} urgent · ${escapeHtml(needsAttentionCount)} needs attention
+            </span>
+          </div>
+          <div class="action-list">${items}</div>
+        </div>
+      `;
+    }
+
+    function renderTruckingPanel(show) {
+      if (show.truckingQuerying) {
+        return `
+          <div class="trucking-panel">
+            <h3>Trucking Sync</h3>
+            <div class="flex-asking">
+              <span class="flex-spinner"></span>
+              <span>Reading Weekly Runs…</span>
+            </div>
+          </div>
+        `;
+      }
+
+      const data = show.truckingSync;
+      if (!data) return "";
+
+      if (data.error) {
+        return `
+          <div class="trucking-panel">
+            <h3>Trucking Sync</h3>
+            <div class="value error">${escapeHtml(data.error)}</div>
+          </div>
+        `;
+      }
+
+      const summary = data.summary || {};
+      const rows = Array.isArray(data.safeRows) ? data.safeRows : [];
+
+      const findingItems = (summary.findings || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      const actionItems = (summary.actions || [])
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join("");
+
+      const rowHtml = rows.slice(0, 12).map((row) => {
+        return `
+          <tr>
+            <td>${escapeHtml(row.quote)}</td>
+            <td>${escapeHtml(row.date)}</td>
+            <td>${escapeHtml(row.when)}</td>
+            <td>${escapeHtml(row.runName)}</td>
+            <td>${escapeHtml(displayDriver(row))}</td>
+            <td>${escapeHtml(row.truck || "TBD")}</td>
+            <td>${escapeHtml(row.trailer || "TBD")}</td>
+            <td>${escapeHtml(yesNo(row.infoSent))}</td>
+            <td>${escapeHtml(yesNo(row.lpoSent))}</td>
+            <td>${escapeHtml(row.notes || "")}</td>
+          </tr>
+        `;
+      }).join("");
+
+      return `
+        <div class="trucking-panel">
+          <h3>Phase 2 Trucking Summary</h3>
+          <div>
+            <span class="pill ${statusClass(summary.status)}">${escapeHtml(summary.status || "UNKNOWN")}</span>
+            <span class="pill cyan">${escapeHtml(data.source || "trucking")}</span>
+            ${data.usedFallback ? '<span class="pill yellow">Fallback data</span>' : ''}
+          </div>
+          ${data.usedFallback ? `<div class="value muted">Live sheet read failed locally: ${escapeHtml(data.fallbackReason || "unknown reason")}</div>` : ''}
+          ${renderTruckingConfidenceScore(data, show)}
+
+          <div class="value muted">Plain-English signal: do we have runs, drivers/trucks, paperwork, and unresolved maybe-truck items?</div>
+
+          <div class="trucking-grid">
+            <div class="trucking-stat">
+              <div class="k">Runs Found</div>
+              <div class="v">${escapeHtml(summary.rowsFound || 0)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">Quotes Matched</div>
+              <div class="v">${escapeHtml((summary.quoteNumbersMatched || []).length)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">Info Not Sent</div>
+              <div class="v">${escapeHtml(summary.infoSentFalse || 0)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">LPO Not Sent</div>
+              <div class="v">${escapeHtml(summary.lpoSentFalse || 0)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">Driver Confirmed</div>
+              <div class="v">${escapeHtml(summary.driverConfirmedTrue || 0)} / ${escapeHtml(summary.driverConfirmedFalse || 0)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">Maybe Truck</div>
+              <div class="v">${escapeHtml(summary.maybeTruckRows || 0)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">NEED DRIVER</div>
+              <div class="v">${escapeHtml(summary.needDriverRows || 0)}</div>
+            </div>
+            <div class="trucking-stat">
+              <div class="k">Dates</div>
+              <div class="v">${escapeHtml((summary.dates || []).join(", ") || "TBD")}</div>
+            </div>
+          </div>
+
+          <div class="label">CUE Trucking Finding</div>
+          <ul>${findingItems || "<li>No trucking findings yet.</li>"}</ul>
+
+          <div class="label">Recommended next moves</div>
+          <ul>${actionItems || "<li>No trucking action needed yet.</li>"}</ul>
+
+          <details class="raw-flex-details">
+            <summary>Show trucking rows</summary>
+            <div class="raw-flex-inner">
+              <table class="trucking-row-table">
+                <thead>
+                  <tr>
+                    <th>Quote</th>
+                    <th>Date</th>
+                    <th>When</th>
+                    <th>Run</th>
+                    <th>Driver</th>
+                    <th>Truck</th>
+                    <th>Trailer</th>
+                    <th>Info</th>
+                    <th>LPO</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>${rowHtml}</tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      `;
+    }
+
+    async function queryTruckingForShow(showId) {
+      const index = activeShows.findIndex((show) => show.id === showId);
+      if (index < 0) return;
+
+      const show = activeShows[index];
+      const quoteNumbers = getPulledQuoteNumbers(show);
+
+      activeShows[index] = {
+        ...activeShows[index],
+        truckingQuerying: true
+      };
+
+      statusEl.textContent = `Querying Trucking for ${show.name}...`;
+      rerenderAll();
+
+      try {
+        const response = await fetch("/api/active-shows/trucking-sync", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            showId: show.id,
+            showName: show.name,
+            quoteNumbers
+          })
+        });
+
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || "Trucking sync returned not ok");
+        }
+
+        activeShows[index] = {
+          ...activeShows[index],
+          truckingQuerying: false,
+          truckingSync: data,
+          trucking: data.comparison?.status || data.summary?.status || activeShows[index].trucking
+        };
+
+        statusEl.textContent = `Trucking sync complete for ${show.name}: ${data.summary?.rowsFound || 0} rows found.`;
+        rerenderAll();
+      } catch (error) {
+        activeShows[index] = {
+          ...activeShows[index],
+          truckingQuerying: false,
+          truckingSync: {
+            error: error.message
+          }
+        };
+
+        statusEl.textContent = "Error querying trucking: " + error.message;
+        rerenderAll();
+      }
+    }
+
+    function renderShowDetail(show) {
+      const hints = getFlexHints(show);
+      const hintText = hints.length ? hints.join("; ") : "No FLEX hint yet";
+      const score = getShowScore(show);
+      const scoreHtml = score != null ? renderReadinessScore({ score }) : "";
+      const firstPulled = getFirstPulledFindingData(show);
+
+      modalHeaderEl.innerHTML = `
+        <div class="modal-title">
+          <h2>${escapeHtml(show.name || "Unnamed Show")}</h2>
+          <div>${escapeHtml(show.timing || "Timing TBD")} · ${escapeHtml(show.priority || "Priority TBD")}</div>
+          <div>
+            <span class="pill ${statusClass(show.readinessStatus)}">${escapeHtml(show.readinessStatus || "UNKNOWN")}</span>
+            <span class="pill cyan">${escapeHtml(show.changeSignal || "No recent change")}</span>
+            ${isShowAskingFlex(show) ? '<span class="pill cyan">Asking FLEX…</span>' : ''}
+          </div>
+          ${renderKeyInfoRows(show, "modal")}
+        </div>
+        <div class="modal-actions">
+          <button class="secondary" onclick="closeShowDetail()">Close</button>
+        </div>
+      `;
+
+      modalBodyEl.innerHTML = `
+        <div class="detail-panel">
+          <h3>Show Snapshot</h3>
+
+          ${scoreHtml}
+          ${renderKeyInfoRows(show, "card")}
+          ${renderFlexAskingIndicator(show)}
+
+          <div class="label">Top Issue</div>
+          <div class="value">${escapeHtml(show.topIssue || "")}</div>
+
+          <div class="label">Next Action</div>
+          <div class="value">${escapeHtml(show.nextAction || "")}</div>
+
+          <div class="label">FLEX Signal</div>
+          <div class="value">${escapeHtml(show.flexSignal || "")}</div>
+
+          <div class="label">Trucking Signal</div>
+          <div class="value">${escapeHtml(show.trucking || "")}</div>
+
+          <div class="label">FLEX Hints / Workstreams</div>
+          <div class="value muted">${escapeHtml(hintText)}</div>
+          ${renderWorkstreamChips(show)}
+
+          <div class="label">Actions</div>
+          <div>
+            ${flexButtonsForShow(show)}
+            <button class="small trucking-action" onclick="event.stopPropagation(); queryTruckingForShow('${show.id}')">Query Trucking</button>
+          </div>
+        </div>
+
+        <div>
+          ${renderShowRollup(show)}
+          ${renderShowLevelFinding(show)}
+          ${renderTruckingPanel(show)}
+          ${renderTruckingActionQueue(show)}
+          ${renderFlexVsTruckingComparison(show)}
+          ${renderDateComparison(show)}
+          ${firstPulled ? renderCueReadinessFinding(show, firstPulled) : ""}
+          ${renderRawFlexDetails(show)}
+        </div>
+      `;
+    }
+
+    function openShowDetail(showId) {
+      selectedShowId = showId;
+      const show = activeShows.find((item) => item.id === showId);
+      if (!show) return;
+
+      renderShowDetail(show);
+      modalBackdropEl.classList.add("open");
+      showModalEl.classList.add("open");
+    }
+
+    function closeShowDetail() {
+      selectedShowId = null;
+      modalBackdropEl.classList.remove("open");
+      showModalEl.classList.remove("open");
+    }
+
+    function rerenderAll() {
+      renderShows(activeShows);
+
+      if (selectedShowId) {
+        const show = activeShows.find((item) => item.id === selectedShowId);
+        if (show) renderShowDetail(show);
+      }
+    }
+
+    showsEl.addEventListener("click", (event) => {
+      const queryButton = event.target.closest("[data-query-flex]");
+      if (queryButton) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const showId = queryButton.getAttribute("data-query-flex");
+        queryFlexForShow(showId);
+        return;
+      }
+
+      const card = event.target.closest("[data-open-show]");
+      if (card) {
+        const showId = card.getAttribute("data-open-show");
+        openShowDetail(showId);
+      }
+    });
+
+    async function loadShows() {
+      statusEl.textContent = "Loading active shows...";
+
+      try {
+        const response = await fetch("/api/active-shows");
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || "API returned not ok");
+        }
+
+        activeShows = enrichShowsWithFlexHints(data.shows || []);
+        renderShows(activeShows);
+      } catch (error) {
+        statusEl.textContent = "Error loading active shows: " + error.message;
+        console.error(error);
+      }
+    }
+
+    async function syncShows() {
+      statusEl.textContent = "Syncing...";
+
+      try {
+        const response = await fetch("/api/active-shows/sync", {
+          method: "POST"
+        });
+
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || "API returned not ok");
+        }
+
+        activeShows = enrichShowsWithFlexHints(data.shows || []);
+        renderShows(activeShows);
+      } catch (error) {
+        statusEl.textContent = "Error syncing: " + error.message;
+        console.error(error);
+      }
+    }
+
+    async function queryFlexForShow(showId) {
+      console.log("[Active Shows] Query FLEX clicked:", showId);
+      const show = activeShows.find((item) => item.id === showId);
+      if (!show) {
+        statusEl.textContent = `Could not find show: ${showId}`;
+        return;
+      }
+
+      const hints = getFlexHints(show);
+      if (!hints.length) {
+        statusEl.textContent = `No FLEX hints available for ${show.name}.`;
+        return;
+      }
+
+      statusEl.textContent = `Querying FLEX for ${show.name}...`;
+
+      const queryIndex = activeShows.findIndex((item) => item.id === showId);
+      if (queryIndex >= 0) {
+        activeShows[queryIndex] = {
+          ...activeShows[queryIndex],
+          flexQuerying: true
+        };
+        rerenderAll();
+      }
+
+      for (const documentNumber of hints) {
+        const currentShow = activeShows.find((item) => item.id === showId);
+        const alreadyPulled = currentShow?.flexPulls?.[documentNumber]?.data;
+
+        if (!alreadyPulled) {
+          await pullFlexForShow(showId, documentNumber, { keepStatus: true });
+        }
+      }
+
+      const finalIndex = activeShows.findIndex((item) => item.id === showId);
+      if (finalIndex >= 0) {
+        activeShows[finalIndex] = {
+          ...activeShows[finalIndex],
+          flexQuerying: false
+        };
+      }
+
+      const finalShow = activeShows.find((item) => item.id === showId);
+      const pulled = getPulledFlexData(finalShow).length;
+
+      statusEl.textContent = `FLEX query complete for ${finalShow.name}: ${pulled} of ${hints.length} quote${hints.length === 1 ? "" : "s"} pulled.`;
+
+      rerenderAll();
+    }
+
+    async function pullFlexForShow(showId, documentNumber, options = {}) {
+      const index = activeShows.findIndex((show) => show.id === showId);
+      if (index < 0) return;
+
+      activeShows[index] = {
+        ...activeShows[index],
+        flexPulls: {
+          ...(activeShows[index].flexPulls || {}),
+          [documentNumber]: {
+            loading: true
+          }
+        }
+      };
+
+      rerenderAll();
+
+      try {
+        const response = await fetch(
+          `/api/active-shows/test-flex-match?documentNumber=${encodeURIComponent(documentNumber)}`
+        );
+
+        const data = await response.json();
+
+        if (!data.ok) {
+          throw new Error(data.error || "FLEX pull returned not ok");
+        }
+
+        const phaseOneRecommendation = buildPhaseOneStatusRecommendation(activeShows[index], data);
+        const readinessFinding = buildCueReadinessFinding(activeShows[index], data);
+
+        activeShows[index] = {
+          ...activeShows[index],
+          flexPulls: {
+            ...(activeShows[index].flexPulls || {}),
+            [documentNumber]: {
+              loading: false,
+              data
+            }
+          },
+          readinessScore: phaseOneRecommendation.score,
+          flexSignal: `FLEX confirmed ${data.showContext?.documentNumber || documentNumber}: ${data.showContext?.showName || "Matched FLEX record"}`,
+          nextAction: readinessFinding.actions[0] || activeShows[index].nextAction
+        };
+
+        if (showId === "production-design-associates") {
+          activeShows[index].readinessStatus = "RED - FLEX/date conflict confirmed";
+          activeShows[index].topIssue = "FLEX confirms planned Jul 2–Jul 8 with load-in Jul 6, while folder/index date suggests 7/26.";
+        }
+
+        if (!options.keepStatus) {
+          statusEl.textContent = `FLEX pull complete for ${activeShows[index].name} / ${documentNumber}.`;
+        }
+        rerenderAll();
+      } catch (error) {
+        activeShows[index] = {
+          ...activeShows[index],
+          flexPulls: {
+            ...(activeShows[index].flexPulls || {}),
+            [documentNumber]: {
+              loading: false,
+              error: error.message
+            }
+          }
+        };
+
+        if (!options.keepStatus) {
+          statusEl.textContent = "Error pulling FLEX: " + error.message;
+        } else {
+          console.error("Error pulling FLEX:", documentNumber, error);
+        }
+        rerenderAll();
+      }
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeShowDetail();
+      }
+    });
+
+    loadShows();
+  </script>
+</body>
+</html>
