@@ -5790,9 +5790,182 @@ const server = http.createServer(async (req, res) => {
       };
     }
 
+    const ACTIVE_SHOWS_INDEX_SHEET_ID =
+      process.env.ACTIVE_SHOWS_INDEX_SHEET_ID ||
+      "1U0rotUCZ2o5gUMkZb5hDfIzALA1SAQOmsVXYJJ9-ajc";
+
+    const ACTIVE_SHOWS_INDEX_SHEET_NAME =
+      process.env.ACTIVE_SHOWS_INDEX_SHEET_NAME || "Active Shows Index";
+
+    function activeShowsSlug(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "active-show";
+    }
+
+    function normalizeActiveShowsHeader(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+    }
+
+    function getActiveShowsCell(rowObject, names) {
+      for (const name of names) {
+        const key = normalizeActiveShowsHeader(name);
+
+        if (rowObject[key] != null && String(rowObject[key]).trim() !== "") {
+          return String(rowObject[key]).trim();
+        }
+      }
+
+      return "";
+    }
+
+    function activeShowsIndexRowsToObjects(csvRows) {
+      if (!Array.isArray(csvRows) || csvRows.length < 2) return [];
+
+      const headerRowIndex = csvRows.findIndex((row) =>
+        row.some((cell) => /show\s*\/\s*project|event date|technical coverage|risk/i.test(String(cell || "")))
+      );
+
+      if (headerRowIndex < 0) return [];
+
+      const headers = csvRows[headerRowIndex].map((header) => String(header || "").trim());
+      const dataRows = csvRows.slice(headerRowIndex + 1);
+
+      return dataRows
+        .map((row) => {
+          const object = {};
+
+          headers.forEach((header, index) => {
+            const key = normalizeActiveShowsHeader(header);
+            if (!key) return;
+            object[key] = row[index] || "";
+          });
+
+          return object;
+        })
+        .filter((rowObject) =>
+          getActiveShowsCell(rowObject, ["Show / Project", "Show", "Project"])
+        );
+    }
+
+    function mapActiveShowsIndexRow(rowObject) {
+      const name = getActiveShowsCell(rowObject, ["Show / Project", "Show", "Project"]);
+      const eventDate = getActiveShowsCell(rowObject, ["Event Date"]);
+      const daysOut = getActiveShowsCell(rowObject, ["Days Out"]);
+      const status = getActiveShowsCell(rowObject, ["Status"]);
+      const client = getActiveShowsCell(rowObject, ["Client / Account", "Client", "Account"]);
+      const showFolder = getActiveShowsCell(rowObject, ["Show Folder"]);
+      const keyDocs = getActiveShowsCell(rowObject, ["Key Docs / Subfolders Found", "Key Docs"]);
+      const technicalCoverage = getActiveShowsCell(rowObject, ["Technical Coverage"]);
+      const risk = getActiveShowsCell(rowObject, ["Risk / Missing Items", "Risk", "Missing Items"]);
+      const priority = getActiveShowsCell(rowObject, ["Priority"]);
+      const lastMapped = getActiveShowsCell(rowObject, ["Last Mapped"]);
+
+      return {
+        id: activeShowsSlug(name),
+        name,
+        timing: [eventDate, daysOut ? `${daysOut} days out` : ""].filter(Boolean).join(" / "),
+        priority: priority || "Medium",
+        readinessStatus: status || "Active",
+        changeSignal: lastMapped ? `Drive Index - last mapped ${lastMapped}` : "Drive Index",
+        topIssue: risk || "No risk/missing-items note mapped in Active Shows Index.",
+        nextAction: risk || "Review current Active Shows Index row and confirm owner / readiness status.",
+        flexSignal: [
+          keyDocs,
+          technicalCoverage,
+          risk,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        trucking: risk || technicalCoverage || "No trucking note mapped in Active Shows Index row.",
+        activeShowsIndex: {
+          eventDate: eventDate || null,
+          daysOut: daysOut || null,
+          client: client || null,
+          showFolder: showFolder || null,
+          keyDocs: keyDocs || null,
+          technicalCoverage: technicalCoverage || null,
+          risk: risk || null,
+          lastMapped: lastMapped || null,
+        },
+      };
+    }
+
+    async function fetchActiveShowsFromIndexSheet() {
+      const sheetName = encodeURIComponent(ACTIVE_SHOWS_INDEX_SHEET_NAME);
+      const urls = [
+        `https://docs.google.com/spreadsheets/d/${ACTIVE_SHOWS_INDEX_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${sheetName}`,
+        `https://docs.google.com/spreadsheets/d/${ACTIVE_SHOWS_INDEX_SHEET_ID}/export?format=csv&sheet=${sheetName}`,
+      ];
+
+      let lastError = null;
+
+      for (const csvUrl of urls) {
+        try {
+          console.log("[ACTIVE SHOWS INDEX]", ACTIVE_SHOWS_INDEX_SHEET_NAME);
+
+          const response = await fetch(csvUrl);
+          const text = await response.text();
+
+          if (!response.ok) {
+            throw new Error(`Active Shows Index CSV request failed: ${response.status} ${response.statusText}`);
+          }
+
+          if (/<!doctype html>|<html/i.test(text)) {
+            throw new Error("Active Shows Index returned HTML instead of CSV. The sheet may not be readable by this server.");
+          }
+
+          const csvRows = parseCsvRows(text);
+          const rowObjects = activeShowsIndexRowsToObjects(csvRows);
+          const shows = rowObjects.map(mapActiveShowsIndexRow);
+
+          if (!shows.length) {
+            throw new Error("No parseable Active Shows Index rows found in CSV.");
+          }
+
+          return {
+            source: "Active Shows Index Google Sheet",
+            usedFallback: false,
+            sheetId: ACTIVE_SHOWS_INDEX_SHEET_ID,
+            sheetName: ACTIVE_SHOWS_INDEX_SHEET_NAME,
+            rowCount: shows.length,
+            shows,
+          };
+        } catch (error) {
+          lastError = error;
+          console.warn("[ACTIVE SHOWS INDEX WARNING]", error.message);
+        }
+      }
+
+      throw lastError || new Error("Unable to fetch Active Shows Index CSV.");
+    }
+
+    async function getActiveShowsRowsWithFallback() {
+      try {
+        return await fetchActiveShowsFromIndexSheet();
+      } catch (error) {
+        console.warn("[ACTIVE SHOWS INDEX FALLBACK]", error.message);
+
+        return {
+          source: "active-shows-safe-mock",
+          usedFallback: true,
+          fallbackReason: error.message,
+          sheetId: ACTIVE_SHOWS_INDEX_SHEET_ID,
+          sheetName: ACTIVE_SHOWS_INDEX_SHEET_NAME,
+          rowCount: mockActiveShows.length,
+          shows: mockActiveShows,
+        };
+      }
+    }
+
     async function buildActiveShowsResponse(sourceLabel) {
+      const activeShowsSource = await getActiveShowsRowsWithFallback();
       const shows = await Promise.all(
-        mockActiveShows.map((show) => enrichActiveShowWithFlex(show))
+        activeShowsSource.shows.map((show) => enrichActiveShowWithFlex(show))
       );
 
       const flexSummary = {
@@ -5806,10 +5979,18 @@ const server = http.createServer(async (req, res) => {
       return {
         ok: true,
         source: sourceLabel,
+        activeShowsSource: activeShowsSource.source,
+        activeShowsSourceUsedFallback: activeShowsSource.usedFallback,
+        activeShowsSourceFallbackReason: activeShowsSource.fallbackReason || null,
+        activeShowsIndex: {
+          sheetId: activeShowsSource.sheetId,
+          sheetName: activeShowsSource.sheetName,
+          rowCount: activeShowsSource.rowCount,
+        },
         flexAuthority: "live",
         generatedAt: new Date().toISOString(),
         message:
-          "Active Shows now enriches rows with live FLEX search, header fetch, and line-item pull for every FLEX/document number found on each row.",
+          "Active Shows now reads rows from the Active Shows Index when available, then enriches every FLEX/document number found on each row with live FLEX search, header fetch, and line-item pull.",
         flexSummary,
         shows,
       };
