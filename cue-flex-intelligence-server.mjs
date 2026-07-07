@@ -5544,39 +5544,206 @@ const server = http.createServer(async (req, res) => {
       },
     ];
     
+    async function enrichActiveShowWithFlex(show) {
+      const textToScan = [
+        show.id,
+        show.name,
+        show.timing,
+        show.priority,
+        show.readinessStatus,
+        show.changeSignal,
+        show.topIssue,
+        show.nextAction,
+        show.flexSignal,
+        show.trucking,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const quoteMatches = textToScan.match(/\b\d{2}-\d{3,6}\b/g) || [];
+      const documentNumbers = [...new Set(quoteMatches.map((item) => item.trim()))];
+      const documentNumber = documentNumbers[0] || "";
+      const lastPullAt = new Date().toISOString();
+
+      if (!documentNumber) {
+        return {
+          ...show,
+          flex: {
+            status: "Missing",
+            approvalNeeded: true,
+            documentNumber: null,
+            documentNumbers,
+            elementId: null,
+            showName: null,
+            client: null,
+            venue: null,
+            plannedStartDate: null,
+            plannedEndDate: null,
+            loadInDate: null,
+            loadOutDate: null,
+            soldDepartments: [],
+            totals: null,
+            counts: null,
+            lastPullAt,
+            message:
+              "No FLEX document number found in this Active Shows row. Needs direct FLEX ID, command sheet, quote document, or PM approval.",
+          },
+          flexSignal:
+            "FLEX Missing - no direct document number found. Trucking, folder, and Drive evidence remain hints only.",
+        };
+      }
+
+      try {
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          return {
+            ...show,
+            flex: {
+              status: "Missing",
+              approvalNeeded: true,
+              documentNumber,
+              documentNumbers,
+              elementId: null,
+              showName: null,
+              client: null,
+              venue: null,
+              plannedStartDate: null,
+              plannedEndDate: null,
+              loadInDate: null,
+              loadOutDate: null,
+              soldDepartments: [],
+              totals: null,
+              counts: null,
+              lastPullAt,
+              quoteLookup,
+              message: `No FLEX quote found for ${documentNumber}.`,
+            },
+            flexSignal: `FLEX Missing - ${documentNumber} did not resolve to a FLEX element. Treat as trucking / Drive hint only.`,
+          };
+        }
+
+        const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+
+        const soldDepartments = Array.from(
+          new Set(
+            [
+              ...(detail.sections || []).map((section) => section.name),
+              ...((detail.summary && detail.summary.lineItems) || []).map(
+                (item) => item.name
+              ),
+            ]
+              .filter(Boolean)
+              .map((item) => String(item).trim())
+          )
+        );
+
+        const flexVerifiedSignal = `FLEX Verified - ${documentNumber} / ${
+          quoteLookup.elementId
+        } / sold scope: ${
+          soldDepartments.join(", ") || "No departments found"
+        }.`;
+
+        return {
+          ...show,
+          flex: {
+            status: "Verified",
+            approvalNeeded: false,
+            documentNumber,
+            documentNumbers,
+            elementId: quoteLookup.elementId,
+            showName:
+              detail.showContext?.showName || quoteLookup.name || show.name,
+            client: detail.showContext?.client || null,
+            venue: detail.showContext?.venue || null,
+            plannedStartDate: detail.showContext?.plannedStartDate || null,
+            plannedEndDate: detail.showContext?.plannedEndDate || null,
+            loadInDate: detail.showContext?.loadInDate || null,
+            loadOutDate: detail.showContext?.loadOutDate || null,
+            soldDepartments,
+            totals: detail.summary?.totals || null,
+            financials: detail.summary?.financials || null,
+            counts: detail.counts || null,
+            lastPullAt,
+            quoteLookup,
+          },
+          flexSignal: flexVerifiedSignal,
+        };
+      } catch (error) {
+        return {
+          ...show,
+          flex: {
+            status: "Error",
+            approvalNeeded: true,
+            documentNumber,
+            documentNumbers,
+            elementId: null,
+            showName: null,
+            client: null,
+            venue: null,
+            plannedStartDate: null,
+            plannedEndDate: null,
+            loadInDate: null,
+            loadOutDate: null,
+            soldDepartments: [],
+            totals: null,
+            counts: null,
+            lastPullAt,
+            message: error.message || "FLEX enrichment failed.",
+          },
+          flexSignal: `FLEX Error - attempted ${documentNumber}, but pull failed: ${
+            error.message || "unknown error"
+          }`,
+        };
+      }
+    }
+
+    async function buildActiveShowsResponse(sourceLabel) {
+      const shows = await Promise.all(
+        mockActiveShows.map((show) => enrichActiveShowWithFlex(show))
+      );
+
+      const flexSummary = {
+        verified: shows.filter((show) => show.flex?.status === "Verified").length,
+        missing: shows.filter((show) => show.flex?.status === "Missing").length,
+        error: shows.filter((show) => show.flex?.status === "Error").length,
+        approvalNeeded: shows.filter((show) => show.flex?.approvalNeeded).length,
+      };
+
+      return {
+        ok: true,
+        source: sourceLabel,
+        flexAuthority: "live",
+        generatedAt: new Date().toISOString(),
+        message:
+          "Active Shows now enriches rows with live FLEX search, header fetch, and line-item pull when a FLEX/document number is available.",
+        flexSummary,
+        shows,
+      };
+    }
+
     if (req.method === "GET" && url.pathname === "/api/active-shows") {
+      const payload = await buildActiveShowsResponse("active-shows-flex-live");
+
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
       });
-    
-      res.end(
-        JSON.stringify({
-          ok: true,
-          source: "mock",
-          shows: mockActiveShows,
-        })
-      );
-    
+
+      res.end(JSON.stringify(payload));
       return;
     }
-    
+
     if (req.method === "POST" && url.pathname === "/api/active-shows/sync") {
+      const payload = await buildActiveShowsResponse("active-shows-flex-sync");
+
       res.writeHead(200, {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
       });
-    
-      res.end(
-        JSON.stringify({
-          ok: true,
-          source: "mock-sync",
-          message:
-            "Mock sync complete. Next step is wiring this to Ask FLEX + FLEX Intake Engine.",
-          shows: mockActiveShows,
-        })
-      );
-    
+
+      res.end(JSON.stringify(payload));
       return;
     }
 
