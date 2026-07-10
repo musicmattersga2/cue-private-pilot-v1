@@ -1,0 +1,1433 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ask FLEX · CUE</title>
+  <style>
+    :root {
+      --bg: #030706;
+      --panel: rgba(9, 18, 15, 0.94);
+      --panel-2: rgba(255, 255, 255, 0.045);
+      --border: rgba(128, 255, 153, 0.16);
+      --text: #f4fff7;
+      --muted: #9bb5aa;
+      --green: #43d154;
+      --cyan: #00d5e8;
+      --magenta: #ff4fd8;
+      --danger: #ff6b6b;
+      --warning: #ffd166;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 16% 12%, rgba(67, 209, 84, 0.13), transparent 30%),
+        radial-gradient(circle at 84% 20%, rgba(0, 213, 232, 0.11), transparent 28%),
+        radial-gradient(circle at 58% 95%, rgba(255, 79, 216, 0.08), transparent 34%),
+        var(--bg);
+    }
+
+    .shell {
+      width: min(1100px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 22px;
+      margin-bottom: 24px;
+    }
+
+    .brand {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      color: #071208;
+      background: var(--green);
+      font-weight: 950;
+      letter-spacing: -0.04em;
+      box-shadow: 0 0 40px rgba(67, 209, 84, 0.18);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 52px);
+      line-height: 0.96;
+      letter-spacing: -0.055em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin-top: 8px;
+      font-size: 15px;
+    }
+
+    .status {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 9px 13px;
+      color: #c8fbd2;
+      background: rgba(67, 209, 84, 0.08);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(13, 27, 22, 0.94), rgba(5, 10, 8, 0.96));
+      box-shadow: 0 18px 80px rgba(0, 0, 0, 0.26);
+      padding: 24px;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .dash-card {
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 24px;
+      background: rgba(255,255,255,0.04);
+      padding: 18px;
+    }
+
+    .dash-card h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .dash-card p {
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .prompt-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .prompt-group {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      padding: 12px;
+      background: rgba(0,0,0,0.12);
+    }
+
+    .prompt-group-title {
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      font-weight: 900;
+      margin-bottom: 8px;
+    }
+
+    .prompt-link {
+      display: block;
+      color: var(--text);
+      border: 0;
+      background: transparent;
+      padding: 7px 0;
+      min-height: auto;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: left;
+      width: 100%;
+      cursor: pointer;
+    }
+
+    .prompt-link:hover {
+      color: var(--green);
+    }
+
+    .recent-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .recent-item {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.035);
+      color: var(--muted);
+      padding: 10px 11px;
+      min-height: auto;
+      font-size: 13px;
+      text-align: left;
+      width: 100%;
+    }
+
+    .recent-item:hover {
+      color: var(--text);
+      border-color: rgba(67, 209, 84, 0.28);
+    }
+
+    .filter-bar {
+      margin: 16px 0 14px;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 22px;
+      background: rgba(255,255,255,0.035);
+      padding: 14px;
+    }
+
+    .filter-bar-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .filter-title {
+      color: var(--cyan);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+      font-weight: 900;
+    }
+
+    .clear-filters {
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      border-radius: 999px;
+      min-height: auto;
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+
+    .clear-filters:hover {
+      color: var(--text);
+      border-color: rgba(67, 209, 84, 0.30);
+    }
+
+    .filter-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .filter-toggle {
+      border: 1px solid rgba(255,255,255,0.11);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      border-radius: 999px;
+      min-height: auto;
+      padding: 9px 11px;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .filter-toggle.active {
+      background: rgba(67, 209, 84, 0.16);
+      border-color: rgba(67, 209, 84, 0.48);
+      color: var(--text);
+      box-shadow: 0 0 0 3px rgba(67, 209, 84, 0.06);
+    }
+
+    .filter-preview {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      margin-top: 10px;
+    }
+
+    .question-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 86px;
+      resize: vertical;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--text);
+      font-size: 22px;
+      line-height: 1.35;
+      padding: 18px;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: rgba(67, 209, 84, 0.68);
+      box-shadow: 0 0 0 4px rgba(67, 209, 84, 0.10);
+    }
+
+    button {
+      border: 0;
+      border-radius: 18px;
+      background: var(--green);
+      color: #041006;
+      font-weight: 850;
+      font-size: 16px;
+      padding: 18px 22px;
+      cursor: pointer;
+      min-height: 62px;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .examples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .chip {
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.045);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 11px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .chip:hover {
+      color: var(--text);
+      border-color: rgba(67, 209, 84, 0.36);
+    }
+
+    .result {
+      margin-top: 18px;
+      display: none;
+    }
+
+    .result.visible {
+      display: block;
+    }
+
+    .answer-card {
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 24px;
+      background: rgba(255, 255, 255, 0.045);
+      padding: 22px;
+    }
+
+    .eyebrow {
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .answer {
+      font-size: 26px;
+      line-height: 1.18;
+      letter-spacing: -0.03em;
+      margin-bottom: 18px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .meta span {
+      color: var(--muted);
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+
+    .section {
+      margin-top: 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 16px;
+    }
+
+    .section h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .match-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .match-card {
+      width: 100%;
+      text-align: left;
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 20px;
+      background: rgba(255,255,255,0.045);
+      color: var(--text);
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+      cursor: pointer;
+      min-height: auto;
+    }
+
+    .hidden-match {
+      display: none;
+    }
+
+    .show-more {
+      margin-top: 14px;
+      width: 100%;
+      min-height: 52px;
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.13);
+    }
+
+    .show-more:hover {
+      border-color: rgba(67, 209, 84, 0.38);
+    }
+
+    .match-card:hover {
+      border-color: rgba(67, 209, 84, 0.42);
+      box-shadow: 0 0 0 4px rgba(67, 209, 84, 0.08);
+    }
+
+    .match-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .quote-pill {
+      color: #061008;
+      background: var(--green);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    .match-name {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      line-height: 1.2;
+    }
+
+    .match-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .match-meta span {
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      border-radius: 999px;
+      padding: 6px 9px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 10px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 16px;
+    }
+
+    th, td {
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      padding: 11px 10px;
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    td.num, th.num {
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .warning {
+      margin-top: 14px;
+      color: #ffe6a3;
+      background: rgba(255, 209, 102, 0.08);
+      border: 1px solid rgba(255, 209, 102, 0.18);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+
+    .error {
+      color: #ffd0d0;
+      background: rgba(255, 107, 107, 0.08);
+      border: 1px solid rgba(255, 107, 107, 0.18);
+      border-radius: 16px;
+      padding: 14px;
+      margin-top: 16px;
+      display: none;
+      white-space: pre-wrap;
+    }
+
+    .error.visible { display: block; }
+
+    details {
+      margin-top: 16px;
+      color: var(--muted);
+    }
+
+    pre {
+      overflow: auto;
+      max-height: 360px;
+      background: rgba(0,0,0,0.28);
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 14px;
+      border-radius: 16px;
+      color: #d6ffe1;
+      font-size: 12px;
+    }
+
+    @media (max-width: 740px) {
+      header, .question-row, .dashboard {
+        grid-template-columns: 1fr;
+        display: grid;
+      }
+
+      .prompt-groups {
+        grid-template-columns: 1fr;
+      }
+
+      button {
+        width: 100%;
+      }
+
+      .answer {
+        font-size: 22px;
+      }
+
+      .match-top {
+        display: grid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark">C</div>
+        <div>
+          <h1>Ask FLEX</h1>
+          <div class="subtitle">Plain-English lookup for quotes, labor, inventory, totals, and transportation.</div>
+        </div>
+      </div>
+      <div class="status">CUE Intelligence · Live FLEX</div>
+    </header>
+
+    <section class="panel">
+      <div class="dashboard">
+        <div class="dash-card">
+          <h2>Ask FLEX Command Center</h2>
+          <p>Search quotes by number or name, filter noisy results, inspect money, sections, gear, dates, labor, and compare quotes.</p>
+
+          <div class="prompt-groups">
+            <div class="prompt-group">
+              <div class="prompt-group-title">Search</div>
+              <button class="prompt-link" data-q="Show only 2026 NMR quotes and don't show invoices">2026 NMR quotes, no invoices</button>
+              <button class="prompt-link" data-q="Show only current NMR quotes">Current NMR quotes</button>
+              <button class="prompt-link" data-q="Search NMR Assembly World Cup 2026">NMR Assembly World Cup</button>
+            </div>
+            <div class="prompt-group">
+              <div class="prompt-group-title">Money</div>
+              <button class="prompt-link" data-q="Is 26-1747 paid?">Paid status</button>
+              <button class="prompt-link" data-q="What is the balance on 26-1747?">Balance due</button>
+              <button class="prompt-link" data-q="Why does the category subtotal not match the invoice total on 26-1747?">Subtotal vs invoice</button>
+            </div>
+            <div class="prompt-group">
+              <div class="prompt-group-title">Ops</div>
+              <button class="prompt-link" data-q="Give me an operational summary of 26-1747">Operational summary</button>
+              <button class="prompt-link" data-q="What sections are on 26-1747?">Sections</button>
+              <button class="prompt-link" data-q="When is load in for 26-1747?">Load in</button>
+            </div>
+            <div class="prompt-group">
+              <div class="prompt-group-title">Gear</div>
+              <button class="prompt-link" data-q="What video LED panels are on 26-1747?">LED panels</button>
+              <button class="prompt-link" data-q="Does 26-1747 have VX1000s?">Specific item</button>
+              <button class="prompt-link" data-q="What truss is on 26-1747?">Truss</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-card">
+          <h2>Recent Searches</h2>
+          <p>Your last few prompts on this browser.</p>
+          <div id="recentList" class="recent-list"></div>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <div class="filter-bar-top">
+          <div>
+            <div class="filter-title">Search Filters</div>
+            <div class="filter-preview" id="filterPreview">No filters active.</div>
+          </div>
+          <button id="clearFilters" class="clear-filters" type="button">Clear</button>
+        </div>
+        <div class="filter-toggles">
+          <button class="filter-toggle" type="button" data-filter="year2026" data-phrase="2026">2026</button>
+          <button class="filter-toggle" type="button" data-filter="current" data-phrase="current">Current</button>
+          <button class="filter-toggle" type="button" data-filter="noInvoices" data-phrase="don't show invoices">No invoices</button>
+          <button class="filter-toggle" type="button" data-filter="quotesOnly" data-phrase="quotes only">Quotes only</button>
+          <button class="filter-toggle" type="button" data-filter="open" data-phrase="open balance">Open balance</button>
+          <button class="filter-toggle" type="button" data-filter="paid" data-phrase="paid">Paid</button>
+          <button class="filter-toggle" type="button" data-filter="revenue" data-phrase="revenue quote">Revenue > $0</button>
+          <button class="filter-toggle" type="button" data-filter="future" data-phrase="future">Future</button>
+        </div>
+      </div>
+
+      <div class="question-row">
+        <textarea id="question" spellcheck="true">Search NMR Assembly World Cup</textarea>
+        <button id="askButton">Ask FLEX</button>
+      </div>
+
+      <div class="examples">
+        <div class="chip" data-q="What labor is on 26-1747?">Labor on 26-1747</div>
+        <div class="chip" data-q="What inventory is on 26-1747?">Inventory on 26-1747</div>
+        <div class="chip" data-q="What transportation is on 26-1747?">Transportation on 26-1747</div>
+        <div class="chip" data-q="What is the total on 26-1747?">Total on 26-1747</div>
+        <div class="chip" data-q="What labor is on NMR World Cup?">Search by name</div>
+      </div>
+
+      <div id="error" class="error"></div>
+
+      <div id="result" class="result">
+        <div class="answer-card">
+          <div id="headline" class="eyebrow">Answer</div>
+          <div id="answer" class="answer"></div>
+          <div id="meta" class="meta"></div>
+          <div id="details"></div>
+          <div id="warnings"></div>
+
+          <details>
+            <summary>Raw response</summary>
+            <pre id="raw"></pre>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const questionEl = document.getElementById("question");
+    const askButton = document.getElementById("askButton");
+    const resultEl = document.getElementById("result");
+    const errorEl = document.getElementById("error");
+    const headlineEl = document.getElementById("headline");
+    const answerEl = document.getElementById("answer");
+    const metaEl = document.getElementById("meta");
+    const detailsEl = document.getElementById("details");
+    const warningsEl = document.getElementById("warnings");
+    const rawEl = document.getElementById("raw");
+
+    const filterPreviewEl = document.getElementById("filterPreview");
+    const clearFiltersButton = document.getElementById("clearFilters");
+    const activeFilters = new Set();
+
+    const filterLabels = {
+      year2026: "2026",
+      current: "Current",
+      noInvoices: "No invoices",
+      quotesOnly: "Quotes only",
+      open: "Open balance",
+      paid: "Paid",
+      revenue: "Revenue > $0",
+      future: "Future",
+    };
+
+    const filterPhrases = {
+      year2026: "2026",
+      current: "current",
+      noInvoices: "don't show invoices",
+      quotesOnly: "quotes only",
+      open: "open balance",
+      paid: "paid",
+      revenue: "revenue quote",
+      future: "future",
+    };
+
+    function updateFilterPreview() {
+      const labels = [...activeFilters].map((key) => filterLabels[key] || key);
+
+      if (filterPreviewEl) {
+        filterPreviewEl.textContent = labels.length
+          ? `Active: ${labels.join(" · ")}`
+          : "No filters active.";
+      }
+
+      for (const button of document.querySelectorAll(".filter-toggle")) {
+        button.classList.toggle("active", activeFilters.has(button.dataset.filter));
+      }
+    }
+
+    function buildQuestionWithActiveFilters(question) {
+      const base = String(question || "").trim();
+      const phrases = [...activeFilters]
+        .map((key) => filterPhrases[key])
+        .filter(Boolean);
+
+      if (!phrases.length) return base;
+
+      const lowerBase = base.toLowerCase();
+      const missingPhrases = phrases.filter(
+        (phrase) => !lowerBase.includes(String(phrase).toLowerCase())
+      );
+
+      if (!missingPhrases.length) return base;
+
+      return `${base} (${missingPhrases.join(", ")})`;
+    }
+
+    for (const button of document.querySelectorAll(".filter-toggle")) {
+      button.addEventListener("click", () => {
+        const key = button.dataset.filter;
+
+        if (key === "paid" && !activeFilters.has("paid")) {
+          activeFilters.delete("open");
+        }
+
+        if (key === "open" && !activeFilters.has("open")) {
+          activeFilters.delete("paid");
+        }
+
+        if (key === "quotesOnly" && !activeFilters.has("quotesOnly")) {
+          activeFilters.delete("noInvoices");
+        }
+
+        if (key === "noInvoices" && !activeFilters.has("noInvoices")) {
+          activeFilters.delete("quotesOnly");
+        }
+
+        if (activeFilters.has(key)) {
+          activeFilters.delete(key);
+        } else {
+          activeFilters.add(key);
+        }
+
+        updateFilterPreview();
+      });
+    }
+
+    if (clearFiltersButton) {
+      clearFiltersButton.addEventListener("click", () => {
+        activeFilters.clear();
+        updateFilterPreview();
+      });
+    }
+
+    updateFilterPreview();
+
+    function setPrompt(value, runNow = false) {
+      questionEl.value = value;
+      questionEl.focus();
+      if (runNow) askFlex();
+    }
+
+    for (const chip of document.querySelectorAll(".chip")) {
+      chip.addEventListener("click", () => {
+        setPrompt(chip.dataset.q);
+      });
+    }
+
+    for (const prompt of document.querySelectorAll(".prompt-link")) {
+      prompt.addEventListener("click", () => {
+        setPrompt(prompt.dataset.q, true);
+      });
+    }
+
+    function getRecentSearches() {
+      try {
+        return JSON.parse(localStorage.getItem("askFlexRecentSearches") || "[]");
+      } catch {
+        return [];
+      }
+    }
+
+    function saveRecentSearch(question) {
+      const existing = getRecentSearches().filter((item) => item !== question);
+      const next = [question, ...existing].slice(0, 7);
+      localStorage.setItem("askFlexRecentSearches", JSON.stringify(next));
+      renderRecentSearches();
+    }
+
+    function renderRecentSearches() {
+      const recentList = document.getElementById("recentList");
+      if (!recentList) return;
+
+      const recent = getRecentSearches();
+
+      if (!recent.length) {
+        recentList.innerHTML = `<div class="hint">No recent searches yet.</div>`;
+        return;
+      }
+
+      recentList.innerHTML = recent
+        .map((item) => `<button class="recent-item" data-q="${escapeHtml(item)}" type="button">${escapeHtml(item)}</button>`)
+        .join("");
+
+      for (const button of recentList.querySelectorAll(".recent-item")) {
+        button.addEventListener("click", () => {
+          setPrompt(button.dataset.q, true);
+        });
+      }
+    }
+
+    renderRecentSearches();
+
+    questionEl.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        askFlex();
+      }
+    });
+
+    askButton.addEventListener("click", askFlex);
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+
+    function replaceSearchPhraseWithDocumentNumber(question, searchQuery, documentNumber) {
+      if (!question || !documentNumber) return question;
+
+      const escaped = String(searchQuery || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+      if (escaped) {
+        const regex = new RegExp(escaped, "i");
+        if (regex.test(question)) {
+          return question.replace(regex, documentNumber);
+        }
+      }
+
+      return `${question} ${documentNumber}`;
+    }
+
+    function renderMeta(data) {
+      const parts = [
+        data.documentNumber ? `Quote ${data.documentNumber}` : null,
+        data.client || null,
+        data.venue || null,
+        data.plannedStartDate ? `Planned ${formatDate(data.plannedStartDate)}` : null,
+      ].filter(Boolean);
+
+      metaEl.innerHTML = parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("");
+    }
+
+    function renderLines(lines) {
+      if (!Array.isArray(lines) || lines.length === 0) return "";
+
+      return `
+        <div class="section">
+          <h3>Lines</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th class="num">Qty</th>
+                <th class="num">Time Qty</th>
+                <th class="num">Extended</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lines.map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td class="num">${escapeHtml(line.quantity ?? "")}</td>
+                  <td class="num">${escapeHtml(line.timeQty ?? "")}</td>
+                  <td class="num">${escapeHtml(line.priceExtendedFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderLineTable(title, lines, emptyText = "") {
+      if (!Array.isArray(lines) || lines.length === 0) {
+        if (!emptyText) return "";
+
+        return `
+          <div class="section">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="hint">${escapeHtml(emptyText)}</div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="section">
+          <h3>${escapeHtml(title)}</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Section</th>
+                <th class="num">Qty</th>
+                <th class="num">Time Qty</th>
+                <th class="num">Extended</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lines.map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td>${escapeHtml(line.sectionName || "")}</td>
+                  <td class="num">${escapeHtml(line.quantity ?? "")}</td>
+                  <td class="num">${escapeHtml(line.timeQty ?? "")}</td>
+                  <td class="num">${escapeHtml(line.priceExtendedFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderSmartItemSearch(data) {
+      const search = data.itemSearch || {};
+      const primaryTitle = `Primary Matches${search.primaryCount != null ? ` · ${search.primaryCount}` : ""}${search.primaryTotalFormatted ? ` · ${search.primaryTotalFormatted}` : ""}`;
+      const relatedTitle = `Related Items${search.relatedCount != null ? ` · ${search.relatedCount}` : ""}${search.relatedTotalFormatted ? ` · ${search.relatedTotalFormatted}` : ""}`;
+
+      const summaryParts = [
+        search.searchMode ? `Mode: ${search.searchMode}` : null,
+        search.familyLabel ? `Search: ${search.familyLabel}` : null,
+        search.totalPrimaryQuantity != null ? `Primary Qty: ${search.totalPrimaryQuantity}` : null,
+        search.totalRelatedQuantity ? `Related Qty: ${search.totalRelatedQuantity}` : null,
+        search.totalMatchedValueFormatted ? `All matched value: ${search.totalMatchedValueFormatted}` : null,
+      ].filter(Boolean);
+
+      return `
+        <div class="section">
+          <h3>Smart Item Search</h3>
+          <div class="meta">
+            ${summaryParts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
+          </div>
+        </div>
+        ${renderLineTable(primaryTitle, data.lines, "No primary matches found.")}
+        ${renderLineTable(relatedTitle, data.relatedLines)}
+      `;
+    }
+
+    function renderContextFacts(data) {
+      const facts = data.facts || {};
+      const rows = [
+        ["Person responsible", facts.personResponsible || "Not assigned"],
+        ["Project manager", facts.projectManager || "Not assigned"],
+        ["Client", facts.client || "Not listed"],
+        ["Venue", facts.venue || "Not listed"],
+        ["Planned start", facts.plannedStartFormatted || "Not listed"],
+        ["Planned end", facts.plannedEndFormatted || "Not listed"],
+        ["Load in", facts.loadInFormatted || "Not listed"],
+        ["Load out", facts.loadOutFormatted || "Not listed"],
+      ];
+
+      return `
+        <div class="section">
+          <h3>Quote Context</h3>
+          <table>
+            <tbody>
+              ${rows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderMoneyFacts(data) {
+      const facts = data.facts || {};
+      const rows = [
+        ["Invoice total", facts.invoiceTotalFormatted || "$0.00"],
+        ["Category subtotal", facts.categorySubtotalFormatted || "$0.00"],
+        ["Applied payments", facts.totalAppliedPaymentsFormatted || "$0.00"],
+        ["Balance due", facts.balanceDueFormatted || "$0.00"],
+        ["Paid in full", facts.isPaid ? "Yes" : "No"],
+        ["Revenue signal", facts.hasRevenueSignal ? "Yes" : "No / $0 placeholder"],
+        ["Invoice total source", facts.invoiceTotalSource || "FLEX header / calculated fields"],
+      ];
+
+      return `
+        <div class="section">
+          <h3>Money Details</h3>
+          <table>
+            <tbody>
+              ${rows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderSectionSummary(data) {
+      const facts = data.facts || {};
+      const sections = Array.isArray(data.sections) ? data.sections : [];
+      const lines = Array.isArray(data.lines) ? data.lines : [];
+
+      const summaryRows = [
+        ["Invoice total", facts.invoiceTotalFormatted || data.totalFormatted || "$0.00"],
+        ["Category subtotal", facts.categorySubtotalFormatted || "$0.00"],
+        ["Rental", facts.rentalTotalFormatted || "$0.00"],
+        ["Labor", facts.laborTotalFormatted || "$0.00"],
+        ["Transportation", facts.transportationTotalFormatted || "$0.00"],
+        ["Inventory items", facts.inventoryItemCount ?? ""],
+        ["Sections", facts.sectionCount ?? sections.length],
+      ];
+
+      const mismatchSections = sections.filter((section) => section.totalAudit?.hasMismatch);
+
+      return `
+        <div class="section">
+          <h3>Section Summary</h3>
+          <table>
+            <tbody>
+              ${summaryRows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Sections</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th>Category</th>
+                <th class="num">Items</th>
+                <th class="num">Official Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${lines.map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td>${escapeHtml(line.category || "")}</td>
+                  <td class="num">${escapeHtml(line.itemCount ?? "")}</td>
+                  <td class="num">${escapeHtml(line.totalFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        ${mismatchSections.length ? `
+          <div class="warning">
+            Some FLEX section totals do not match the visible line-item sum. I am showing official FLEX section totals in the summary.
+            ${mismatchSections.map((section) => `${escapeHtml(section.name)}: visible lines ${escapeHtml(section.totalAudit.visibleLineTotalFormatted)}, official section ${escapeHtml(section.totalAudit.officialSectionTotalFormatted)}`).join(" · ")}
+          </div>
+        ` : ""}
+      `;
+    }
+
+    function renderComparison(data) {
+      const docs = data.documents || {};
+      const financialRows = Array.isArray(data.financialRows) ? data.financialRows : [];
+      const sectionRows = Array.isArray(data.sectionRows) ? data.sectionRows : [];
+      const itemRows = Array.isArray(data.itemRows) ? data.itemRows : [];
+
+      const aLabel = docs.a?.documentNumber || "Quote A";
+      const bLabel = docs.b?.documentNumber || "Quote B";
+
+      return `
+        <div class="section">
+          <h3>Comparing</h3>
+          <div class="meta">
+            <span>${escapeHtml(aLabel)}: ${escapeHtml(docs.a?.showName || "")}</span>
+            <span>${escapeHtml(bLabel)}: ${escapeHtml(docs.b?.showName || "")}</span>
+          </div>
+        </div>
+
+        <div class="section">
+          <h3>Financial Comparison</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th class="num">${escapeHtml(aLabel)}</th>
+                <th class="num">${escapeHtml(bLabel)}</th>
+                <th class="num">Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${financialRows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.label)}</td>
+                  <td class="num">${escapeHtml(row.aFormatted)}</td>
+                  <td class="num">${escapeHtml(row.bFormatted)}</td>
+                  <td class="num">${escapeHtml(row.deltaFormatted)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h3>Section Changes</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Section</th>
+                <th class="num">${escapeHtml(aLabel)}</th>
+                <th class="num">${escapeHtml(bLabel)}</th>
+                <th class="num">Delta</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sectionRows.slice(0, 10).map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.name)}</td>
+                  <td class="num">${escapeHtml(row.aFormatted)}</td>
+                  <td class="num">${escapeHtml(row.bFormatted)}</td>
+                  <td class="num">${escapeHtml(row.deltaFormatted)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        ${itemRows.length ? `
+          <div class="section">
+            <h3>Top Item Changes</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th class="num">${escapeHtml(aLabel)} Qty</th>
+                  <th class="num">${escapeHtml(bLabel)} Qty</th>
+                  <th class="num">Value Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemRows.slice(0, 10).map((row) => `
+                  <tr>
+                    <td>${escapeHtml(row.name)}</td>
+                    <td class="num">${escapeHtml(row.aQuantity)}</td>
+                    <td class="num">${escapeHtml(row.bQuantity)}</td>
+                    <td class="num">${escapeHtml(row.valueDeltaFormatted)}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : ""}
+      `;
+    }
+
+    function renderMatchCards(data) {
+      const matches = Array.isArray(data.matches) ? data.matches : [];
+      const initialDisplayCount = Number(data.initialDisplayCount || 5);
+      const visibleMatches = matches.slice(0, initialDisplayCount);
+      const hiddenMatches = matches.slice(initialDisplayCount);
+
+      if (matches.length === 0) {
+        return `
+          <div class="section">
+            <h3>No quote matches</h3>
+            <div class="hint">Try a quote number like 26-1747 or a more specific quote name.</div>
+          </div>
+        `;
+      }
+
+      const renderOneMatch = (match, extraClass = "") => {
+        const planned = formatDate(match.plannedStartDate);
+        const nextQuestion = replaceSearchPhraseWithDocumentNumber(
+          data.question,
+          data.searchQuery,
+          match.documentNumber
+        );
+
+        return `
+          <button class="match-card ${extraClass}" data-next-question="${escapeHtml(nextQuestion)}" type="button">
+            <div class="match-top">
+              <div>
+                <div class="match-name">${escapeHtml(match.name || "Untitled FLEX quote")}</div>
+              </div>
+              <div class="quote-pill">${escapeHtml(match.documentNumber || "No quote #")}</div>
+            </div>
+            <div class="match-meta">
+              ${match.client ? `<span>${escapeHtml(match.client)}</span>` : ""}
+              ${match.venue ? `<span>${escapeHtml(match.venue)}</span>` : ""}
+              ${planned ? `<span>Planned ${escapeHtml(planned)}</span>` : ""}
+              ${match.invoiceTotalFormatted ? `<span>Total ${escapeHtml(match.invoiceTotalFormatted)}</span>` : ""}
+              ${match.balanceDueFormatted ? `<span>Balance ${escapeHtml(match.balanceDueFormatted)}</span>` : ""}
+              ${match.searchRank != null ? `<span>Rank ${escapeHtml(match.searchRank)}</span>` : ""}
+            </div>
+            <div class="hint">Click to ask: ${escapeHtml(nextQuestion)}</div>
+          </button>
+        `;
+      };
+
+      const filters = Array.isArray(data.filterDescriptions) ? data.filterDescriptions : [];
+
+      return `
+        <div class="section">
+          <h3>Possible Quotes · showing ${Math.min(initialDisplayCount, matches.length)} of ${matches.length}</h3>
+          ${filters.length ? `<div class="meta">${filters.map((filter) => `<span>Filter: ${escapeHtml(filter)}</span>`).join("")}</div>` : ""}
+          <div class="match-list">
+            ${visibleMatches.map((match) => renderOneMatch(match)).join("")}
+            ${hiddenMatches.map((match) => renderOneMatch(match, "extra-match hidden-match")).join("")}
+          </div>
+          ${hiddenMatches.length ? `
+            <button id="showMoreMatches" class="show-more" type="button">
+              Show ${hiddenMatches.length} more match${hiddenMatches.length === 1 ? "" : "es"}
+            </button>
+          ` : ""}
+        </div>
+      `;
+    }
+
+    function renderInventorySections(sections) {
+      if (!Array.isArray(sections) || sections.length === 0) return "";
+
+      return sections.map((section) => `
+        <div class="section">
+          <h3>${escapeHtml(section.name)} · ${escapeHtml(section.totalFormatted)} · ${escapeHtml(section.itemCount)} item(s)</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th class="num">Qty</th>
+                <th class="num">Time Qty</th>
+                <th class="num">Extended</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(section.lines || []).map((line) => `
+                <tr>
+                  <td>${escapeHtml(line.name || line.text)}</td>
+                  <td class="num">${escapeHtml(line.quantity ?? "")}</td>
+                  <td class="num">${escapeHtml(line.timeQty ?? "")}</td>
+                  <td class="num">${escapeHtml(line.priceExtendedFormatted || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `).join("");
+    }
+
+    function renderTotalBreakdown(data) {
+      if (!data.categoryBreakdown) return "";
+
+      const rows = [
+        ["Rental", data.categoryBreakdown.rentalFormatted],
+        ["Labor", data.categoryBreakdown.laborFormatted],
+        ["Transportation", data.categoryBreakdown.transportationFormatted],
+        ["Other", data.categoryBreakdown.otherFormatted],
+      ];
+
+      return `
+        <div class="section">
+          <h3>Category Breakdown</h3>
+          <table>
+            <tbody>
+              ${rows.map(([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td class="num">${escapeHtml(value)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderWarnings(warnings) {
+      if (!Array.isArray(warnings) || warnings.length === 0) {
+        warningsEl.innerHTML = "";
+        return;
+      }
+
+      warningsEl.innerHTML = warnings
+        .map((warning) => `<div class="warning">${escapeHtml(warning)}</div>`)
+        .join("");
+    }
+
+    function bindMatchCards() {
+      for (const card of document.querySelectorAll(".match-card")) {
+        card.addEventListener("click", () => {
+          const nextQuestion = card.dataset.nextQuestion;
+          if (!nextQuestion) return;
+          questionEl.value = nextQuestion;
+          askFlex();
+        });
+      }
+
+      const showMoreButton = document.getElementById("showMoreMatches");
+      if (showMoreButton) {
+        showMoreButton.addEventListener("click", () => {
+          for (const card of document.querySelectorAll(".extra-match")) {
+            card.classList.remove("hidden-match");
+          }
+          showMoreButton.remove();
+        });
+      }
+    }
+
+    function renderAnswer(data) {
+      headlineEl.textContent = data.headline || "Answer";
+      answerEl.textContent = data.answer || "";
+      renderMeta(data);
+
+      if (data.needsSelection) {
+        detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.intent === "document_compare" || data.comparisonType) {
+        detailsEl.innerHTML = renderComparison(data);
+      } else if (data.intent === "document_sections" || data.sectionType) {
+        detailsEl.innerHTML = renderSectionSummary(data);
+      } else if (data.intent === "document_money" || data.moneyType) {
+        detailsEl.innerHTML = renderMoneyFacts(data);
+      } else if (data.intent === "document_context") {
+        detailsEl.innerHTML = renderContextFacts(data);
+      } else if (data.intent === "document_item_search" || data.itemSearch) {
+        detailsEl.innerHTML = renderSmartItemSearch(data);
+      } else if (data.sections) {
+        detailsEl.innerHTML = renderInventorySections(data.sections);
+      } else if (data.lines) {
+        detailsEl.innerHTML = renderLines(data.lines);
+      } else if (data.categoryBreakdown) {
+        detailsEl.innerHTML = renderTotalBreakdown(data);
+      } else {
+        detailsEl.innerHTML = "";
+      }
+
+      renderWarnings(data.warnings);
+      rawEl.textContent = JSON.stringify(data, null, 2);
+      resultEl.classList.add("visible");
+      bindMatchCards();
+    }
+
+    async function askFlex() {
+      const question = questionEl.value.trim();
+      const effectiveQuestion = buildQuestionWithActiveFilters(question);
+
+      if (!question) return;
+
+      askButton.disabled = true;
+      askButton.textContent = "Asking...";
+      errorEl.classList.remove("visible");
+      errorEl.textContent = "";
+
+      try {
+        const url = `/api/flex/ask-brief?question=${encodeURIComponent(effectiveQuestion)}`;
+        const response = await fetch(url, {
+          method: "GET",
+          credentials: "same-origin",
+        });
+
+        const text = await response.text();
+        let data;
+
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(text.slice(0, 1000));
+        }
+
+        if (!response.ok) {
+          throw new Error(data.error || JSON.stringify(data, null, 2));
+        }
+
+        saveRecentSearch(effectiveQuestion);
+        renderAnswer(data);
+      } catch (error) {
+        errorEl.textContent = error.message || "Ask FLEX failed.";
+        errorEl.classList.add("visible");
+      } finally {
+        askButton.disabled = false;
+        askButton.textContent = "Ask FLEX";
+      }
+    }
+  </script>
+</body>
+</html>

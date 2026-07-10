@@ -1,0 +1,6746 @@
+﻿import http from "http";
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import OpenAI from "openai";
+import "dotenv/config";
+
+const PORT = process.env.PORT || 3000;
+const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
+const ASK_FLEX_HTML_FILE = path.resolve("./ask-flex.html");
+const CUE_PILOT_PASSWORD = process.env.CUE_PILOT_PASSWORD || "";
+const CUE_PILOT_SESSION_SECRET =
+  process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
+
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const FLEX_ROW_DATA_CODES = [
+  "conflict",
+  "type",
+  "quantity",
+  "name",
+  "note",
+  "timeQty",
+  "pricingModel",
+  "priceEach",
+  "priceExtended",
+  "warehouseMute",
+  "noteMute",
+  "priceMute",
+  "lineMute",
+  "totalMute",
+];
+
+const FLEX_HEADER_CODES = [
+  "documentNumber",
+  "name",
+  "clientId",
+  "venueId",
+  "plannedStartDate",
+  "plannedEndDate",
+  "loadInDate",
+  "showStartDate",
+  "loadOutDate",
+  "shippingMethodId",
+  "personResponsibleId",
+  "projectManagerId",
+  "notes",
+
+  // FLEX financial totals shown on the quote/invoice Totals tab.
+  // These may vary by FLEX configuration; summary logic includes fallbacks.
+  "discount",
+  "subtotal",
+  "salesTax",
+  "additionalDiscount",
+  "creditCardFee",
+  "total",
+  "totalAppliedPayments",
+  "balanceDue",
+
+  // Music Matters custom Ship Date field discovered earlier.
+  "1d3824da-d004-41cc-b9f8-a3db6b9c4a6d",
+];
+
+
+const FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID =
+  process.env.FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID ||
+  "d256daec-b055-11df-b8d5-00e08175e43e";
+
+const FLEX_PEACHTREE_CORNERS_LOCATION_ID =
+  process.env.FLEX_PEACHTREE_CORNERS_LOCATION_ID ||
+  "2f49c62c-b139-11df-b8d5-00e08175e43e";
+
+const FLEX_MONTHLY_SALES_HEADER_FIELDS = [
+  "name",
+  "documentNumber",
+  "clientId",
+  "personResponsibleId",
+  "statusId",
+  "corporateIdentityId",
+  "locationId",
+  "preparedDate",
+  "plannedStartDate",
+  "dueDate",
+  "totalPrice",
+  "totalAppliedPayments",
+  "balanceDue",
+  "notes",
+  "pickupLocationId",
+  "returnLocationId",
+];
+
+function sendJson(res, statusCode, data) {
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
+
+  res.end(JSON.stringify(data));
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    req.on("data", (chunk) => {
+      body += chunk;
+
+      if (body.length > 2_000_000) {
+        reject(new Error("Request body too large."));
+        req.destroy();
+      }
+    });
+
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
+function safeParseModelJson(outputText) {
+  try {
+    return JSON.parse(outputText);
+  } catch {
+    return {
+      summary: outputText || "Model returned an empty or non-JSON response.",
+      cue_review_cards: [
+        {
+          card_type: "risk",
+          title: "Model Response Format Warning",
+          owner: "Ops Review",
+          status: "warning",
+          priority: "medium",
+          summary: "The model returned text instead of valid JSON.",
+          detected_items: [],
+          risks: ["The AI response could not be parsed into CUE review cards."],
+          recommended_actions: [
+            "Retry the analysis.",
+            "Reduce the payload size if this continues.",
+            "Confirm the model supports JSON output.",
+          ],
+        },
+      ],
+      questions_for_pm: [],
+      recommended_next_actions: [],
+    };
+  }
+}
+
+function buildFlexHeaders() {
+  const headers = {
+    Accept: "application/json",
+  };
+
+  if (process.env.FLEX_AUTH_HEADER && process.env.FLEX_AUTH_VALUE) {
+    headers[process.env.FLEX_AUTH_HEADER] = process.env.FLEX_AUTH_VALUE;
+  }
+
+  return headers;
+}
+
+function getFlexBaseUrl() {
+  if (!process.env.FLEX_BASE_URL) {
+    throw new Error("Missing FLEX_BASE_URL in .env");
+  }
+
+  return process.env.FLEX_BASE_URL.replace(/\/$/, "");
+}
+
+function buildFlexRowDataUrl(elementId) {
+  const base = getFlexBaseUrl();
+
+  const url = new URL(
+    `${base}/api/financial-document-line-item/${encodeURIComponent(
+      elementId
+    )}/row-data/`
+  );
+
+  url.searchParams.set("_dc", String(Date.now()));
+
+  for (const code of FLEX_ROW_DATA_CODES) {
+    url.searchParams.append("codeList", code);
+  }
+
+  url.searchParams.set("node", "root");
+
+  return url;
+}
+
+function buildFlexHeaderDataUrl(elementId) {
+  const base = getFlexBaseUrl();
+
+  const url = new URL(
+    `${base}/api/element/${encodeURIComponent(elementId)}/header-data`
+  );
+
+  url.searchParams.set("_dc", String(Date.now()));
+
+  for (const code of FLEX_HEADER_CODES) {
+    url.searchParams.append("codeList", code);
+  }
+
+  return url;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function getAtlantaFlexMonthRange(year, month) {
+  const yearNumber = Number(year);
+  const monthNumber = Number(month);
+
+  if (!Number.isInteger(yearNumber) || yearNumber < 2000 || yearNumber > 2100) {
+    throw new Error("Invalid year. Use a four-digit year like 2026.");
+  }
+
+  if (!Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) {
+    throw new Error("Invalid month. Use 1 through 12.");
+  }
+
+  const startMonth = pad2(monthNumber);
+  const nextMonthDate = new Date(Date.UTC(yearNumber, monthNumber, 1));
+  const nextYear = nextMonthDate.getUTCFullYear();
+  const nextMonth = pad2(nextMonthDate.getUTCMonth() + 1);
+
+  // This matches the FLEX report request observed from Music Matters Invoices:
+  // local Atlanta month start/end represented as 04:00:00 through 03:59:59.
+  // Later we can make this DST-aware, but this exactly matches the discovered June report call.
+  return {
+    start: `${yearNumber}-${startMonth}-01T04:00:00`,
+    end: `${nextYear}-${nextMonth}-01T03:59:59`,
+  };
+}
+
+function buildFlexMonthlySalesUrl(year, month) {
+  const base = getFlexBaseUrl();
+  const { start, end } = getAtlantaFlexMonthRange(year, month);
+
+  const url = new URL(`${base}/api/element-list/total-data`);
+
+  url.searchParams.set("_dc", String(Date.now()));
+  url.searchParams.set("definitionId", FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID);
+
+  for (const field of FLEX_MONTHLY_SALES_HEADER_FIELDS) {
+    url.searchParams.append("headerFieldTypeIds", field);
+  }
+
+  const filter = [
+    {
+      property: "locationId",
+      valueList: [FLEX_PEACHTREE_CORNERS_LOCATION_ID],
+    },
+    {
+      property: "plannedStartDate",
+      value: `${start}|${end}`,
+      dateRangeFilter: true,
+    },
+  ];
+
+  url.searchParams.set("filter", JSON.stringify(filter));
+
+  return {
+    url,
+    dateRange: { start, end },
+    filter,
+  };
+}
+
+async function fetchFlexMonthlySales(year, month) {
+  const { url, dateRange, filter } = buildFlexMonthlySalesUrl(year, month);
+
+  console.log("Fetching FLEX monthly sales total from:", url.toString());
+
+  const data = await fetchJsonFromFlex(url);
+  const headerValueMap = data?.headerValueMap || {};
+
+  const monthlySalesTotal = toNumber(headerValueMap.totalPrice);
+  const totalAppliedPayments = toNumber(headerValueMap.totalAppliedPayments);
+  const balanceDue = toNumber(headerValueMap.balanceDue);
+
+  return {
+    year: Number(year),
+    month: Number(month),
+    dateRange,
+    elementCount: Number(data?.elementCount || 0),
+    monthlySalesTotal,
+    totalPrice: monthlySalesTotal,
+    totalAppliedPayments,
+    balanceDue,
+    source: "Music Matters Invoices total-data report",
+    definitionId: FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID,
+    locationId: FLEX_PEACHTREE_CORNERS_LOCATION_ID,
+    dateField: "plannedStartDate",
+    filter,
+    rawHeaderValueMap: headerValueMap,
+    requestUrl: url.toString(),
+  };
+}
+
+async function fetchFlexSalesGoalsRollup(year) {
+  const yearNumber = Number(year);
+
+  if (!Number.isInteger(yearNumber) || yearNumber < 2000 || yearNumber > 2100) {
+    throw new Error("Invalid year. Use a four-digit year like 2026.");
+  }
+
+  const months = [];
+
+  for (let month = 1; month <= 12; month += 1) {
+    const result = await fetchFlexMonthlySales(yearNumber, month);
+
+    months.push({
+      year: yearNumber,
+      month,
+      monthName: [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+      ][month - 1],
+      dateRange: result.dateRange,
+      elementCount: result.elementCount,
+      monthlySalesTotal: result.monthlySalesTotal,
+      totalPrice: result.totalPrice,
+      totalAppliedPayments: result.totalAppliedPayments,
+      balanceDue: result.balanceDue,
+    });
+  }
+
+  const yearTotal = Math.round(
+    months.reduce((sum, item) => sum + item.monthlySalesTotal, 0) * 100
+  ) / 100;
+
+  const totalAppliedPayments = Math.round(
+    months.reduce((sum, item) => sum + item.totalAppliedPayments, 0) * 100
+  ) / 100;
+
+  const balanceDue = Math.round(
+    months.reduce((sum, item) => sum + item.balanceDue, 0) * 100
+  ) / 100;
+
+  const elementCount = months.reduce((sum, item) => sum + item.elementCount, 0);
+
+  return {
+    year: yearNumber,
+    months,
+    yearTotal,
+    totalPrice: yearTotal,
+    totalAppliedPayments,
+    balanceDue,
+    elementCount,
+    source: "Music Matters Invoices total-data report",
+    definitionId: FLEX_MUSIC_MATTERS_INVOICES_DEFINITION_ID,
+    locationId: FLEX_PEACHTREE_CORNERS_LOCATION_ID,
+    dateField: "plannedStartDate",
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function fetchFlexSalesGoalsRow(year) {
+  const rollup = await fetchFlexSalesGoalsRollup(year);
+
+  const monthMap = {};
+  for (const month of rollup.months) {
+    monthMap[month.monthName.toLowerCase()] = month.monthlySalesTotal;
+  }
+
+  return {
+    year: rollup.year,
+    january: monthMap.january || 0,
+    february: monthMap.february || 0,
+    march: monthMap.march || 0,
+    april: monthMap.april || 0,
+    may: monthMap.may || 0,
+    june: monthMap.june || 0,
+    july: monthMap.july || 0,
+    august: monthMap.august || 0,
+    september: monthMap.september || 0,
+    october: monthMap.october || 0,
+    november: monthMap.november || 0,
+    december: monthMap.december || 0,
+    total: rollup.yearTotal,
+    elementCount: rollup.elementCount,
+    totalAppliedPayments: rollup.totalAppliedPayments,
+    balanceDue: rollup.balanceDue,
+    source: rollup.source,
+    dateField: rollup.dateField,
+    generatedAt: rollup.generatedAt,
+  };
+}
+
+async function fetchJsonFromFlex(url) {
+  const response = await fetch(url, {
+    method: "GET",
+    headers: buildFlexHeaders(),
+  });
+
+  const responseText = await response.text();
+
+  let data;
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    data = responseText;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `FLEX request failed: ${response.status} ${response.statusText}. ${
+        typeof data === "string"
+          ? data.slice(0, 1000)
+          : JSON.stringify(data).slice(0, 1000)
+      }`
+    );
+  }
+
+  return data;
+}
+
+async function fetchFlexRowData(elementId) {
+  const url = buildFlexRowDataUrl(elementId);
+
+  console.log("Fetching FLEX row-data from:", url.toString());
+
+  const data = await fetchJsonFromFlex(url);
+
+  return {
+    elementId,
+    requestUrl: url.toString(),
+    data,
+  };
+}
+
+async function fetchFlexHeaderData(elementId) {
+  const url = buildFlexHeaderDataUrl(elementId);
+
+  console.log("Fetching FLEX header-data from:", url.toString());
+
+  const data = await fetchJsonFromFlex(url);
+
+  return {
+    elementId,
+    requestUrl: url.toString(),
+    data,
+  };
+}
+
+function normalizeHeaderValue(value) {
+  if (value == null) return null;
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (typeof value === "object") {
+    if ("data" in value) {
+      return normalizeHeaderValue(value.data);
+    }
+
+    if ("fieldType" in value && !("data" in value)) {
+      return null;
+    }
+
+    return (
+      value.preferredDisplayString ||
+      value.displayName ||
+      value.name ||
+      value.value ||
+      value.text ||
+      value.label ||
+      value.formattedValue ||
+      value.shortName ||
+      value.barcode ||
+      value.id ||
+      null
+    );
+  }
+
+  return value;
+}
+
+function extractHeaderValue(headerData, code) {
+  if (!headerData) return null;
+
+  if (Array.isArray(headerData)) {
+    const found = headerData.find(
+      (item) =>
+        item.code === code ||
+        item.fieldCode === code ||
+        item.key === code ||
+        item.name === code ||
+        item.id === code ||
+        item.fieldType === code
+    );
+
+    return normalizeHeaderValue(
+      found?.value ?? found?.displayValue ?? found?.data ?? found
+    );
+  }
+
+  if (typeof headerData === "object") {
+    return normalizeHeaderValue(headerData[code]);
+  }
+
+  return null;
+}
+
+function buildShowContext(headerData, elementId) {
+  const shipDateCustomCode = "1d3824da-d004-41cc-b9f8-a3db6b9c4a6d";
+
+  return {
+    elementId,
+    documentNumber: extractHeaderValue(headerData, "documentNumber"),
+    showName: extractHeaderValue(headerData, "name"),
+    client: extractHeaderValue(headerData, "clientId"),
+    venue: extractHeaderValue(headerData, "venueId"),
+    plannedStartDate: extractHeaderValue(headerData, "plannedStartDate"),
+    plannedEndDate: extractHeaderValue(headerData, "plannedEndDate"),
+    shipDate: extractHeaderValue(headerData, shipDateCustomCode),
+    loadInDate: extractHeaderValue(headerData, "loadInDate"),
+    showStartDate: extractHeaderValue(headerData, "showStartDate"),
+    loadOutDate: extractHeaderValue(headerData, "loadOutDate"),
+    shippingMethod: extractHeaderValue(headerData, "shippingMethodId"),
+    personResponsible: extractHeaderValue(headerData, "personResponsibleId"),
+    projectManager: extractHeaderValue(headerData, "projectManagerId"),
+    notes: extractHeaderValue(headerData, "notes"),
+    financials: {
+      discount: toNumber(extractHeaderValue(headerData, "discount")),
+      subtotal: toNumber(extractHeaderValue(headerData, "subtotal")),
+      salesTax: toNumber(extractHeaderValue(headerData, "salesTax")),
+      additionalDiscount: toNumber(extractHeaderValue(headerData, "additionalDiscount")),
+      creditCardFee: toNumber(extractHeaderValue(headerData, "creditCardFee")),
+      total: toNumber(extractHeaderValue(headerData, "total")),
+      totalAppliedPayments: toNumber(extractHeaderValue(headerData, "totalAppliedPayments")),
+      balanceDue: toNumber(extractHeaderValue(headerData, "balanceDue")),
+    },
+  };
+}
+
+async function fetchFlexShowIntake(elementId) {
+  const [headerResult, rowResult] = await Promise.all([
+    fetchFlexHeaderData(elementId),
+    fetchFlexRowData(elementId),
+  ]);
+
+  const showContext = buildShowContext(headerResult.data, elementId);
+
+  return {
+    elementId,
+    showContext,
+    headerData: headerResult.data,
+    rowData: rowResult.data,
+    requests: {
+      headerDataUrl: headerResult.requestUrl,
+      rowDataUrl: rowResult.requestUrl,
+    },
+  };
+}
+
+
+function toNumber(value) {
+  if (value == null) return 0;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const cleaned = String(value)
+    .replace(/[$,]/g, "")
+    .trim();
+
+  const parsed = Number(cleaned);
+
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeFlexCellValue(value) {
+  if (value == null) return null;
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (typeof value === "object") {
+    if ("data" in value) return normalizeFlexCellValue(value.data);
+
+    return (
+      value.preferredDisplayString ||
+      value.displayName ||
+      value.name ||
+      value.value ||
+      value.text ||
+      value.label ||
+      value.formattedValue ||
+      value.shortName ||
+      value.id ||
+      null
+    );
+  }
+
+  return value;
+}
+
+function rowToObject(row) {
+  if (!row) return {};
+
+  if (!Array.isArray(row) && typeof row === "object") {
+    const output = {};
+
+    for (const [key, value] of Object.entries(row)) {
+      output[key] = normalizeFlexCellValue(value);
+    }
+
+    return output;
+  }
+
+  if (Array.isArray(row)) {
+    const output = {};
+
+    FLEX_ROW_DATA_CODES.forEach((code, index) => {
+      output[code] = normalizeFlexCellValue(row[index]);
+    });
+
+    return output;
+  }
+
+  return {};
+}
+
+function unwrapFlexRows(rowData) {
+  if (Array.isArray(rowData)) return rowData;
+
+  if (Array.isArray(rowData?.rows)) return rowData.rows;
+  if (Array.isArray(rowData?.data)) return rowData.data;
+  if (Array.isArray(rowData?.items)) return rowData.items;
+  if (Array.isArray(rowData?.children)) return rowData.children;
+
+  return [];
+}
+
+function classifyFlexLineItem(rowObject) {
+  const typeText = String(rowObject.type || rowObject.source_type || "").toLowerCase();
+  const nameText = String(rowObject.name || "").toLowerCase();
+  const noteText = String(rowObject.note || "").toLowerCase();
+
+  const combined = `${typeText} ${nameText} ${noteText}`;
+
+  if (
+    /\b(labor|crew|tech|technician|engineer|stagehand|operator|ld|a1|a2|v1|v2|pm|project manager)\b/i.test(
+      combined
+    )
+  ) {
+    return "labor";
+  }
+
+  if (
+    /\b(transport|transportation|truck|trucking|delivery|pickup|pick up|freight|mileage|van|box truck|trailer)\b/i.test(
+      combined
+    )
+  ) {
+    return "transportation";
+  }
+
+  if (
+    /\b(rental|fixture|console|audio|lighting|video|led|truss|rigging|cable|power|speaker|pa|microphone|deck|stage)\b/i.test(
+      combined
+    )
+  ) {
+    return "rental";
+  }
+
+  return "other";
+}
+
+function buildFlexDocumentSummary(intake) {
+  const rows = unwrapFlexRows(intake.rowData).map(rowToObject);
+
+  const summary = {
+    elementId: intake.elementId,
+    showContext: intake.showContext,
+    totals: {
+      document: 0,
+      rental: 0,
+      labor: 0,
+      transportation: 0,
+      other: 0,
+    },
+    counts: {
+      lineItems: rows.length,
+      rentalLines: 0,
+      laborLines: 0,
+      transportationLines: 0,
+      otherLines: 0,
+    },
+    lineItems: [],
+    warnings: [],
+    requests: intake.requests,
+  };
+
+  for (const row of rows) {
+    const category = classifyFlexLineItem(row);
+    const priceExtended = toNumber(row.priceExtended);
+    const quantity = toNumber(row.quantity);
+    const timeQty = toNumber(row.timeQty);
+
+    summary.totals.document += priceExtended;
+
+    if (category === "rental") {
+      summary.totals.rental += priceExtended;
+      summary.counts.rentalLines += 1;
+    } else if (category === "labor") {
+      summary.totals.labor += priceExtended;
+      summary.counts.laborLines += 1;
+    } else if (category === "transportation") {
+      summary.totals.transportation += priceExtended;
+      summary.counts.transportationLines += 1;
+    } else {
+      summary.totals.other += priceExtended;
+      summary.counts.otherLines += 1;
+    }
+
+    summary.lineItems.push({
+      category,
+      name: row.name || null,
+      type: row.type || null,
+      quantity,
+      timeQty,
+      pricingModel: row.pricingModel || null,
+      priceEach: toNumber(row.priceEach),
+      priceExtended,
+      note: row.note || null,
+    });
+  }
+
+  for (const key of Object.keys(summary.totals)) {
+    summary.totals[key] = Math.round(summary.totals[key] * 100) / 100;
+  }
+
+  // The line-item/category math above matches the category subtotal shown by FLEX,
+  // but FLEX can also apply quote-level adjustments after that, such as
+  // Additional Discount, tax, or credit-card fees. Keep both values so Sales Goals
+  // can use the final invoice/quote total instead of the category subtotal.
+  const flexFinancials = summary.showContext?.financials || {};
+  const categorySubtotal = summary.totals.document;
+  const balanceDue = flexFinancials.balanceDue || 0;
+  const totalAppliedPayments = flexFinancials.totalAppliedPayments || 0;
+
+  const inferredInvoiceTotalFromBalance =
+    balanceDue || totalAppliedPayments
+      ? Math.round((balanceDue + totalAppliedPayments) * 100) / 100
+      : 0;
+
+  const calculatedInvoiceTotal =
+    Math.round(
+      (
+        categorySubtotal +
+        (flexFinancials.salesTax || 0) +
+        (flexFinancials.additionalDiscount || 0) +
+        (flexFinancials.creditCardFee || 0)
+      ) * 100
+    ) / 100;
+
+  summary.totals.categorySubtotal = categorySubtotal;
+
+  summary.financials = {
+    categorySubtotal,
+    discount: flexFinancials.discount || 0,
+    subtotal: flexFinancials.subtotal || categorySubtotal,
+    salesTax: flexFinancials.salesTax || 0,
+    additionalDiscount: flexFinancials.additionalDiscount || 0,
+    creditCardFee: flexFinancials.creditCardFee || 0,
+    invoiceTotal:
+      flexFinancials.total ||
+      inferredInvoiceTotalFromBalance ||
+      calculatedInvoiceTotal,
+    totalAppliedPayments,
+    balanceDue,
+    invoiceTotalSource: flexFinancials.total
+      ? "flex_total"
+      : inferredInvoiceTotalFromBalance
+        ? "balance_due_plus_payments"
+        : "category_subtotal_fallback",
+  };
+
+  if (summary.financials.invoiceTotalSource === "balance_due_plus_payments") {
+    summary.warnings.push(
+      "Invoice total was inferred from FLEX balanceDue + totalAppliedPayments because FLEX header total was not returned."
+    );
+  }
+
+  if (summary.financials.invoiceTotalSource === "category_subtotal_fallback") {
+    summary.warnings.push(
+      "Invoice total fell back to category subtotal because FLEX final total fields were not returned."
+    );
+  }
+
+  if (!summary.showContext?.showName) {
+    summary.warnings.push("Missing show name from FLEX header data.");
+  }
+
+  if (!summary.showContext?.client) {
+    summary.warnings.push("Missing client from FLEX header data.");
+  }
+
+  if (!summary.showContext?.showStartDate && !summary.showContext?.plannedStartDate) {
+    summary.warnings.push("Missing show/planned start date from FLEX header data.");
+  }
+
+  if (summary.counts.lineItems === 0) {
+    summary.warnings.push("No FLEX line items were returned.");
+  }
+
+  return summary;
+}
+
+
+
+function buildFlexSearchUrl(searchText) {
+  const base = getFlexBaseUrl();
+
+  const url = new URL(`${base}/api/search`);
+
+  url.searchParams.set("_dc", String(Date.now()));
+  url.searchParams.set("searchText", String(searchText || "").trim());
+
+  // Search types captured from FLEX global search while looking up quote 26-1747.
+  // Keep this broad enough to match quotes/financial documents while preserving FLEX behavior.
+  url.searchParams.set(
+    "searchTypes",
+    [
+      "inventory-model",
+      "358f312c-b051-11df-b8d5-00e08175e43e",
+      "d256daec-b055-11df-b8d5-00e08175e43e",
+      "9bfb850c-b117-11df-b8d5-00e08175e43e",
+    ].join(",")
+  );
+
+  url.searchParams.set("maxResults", "1000");
+  url.searchParams.set("canIncludeSerialUnits", "true");
+  url.searchParams.set("includeDeleted", "false");
+  url.searchParams.set("includeClosed", "true");
+  url.searchParams.set("page", "1");
+  url.searchParams.set("start", "0");
+  url.searchParams.set("limit", "25");
+
+  return url;
+}
+
+async function fetchFlexSearch(searchText) {
+  const url = buildFlexSearchUrl(searchText);
+
+  console.log("Fetching FLEX search from:", url.toString());
+
+  const data = await fetchJsonFromFlex(url);
+
+  return {
+    searchText,
+    requestUrl: url.toString(),
+    data,
+  };
+}
+
+function normalizeFlexSearchResults(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.rows)) return data.rows;
+
+  return [];
+}
+
+function extractSearchResultId(result) {
+  return (
+    result?.id ||
+    result?.elementId ||
+    result?.elementID ||
+    result?.element_id ||
+    result?.objectId ||
+    result?.objectID ||
+    null
+  );
+}
+
+async function findFlexQuoteByDocumentNumber(documentNumber) {
+  const normalizedDocumentNumber = String(documentNumber || "").trim();
+
+  if (!normalizedDocumentNumber) {
+    throw new Error("Missing required documentNumber.");
+  }
+
+  const searchResult = await fetchFlexSearch(normalizedDocumentNumber);
+  const results = normalizeFlexSearchResults(searchResult.data);
+
+  const candidates = results
+    .map((result) => ({
+      raw: result,
+      elementId: extractSearchResultId(result),
+      name:
+        result?.name ||
+        result?.displayName ||
+        result?.preferredDisplayString ||
+        result?.text ||
+        result?.label ||
+        null,
+      documentNumber:
+        result?.documentNumber ||
+        result?.number ||
+        result?.docNumber ||
+        result?.identifier ||
+        null,
+      type:
+        result?.type ||
+        result?.definitionName ||
+        result?.className ||
+        result?.category ||
+        null,
+    }))
+    .filter((candidate) => candidate.elementId);
+
+  // FLEX global search may return only name/id for the match. Prefer any result that explicitly
+  // carries the document number, otherwise use the first result returned for this exact search.
+  const exactMatch =
+    candidates.find(
+      (candidate) =>
+        String(candidate.documentNumber || "").trim().toLowerCase() ===
+        normalizedDocumentNumber.toLowerCase()
+    ) || candidates[0] || null;
+
+  if (!exactMatch) {
+    return {
+      documentNumber: normalizedDocumentNumber,
+      found: false,
+      elementId: null,
+      name: null,
+      matches: [],
+      requestUrl: searchResult.requestUrl,
+      rawCount: results.length,
+    };
+  }
+
+  return {
+    documentNumber: normalizedDocumentNumber,
+    found: true,
+    elementId: exactMatch.elementId,
+    name: exactMatch.name,
+    type: exactMatch.type,
+    matches: candidates.map((candidate) => ({
+      elementId: candidate.elementId,
+      name: candidate.name,
+      documentNumber: candidate.documentNumber,
+      type: candidate.type,
+    })),
+    requestUrl: searchResult.requestUrl,
+    rawCount: results.length,
+  };
+}
+
+function flattenFlexRows(rows, parentSection = null, depth = 0) {
+  const flattened = [];
+
+  for (const rawRow of Array.isArray(rows) ? rows : []) {
+    const row = rowToObject(rawRow);
+    const children = Array.isArray(rawRow?.children) ? rawRow.children : [];
+
+    const typeName =
+      typeof rawRow?.type === "object"
+        ? rawRow.type?.name
+        : row.type;
+
+    const normalized = {
+      id: rawRow?.id || null,
+      parentSection,
+      depth,
+      name: row.name || rawRow?.name || null,
+      type: typeName || null,
+      lineItemType: rawRow?.lineItemType || null,
+      subtotalType: rawRow?.subtotalType || null,
+      category: classifyFlexLineItem({
+        ...row,
+        type: typeName,
+      }),
+      quantity: toNumber(row.quantity ?? rawRow?.quantity),
+      timeQty: toNumber(row.timeQty ?? rawRow?.timeQty),
+      pricingModel: normalizeFlexCellValue(row.pricingModel ?? rawRow?.pricingModel),
+      priceEach: toNumber(row.priceEach ?? rawRow?.priceEach),
+      priceExtended: toNumber(row.priceExtended ?? rawRow?.priceExtended),
+      costExtended: toNumber(rawRow?.costExtended),
+      note: row.note || rawRow?.note || null,
+      lineMute: Boolean(row.lineMute ?? rawRow?.lineMute),
+      priceMute: Boolean(row.priceMute ?? rawRow?.priceMute),
+      totalMute: Boolean(row.totalMute ?? rawRow?.totalMute),
+      leaf: Boolean(rawRow?.leaf),
+      subtotal: Boolean(rawRow?.subtotal),
+      container: Boolean(rawRow?.container),
+      hasChildren: children.length > 0,
+    };
+
+    flattened.push(normalized);
+
+    const nextParentSection =
+      depth === 0 && normalized.name ? normalized.name : parentSection;
+
+    if (children.length > 0) {
+      flattened.push(...flattenFlexRows(children, nextParentSection, depth + 1));
+    }
+  }
+
+  return flattened;
+}
+
+function isSectionTotalLine(item) {
+  return (
+    item.depth === 0 &&
+    item.subtotal === true &&
+    item.subtotalType === "header" &&
+    item.name
+  );
+}
+
+function isBillableDetailLine(item) {
+  if (!item.name) return false;
+  if (item.lineItemType === "subtotal") return false;
+  if (item.subtotal === true) return false;
+  if (item.priceExtended === 0 && item.quantity === 0) return false;
+
+  return true;
+}
+
+function buildFlexDocumentDetail(intake) {
+  const summary = buildFlexDocumentSummary(intake);
+  const topRows = unwrapFlexRows(intake.rowData);
+  const flatRows = flattenFlexRows(topRows);
+
+  const sectionTotals = flatRows.filter(isSectionTotalLine);
+
+  const sections = sectionTotals.map((section) => {
+    const items = flatRows
+      .filter((item) => item.parentSection === section.name)
+      .filter(isBillableDetailLine)
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        type: item.type,
+        quantity: item.quantity,
+        timeQty: item.timeQty,
+        pricingModel: item.pricingModel,
+        priceEach: item.priceEach,
+        priceExtended: item.priceExtended,
+        note: item.note,
+        lineMute: item.lineMute,
+        priceMute: item.priceMute,
+        totalMute: item.totalMute,
+      }));
+
+    return {
+      name: section.name,
+      category: section.category,
+      total: section.priceExtended,
+      itemCount: items.length,
+      items,
+    };
+  });
+
+  const laborItems = sections
+    .filter((section) => section.category === "labor" || /labor/i.test(section.name))
+    .flatMap((section) => section.items);
+
+  const transportationItems = sections
+    .filter(
+      (section) =>
+        section.category === "transportation" || /transport/i.test(section.name)
+    )
+    .flatMap((section) => section.items);
+
+  const inventoryItems = sections
+    .filter(
+      (section) =>
+        section.category === "rental" &&
+        !/labor|transport/i.test(section.name)
+    )
+    .flatMap((section) => section.items);
+
+  return {
+    elementId: intake.elementId,
+    showContext: intake.showContext,
+    summary,
+    counts: {
+      sections: sections.length,
+      flattenedRows: flatRows.length,
+      inventoryItems: inventoryItems.length,
+      laborItems: laborItems.length,
+      transportationItems: transportationItems.length,
+    },
+    sections,
+    laborItems,
+    transportationItems,
+    inventoryItems,
+    warnings: summary.warnings || [],
+  };
+}
+
+
+
+function formatUsd(value) {
+  const amount = Number(value || 0);
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function extractDocumentNumberFromQuestion(question) {
+  const text = String(question || "");
+  const match = text.match(/\b\d{2}-\d{3,6}\b/);
+
+  return match ? match[0] : null;
+}
+
+function extractDocumentNumbersFromQuestion(question) {
+  const text = String(question || "");
+  const matches = text.match(/\b\d{2}-\d{3,6}\b/g) || [];
+  return [...new Set(matches)];
+}
+
+function normalizeCompareItemName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\w\s.+/-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function fetchFlexDetailByDocumentNumber(documentNumber) {
+  const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+  if (!quoteLookup.found || !quoteLookup.elementId) {
+    return {
+      found: false,
+      documentNumber,
+      lookup: quoteLookup,
+    };
+  }
+
+  const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+  const detail = buildFlexDocumentDetail(intake);
+
+  return {
+    found: true,
+    documentNumber,
+    elementId: quoteLookup.elementId,
+    lookup: quoteLookup,
+    detail,
+  };
+}
+
+function getCompareDocumentLabel(detail) {
+  const showContext = detail?.showContext || {};
+  return [showContext.documentNumber, showContext.showName].filter(Boolean).join(" — ");
+}
+
+function getCompareFinancials(detail) {
+  const summary = detail?.summary || {};
+  const financials = summary.financials || {};
+  const totals = summary.totals || {};
+
+  return {
+    invoiceTotal: Number(financials.invoiceTotal || totals.document || 0),
+    invoiceTotalFormatted: formatUsd(financials.invoiceTotal || totals.document || 0),
+    categorySubtotal: Number(financials.categorySubtotal || totals.document || 0),
+    categorySubtotalFormatted: formatUsd(financials.categorySubtotal || totals.document || 0),
+    rental: Number(totals.rental || 0),
+    rentalFormatted: formatUsd(totals.rental || 0),
+    labor: Number(totals.labor || 0),
+    laborFormatted: formatUsd(totals.labor || 0),
+    transportation: Number(totals.transportation || 0),
+    transportationFormatted: formatUsd(totals.transportation || 0),
+    balanceDue: Number(financials.balanceDue || 0),
+    balanceDueFormatted: formatUsd(financials.balanceDue || 0),
+  };
+}
+
+function buildCompareMetricRows(detailA, detailB) {
+  const a = getCompareFinancials(detailA);
+  const b = getCompareFinancials(detailB);
+
+  const rows = [
+    ["Invoice total", "invoiceTotal"],
+    ["Category subtotal", "categorySubtotal"],
+    ["Rental", "rental"],
+    ["Labor", "labor"],
+    ["Transportation", "transportation"],
+    ["Balance due", "balanceDue"],
+  ];
+
+  return rows.map(([label, key]) => {
+    const valueA = Number(a[key] || 0);
+    const valueB = Number(b[key] || 0);
+    const delta = Math.round((valueB - valueA) * 100) / 100;
+
+    return {
+      label,
+      a: valueA,
+      aFormatted: formatUsd(valueA),
+      b: valueB,
+      bFormatted: formatUsd(valueB),
+      delta,
+      deltaFormatted: `${delta >= 0 ? "+" : "-"}${formatUsd(Math.abs(delta))}`,
+    };
+  });
+}
+
+function buildCompareSectionRows(detailA, detailB) {
+  const mapA = new Map();
+  const mapB = new Map();
+
+  for (const section of Array.isArray(detailA?.sections) ? detailA.sections : []) {
+    mapA.set(String(section.name || "Unnamed"), section);
+  }
+
+  for (const section of Array.isArray(detailB?.sections) ? detailB.sections : []) {
+    mapB.set(String(section.name || "Unnamed"), section);
+  }
+
+  const names = [...new Set([...mapA.keys(), ...mapB.keys()])];
+
+  return names
+    .map((name) => {
+      const a = mapA.get(name);
+      const b = mapB.get(name);
+      const totalA = Number(a?.total || 0);
+      const totalB = Number(b?.total || 0);
+      const delta = Math.round((totalB - totalA) * 100) / 100;
+
+      return {
+        name,
+        category: b?.category || a?.category || null,
+        a: totalA,
+        aFormatted: formatUsd(totalA),
+        b: totalB,
+        bFormatted: formatUsd(totalB),
+        delta,
+        deltaFormatted: `${delta >= 0 ? "+" : "-"}${formatUsd(Math.abs(delta))}`,
+        aItemCount: a?.itemCount || 0,
+        bItemCount: b?.itemCount || 0,
+      };
+    })
+    .sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+}
+
+function buildCompareItemMap(detail) {
+  const items = [
+    ...(Array.isArray(detail?.inventoryItems) ? detail.inventoryItems : []),
+    ...(Array.isArray(detail?.laborItems) ? detail.laborItems : []),
+    ...(Array.isArray(detail?.transportationItems) ? detail.transportationItems : []),
+  ];
+
+  const map = new Map();
+
+  for (const item of items) {
+    const key = normalizeCompareItemName(item.name);
+    const existing = map.get(key) || {
+      name: item.name,
+      quantity: 0,
+      value: 0,
+      sections: new Set(),
+    };
+
+    existing.quantity += Number(item.quantity || 0);
+    existing.value += Number(item.priceExtended || 0);
+    if (item.sectionName) existing.sections.add(item.sectionName);
+
+    map.set(key, existing);
+  }
+
+  return map;
+}
+
+function buildCompareItemRows(detailA, detailB) {
+  const mapA = buildCompareItemMap(detailA);
+  const mapB = buildCompareItemMap(detailB);
+  const keys = [...new Set([...mapA.keys(), ...mapB.keys()])];
+
+  return keys
+    .map((key) => {
+      const a = mapA.get(key);
+      const b = mapB.get(key);
+      const qtyA = Number(a?.quantity || 0);
+      const qtyB = Number(b?.quantity || 0);
+      const valueA = Number(a?.value || 0);
+      const valueB = Number(b?.value || 0);
+
+      return {
+        name: b?.name || a?.name || key,
+        aQuantity: qtyA,
+        bQuantity: qtyB,
+        quantityDelta: qtyB - qtyA,
+        aValue: valueA,
+        aValueFormatted: formatUsd(valueA),
+        bValue: valueB,
+        bValueFormatted: formatUsd(valueB),
+        valueDelta: Math.round((valueB - valueA) * 100) / 100,
+        valueDeltaFormatted: `${valueB - valueA >= 0 ? "+" : "-"}${formatUsd(Math.abs(valueB - valueA))}`,
+        status: a && b ? "changed_or_same" : a ? "removed" : "added",
+      };
+    })
+    .filter((row) => row.quantityDelta !== 0 || Math.abs(row.valueDelta) >= 0.01 || row.status !== "changed_or_same")
+    .sort((x, y) => Math.abs(y.valueDelta) - Math.abs(x.valueDelta))
+    .slice(0, 25);
+}
+
+function buildFlexDocumentComparison(question, detailA, detailB) {
+  const labelA = getCompareDocumentLabel(detailA);
+  const labelB = getCompareDocumentLabel(detailB);
+  const financialRows = buildCompareMetricRows(detailA, detailB);
+  const sectionRows = buildCompareSectionRows(detailA, detailB);
+  const itemRows = buildCompareItemRows(detailA, detailB);
+
+  const invoiceRow = financialRows.find((row) => row.label === "Invoice total");
+  const laborRow = financialRows.find((row) => row.label === "Labor");
+  const rentalRow = financialRows.find((row) => row.label === "Rental");
+
+  const biggestSectionChanges = sectionRows
+    .filter((row) => Math.abs(row.delta) >= 0.01)
+    .slice(0, 5);
+
+  const answerParts = [
+    `${labelB} is ${invoiceRow?.deltaFormatted || "$0.00"} vs ${labelA} on invoice total.`,
+    rentalRow ? `Rental changed ${rentalRow.deltaFormatted}.` : null,
+    laborRow ? `Labor changed ${laborRow.deltaFormatted}.` : null,
+    biggestSectionChanges.length
+      ? `Biggest section changes: ${biggestSectionChanges
+          .slice(0, 3)
+          .map((row) => `${row.name} ${row.deltaFormatted}`)
+          .join(", ")}.`
+      : "No section-total changes found.",
+  ].filter(Boolean);
+
+  return {
+    headline: "Quote Comparison",
+    comparisonType: "two_quote_compare",
+    answer: answerParts.join(" "),
+    documents: {
+      a: {
+        label: labelA,
+        documentNumber: detailA?.showContext?.documentNumber || null,
+        showName: detailA?.showContext?.showName || null,
+        client: detailA?.showContext?.client || null,
+        venue: detailA?.showContext?.venue || null,
+        plannedStartDate: detailA?.showContext?.plannedStartDate || null,
+      },
+      b: {
+        label: labelB,
+        documentNumber: detailB?.showContext?.documentNumber || null,
+        showName: detailB?.showContext?.showName || null,
+        client: detailB?.showContext?.client || null,
+        venue: detailB?.showContext?.venue || null,
+        plannedStartDate: detailB?.showContext?.plannedStartDate || null,
+      },
+    },
+    financialRows,
+    sectionRows,
+    itemRows,
+    counts: {
+      changedSections: sectionRows.filter((row) => Math.abs(row.delta) >= 0.01).length,
+      changedItems: itemRows.length,
+    },
+  };
+}
+
+
+const FLEX_EQUIPMENT_FAMILIES = [
+  {
+    id: "speaker",
+    label: "Speakers / PA",
+    primaryPatterns: [
+      /\bspeakers?\b/i,
+      /\bloudspeakers?\b/i,
+      /\bline array\b/i,
+      /\barray\b/i,
+      /\bpa\b/i,
+      /\bsubwoofers?\b/i,
+      /\bsubs?\b/i,
+      /\bmonitors?\b/i,
+      /\bwedges?\b/i,
+      /\bfront fill\b/i,
+      /\bside fill\b/i,
+      /\bdelay\b/i,
+      /\bleopard\b/i,
+      /\blyon\b/i,
+      /\bmina\b/i,
+      /\bmelodie\b/i,
+      /\b700-hp\b/i,
+      /\b900-lfc\b/i,
+      /\b1100-lfc\b/i,
+      /\bmjf\b/i,
+      /\bmeyer\b/i,
+      /\bl-acoustics\b/i,
+      /\bd&b\b/i,
+      /\bjbl\b/i,
+      /\bqsc\b/i,
+      /\bks28\b/i,
+      /\bk1\b/i,
+      /\bk2\b/i,
+      /\bkara\b/i,
+      /\bara\b/i,
+      /\by-?series\b/i,
+      /\bv-?series\b/i,
+    ],
+    relatedPatterns: [
+      /\bspeaker cable\b/i,
+      /\bnl4\b/i,
+      /\bnl8\b/i,
+      /\bamplifier\b/i,
+      /\bamp rack\b/i,
+      /\bgalileo\b/i,
+      /\bgalaxy\b/i,
+      /\blake\b/i,
+      /\bprocessor\b/i,
+      /\bdrive rack\b/i,
+    ],
+  },
+  {
+    id: "led_panel",
+    label: "Video LED Panels",
+    primaryPatterns: [
+      /\bled panels?\b/i,
+      /\bvideo panels?\b/i,
+      /\bwall panels?\b/i,
+      /\bled wall\b/i,
+      /\bvideo wall\b/i,
+      /\binfiled\b/i,
+      /\babsen\b/i,
+      /\broe\b/i,
+      /\bunilumin\b/i,
+      /\bcb5\b/i,
+      /\bcb8\b/i,
+      /\bar4\.?6\b/i,
+      /\bdb2\b/i,
+      /\bbp2\b/i,
+      /\bpanel:\s*xl\b/i,
+      /\bpixel\b/i,
+    ],
+    relatedPatterns: [
+      /\bnovastar\b/i,
+      /\bvx1000s?\b/i,
+      /\bvx4s\b/i,
+      /\bmctrl\b/i,
+      /\bprocessor\b/i,
+      /\bsending card\b/i,
+      /\breceiving card\b/i,
+      /\bdata jumper\b/i,
+      /\bpower jumper\b/i,
+      /\bled cable\b/i,
+      /\bground support\b/i,
+      /\bheader bar\b/i,
+      /\bhanging bar\b/i,
+      /\bcurving\b/i,
+    ],
+  },
+  {
+    id: "video",
+    label: "Video",
+    primaryPatterns: [
+      /\bvideo\b/i,
+      /\bswitcher\b/i,
+      /\bprocessor\b/i,
+      /\bscaler\b/i,
+      /\bprojector\b/i,
+      /\bscreen\b/i,
+      /\bcamera\b/i,
+      /\bmonitors?\b/i,
+      /\bconfidence monitor\b/i,
+      /\bpreview monitor\b/i,
+      /\bplayback\b/i,
+      /\bresolume\b/i,
+      /\bbarco\b/i,
+      /\bblackmagic\b/i,
+      /\bdecimator\b/i,
+      /\baja\b/i,
+      /\bnovastar\b/i,
+      /\bvx1000s?\b/i,
+    ],
+    relatedPatterns: [
+      /\bsdi\b/i,
+      /\bhdmi\b/i,
+      /\bfiber\b/i,
+      /\bconverter\b/i,
+      /\bextender\b/i,
+      /\bcat6\b/i,
+    ],
+  },
+  {
+    id: "truss",
+    label: "Truss",
+    primaryPatterns: [
+      /\btruss\b/i,
+      /\bbox truss\b/i,
+      /\b12x12\b/i,
+      /\b20\.?5\b/i,
+      /\bgt\b/i,
+      /\btomcat\b/i,
+      /\btyler\b/i,
+      /\bglobal truss\b/i,
+      /\bcorner block\b/i,
+      /\bbase plate\b/i,
+      /\bspigots?\b/i,
+      /\btruss tower\b/i,
+      /\bcircle truss\b/i,
+    ],
+    relatedPatterns: [
+      /\bcouplers?\b/i,
+      /\bclamps?\b/i,
+      /\bcheeseborough\b/i,
+      /\bsafet(y|ies)\b/i,
+      /\bspan set\b/i,
+      /\bsteel\b/i,
+      /\bshackle\b/i,
+    ],
+  },
+  {
+    id: "motor",
+    label: "Motors / Hoists",
+    primaryPatterns: [
+      /\bmotors?\b/i,
+      /\bhoists?\b/i,
+      /\bchain motor\b/i,
+      /\bchain hoist\b/i,
+      /\b1\/2 ton\b/i,
+      /\bhalf ton\b/i,
+      /\b1 ton\b/i,
+      /\bone ton\b/i,
+      /\bquarter ton\b/i,
+      /\bcm lodestar\b/i,
+      /\blodestar\b/i,
+      /\bliftket\b/i,
+    ],
+    relatedPatterns: [
+      /\bmotor controller\b/i,
+      /\bcontroller\b/i,
+      /\bpickle\b/i,
+      /\bpickle cable\b/i,
+      /\bsocapex\b/i,
+      /\bspan set\b/i,
+      /\bshackle\b/i,
+      /\bsteel\b/i,
+    ],
+  },
+  {
+    id: "console",
+    label: "Consoles / Desks",
+    primaryPatterns: [
+      /\bconsoles?\b/i,
+      /\bdesks?\b/i,
+      /\bcontrol surface\b/i,
+      /\bgrandma\b/i,
+      /\bma2\b/i,
+      /\bma3\b/i,
+      /\bavid\b/i,
+      /\bdigico\b/i,
+      /\byamaha\b/i,
+      /\bcl5\b/i,
+      /\bql5\b/i,
+      /\bsd10\b/i,
+      /\bsd12\b/i,
+      /\bsd9\b/i,
+      /\bprofile\b/i,
+      /\bvenue\b/i,
+      /\bwing\b/i,
+      /\bx32\b/i,
+      /\bm32\b/i,
+    ],
+    relatedPatterns: [
+      /\bstage rack\b/i,
+      /\bsnake\b/i,
+      /\bdante\b/i,
+      /\brio\b/i,
+      /\bsoundgrid\b/i,
+      /\bnetwork switch\b/i,
+      /\bartnet\b/i,
+      /\bdmx\b/i,
+    ],
+  },
+  {
+    id: "mic",
+    label: "Microphones / Wireless",
+    primaryPatterns: [
+      /\bmics?\b/i,
+      /\bmicrophones?\b/i,
+      /\bwireless\b/i,
+      /\biem\b/i,
+      /\bin ear\b/i,
+      /\bin-ear\b/i,
+      /\bhandheld\b/i,
+      /\blavalier\b/i,
+      /\blav\b/i,
+      /\bbodypack\b/i,
+      /\bheadset\b/i,
+      /\bshure\b/i,
+      /\bsennheiser\b/i,
+      /\bsm58\b/i,
+      /\bsm57\b/i,
+      /\bksm\b/i,
+      /\bulxd\b/i,
+      /\bqlxd\b/i,
+      /\baxient\b/i,
+    ],
+    relatedPatterns: [
+      /\bantenna\b/i,
+      /\bpaddle\b/i,
+      /\bcombiners?\b/i,
+      /\bdistribution\b/i,
+      /\brf\b/i,
+      /\bmic stand\b/i,
+      /\bboom stand\b/i,
+      /\bxlr\b/i,
+    ],
+  },
+  {
+    id: "cable",
+    label: "Cable",
+    primaryPatterns: [
+      /\bcables?\b/i,
+      /\bxlr\b/i,
+      /\bsdi\b/i,
+      /\bhdmi\b/i,
+      /\bnl4\b/i,
+      /\bnl8\b/i,
+      /\bsocapex\b/i,
+      /\bcat6\b/i,
+      /\bethernet\b/i,
+      /\bpower cable\b/i,
+      /\bstinger\b/i,
+      /\bjumper\b/i,
+      /\bfeeder\b/i,
+      /\btail\b/i,
+    ],
+    relatedPatterns: [],
+  },
+  {
+    id: "power",
+    label: "Power",
+    primaryPatterns: [
+      /\bpower\b/i,
+      /\bdistro\b/i,
+      /\bpower distribution\b/i,
+      /\bdisconnect\b/i,
+      /\bfeeder\b/i,
+      /\btails?\b/i,
+      /\bcamlock\b/i,
+      /\bsocapex\b/i,
+      /\bstingers?\b/i,
+      /\blunchbox\b/i,
+      /\bbreaker\b/i,
+      /\btransformer\b/i,
+    ],
+    relatedPatterns: [
+      /\bcable ramp\b/i,
+      /\byellow jacket\b/i,
+    ],
+  },
+  {
+    id: "lighting",
+    label: "Lighting",
+    primaryPatterns: [
+      /\blights?\b/i,
+      /\blighting\b/i,
+      /\bfixtures?\b/i,
+      /\bwashes?\b/i,
+      /\bbeams?\b/i,
+      /\bspots?\b/i,
+      /\bstrobes?\b/i,
+      /\bpixelline\b/i,
+      /\bpar\b/i,
+      /\bmoving head\b/i,
+      /\bvl\d+\b/i,
+      /\bproteus\b/i,
+      /\bmaximus\b/i,
+      /\bhybrid\b/i,
+      /\brobe\b/i,
+      /\bmega ?pointe\b/i,
+      /\bbmfl\b/i,
+      /\bviper\b/i,
+      /\bultra\b/i,
+      /\bmartin\b/i,
+      /\bmac\b/i,
+      /\bcolorado\b/i,
+      /\bchauvet\b/i,
+      /\belation\b/i,
+    ],
+    relatedPatterns: [
+      /\bdmx\b/i,
+      /\bartnet\b/i,
+      /\bsacn\b/i,
+      /\bnode\b/i,
+      /\bdimmer\b/i,
+      /\brelay\b/i,
+    ],
+  },
+];
+
+const FLEX_ITEM_QUESTION_PATTERNS = [
+  /\bdoes\b/i,
+  /\bdo we have\b/i,
+  /\bhas\b/i,
+  /\bhave\b/i,
+  /\bhow many\b/i,
+  /\bwhat .* are on\b/i,
+  /\bwhich .* are on\b/i,
+  /\bis there\b/i,
+  /\bare there\b/i,
+  /\bshow me .* on\b/i,
+  /\bfind .* on\b/i,
+];
+
+function normalizeFlexItemText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^\w\s.+/-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getAllInventoryItemsWithSection(detail) {
+  const sections = Array.isArray(detail?.sections) ? detail.sections : [];
+
+  return sections
+    .filter(
+      (section) =>
+        section.category === "rental" &&
+        !/labor|transport/i.test(String(section.name || ""))
+    )
+    .flatMap((section) =>
+      (Array.isArray(section.items) ? section.items : []).map((item) => ({
+        ...item,
+        sectionName: section.name,
+        sectionCategory: section.category,
+      }))
+    );
+}
+
+function detectEquipmentFamilyFromQuestion(question) {
+  const text = String(question || "");
+
+  for (const family of FLEX_EQUIPMENT_FAMILIES) {
+    const allPatterns = [...family.primaryPatterns, ...family.relatedPatterns];
+    if (allPatterns.some((pattern) => pattern.test(text))) {
+      return family;
+    }
+  }
+
+  return null;
+}
+
+function stripItemSearchPhrase(question) {
+  let text = String(question || "");
+
+  text = text.replace(/\b\d{2}-\d{3,6}\b/g, " ");
+
+  const removePatterns = [
+    /\bwhat\b/gi,
+    /\bwhich\b/gi,
+    /\bdoes\b/gi,
+    /\bdo\b/gi,
+    /\bwe\b/gi,
+    /\bhave\b/gi,
+    /\bhas\b/gi,
+    /\bhow many\b/gi,
+    /\bis there\b/gi,
+    /\bare there\b/gi,
+    /\bshow\b/gi,
+    /\bme\b/gi,
+    /\bfind\b/gi,
+    /\bon\b/gi,
+    /\bin\b/gi,
+    /\bthe\b/gi,
+    /\ba\b/gi,
+    /\ban\b/gi,
+    /\bquote\b/gi,
+    /\bjob\b/gi,
+    /\bflex\b/gi,
+    /\bitems?\b/gi,
+    /\bequipment\b/gi,
+    /\bgear\b/gi,
+    /\brentals?\b/gi,
+  ];
+
+  for (const pattern of removePatterns) {
+    text = text.replace(pattern, " ");
+  }
+
+  return text
+    .replace(/[?!.:,;()[\]{}"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSignificantSearchTokens(value) {
+  const baseTokens = normalizeFlexItemText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .filter(
+      (token) =>
+        ![
+          "the",
+          "and",
+          "for",
+          "with",
+          "quote",
+          "job",
+          "flex",
+          "items",
+          "item",
+          "gear",
+          "equipment",
+          "rental",
+          "rentals",
+          "what",
+          "which",
+          "have",
+          "does",
+          "show",
+          "many",
+          "there",
+          "are",
+          "is",
+        ].includes(token)
+    );
+
+  const expanded = [];
+
+  for (const token of baseTokens) {
+    expanded.push(token);
+
+    // Handle simple plurals and model-number plurals, e.g. VX1000s -> vx1000.
+    if (token.length > 3 && token.endsWith("s")) {
+      expanded.push(token.slice(0, -1));
+    }
+
+    if (token.length > 4 && token.endsWith("es")) {
+      expanded.push(token.slice(0, -2));
+    }
+  }
+
+  return [...new Set(expanded)];
+}
+
+function itemMatchesAnyPattern(item, patterns) {
+  const haystack = `${item.name || ""} ${item.note || ""}`;
+  return patterns.some((pattern) => pattern.test(haystack));
+}
+
+function scoreExactItemMatch(item, tokens) {
+  if (!tokens.length) return 0;
+
+  const haystack = normalizeFlexItemText(
+    `${item.name || ""} ${item.note || ""} ${item.sectionName || ""}`
+  );
+
+  let score = 0;
+
+  for (const token of tokens) {
+    if (haystack.includes(token)) {
+      score += token.length >= 4 ? 2 : 1;
+    }
+  }
+
+  // Reward phrase-level match when the user's original phrase survives cleanup.
+  const phrase = [...new Set(tokens)].join(" ");
+  if (phrase.length >= 4 && haystack.includes(phrase)) {
+    score += 4;
+  }
+
+  return score;
+}
+
+function summarizeMatchedFlexItems(items, maxItems = 80) {
+  return (Array.isArray(items) ? items : [])
+    .slice(0, maxItems)
+    .map((item) => ({
+      name: item.name,
+      sectionName: item.sectionName,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      pricingModel: item.pricingModel,
+      priceEach: item.priceEach,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: formatUsd(item.priceExtended),
+      lineMute: item.lineMute,
+      matchType: item.matchType || null,
+      matchScore: item.matchScore || 0,
+    }));
+}
+
+
+function isSpecificItemSearchPhrase(tokens) {
+  const genericTokens = new Set([
+    "audio",
+    "speaker",
+    "speakers",
+    "pa",
+    "sub",
+    "subs",
+    "video",
+    "led",
+    "panel",
+    "panels",
+    "wall",
+    "truss",
+    "motor",
+    "motors",
+    "hoist",
+    "hoists",
+    "console",
+    "consoles",
+    "mic",
+    "mics",
+    "microphone",
+    "microphones",
+    "cable",
+    "cables",
+    "power",
+    "lighting",
+    "light",
+    "lights",
+  ]);
+
+  return tokens.some((token) => {
+    const t = String(token || "").toLowerCase();
+    return /[a-z]+[0-9]+|[0-9]+[a-z]+/i.test(t) || (t.length >= 6 && !genericTokens.has(t));
+  });
+}
+
+function isPrimaryFamilyMatch(item, family) {
+  const name = String(item?.name || "");
+
+  if (family?.id === "truss") {
+    return /\bbox truss\b|\bcircle truss\b|\btriangle truss\b|\b12"?\s*box truss\b|\b20\.?5"?\s*truss\b|\btruss\s*-\s*\d/i.test(name);
+  }
+
+  if (family?.id === "led_panel") {
+    return /\bpanel\b/i.test(name) && !/\b(processor|novastar|vx1000|vx4s|mctrl|sending|receiving|jumper|cable|ground support|header|hanging|curving)\b/i.test(name);
+  }
+
+  if (family?.id === "speaker") {
+    return !/\b(cable|nl4|nl8|amplifier|amp rack|processor|galileo|galaxy|lake|drive rack)\b/i.test(name);
+  }
+
+  return true;
+}
+
+function shouldDemotePrimaryFamilyMatch(item, family) {
+  const name = String(item?.name || "");
+
+  if (family?.id === "truss") {
+    return /(bolt|tool set|tool|base plate|steel pipe|strap|ballast|shackle|span set|safety|safeties|clamp|coupler)/i.test(name);
+  }
+
+  if (family?.id === "led_panel") {
+    return /(processor|novastar|vx1000|vx4s|mctrl|sending|receiving|jumper|cable|ground support|header|hanging|curving)/i.test(name);
+  }
+
+  if (family?.id === "speaker") {
+    return /(cable|nl4|nl8|amplifier|amp rack|processor|galileo|galaxy|lake|drive rack)/i.test(name);
+  }
+
+  return false;
+}
+
+function buildFlexSmartItemSearch(detail, question) {
+  const family = detectEquipmentFamilyFromQuestion(question);
+  const rawSearchPhrase = stripItemSearchPhrase(question);
+  const tokens = getSignificantSearchTokens(rawSearchPhrase);
+  const allItems = getAllInventoryItemsWithSection(detail);
+
+  let primaryMatches = [];
+  let relatedMatches = [];
+  let searchMode = family ? "family" : "exact";
+
+  const exactMatches = tokens.length
+    ? allItems
+        .map((item) => ({
+          ...item,
+          matchType: "primary",
+          matchScore: scoreExactItemMatch(item, tokens),
+        }))
+        .filter((item) => item.matchScore > 0)
+        .sort((a, b) => b.matchScore - a.matchScore)
+    : [];
+
+  if (isSpecificItemSearchPhrase(tokens) && exactMatches.length) {
+    searchMode = "exact";
+    primaryMatches = exactMatches;
+    relatedMatches = [];
+  } else if (family) {
+    const familyMatches = allItems
+      .filter((item) => itemMatchesAnyPattern(item, family.primaryPatterns))
+      .map((item) => ({ ...item, matchScore: 10 }));
+
+    primaryMatches = familyMatches
+      .filter((item) => isPrimaryFamilyMatch(item, family))
+      .filter((item) => !shouldDemotePrimaryFamilyMatch(item, family))
+      .map((item) => ({ ...item, matchType: "primary" }));
+
+    const demotedMatches = familyMatches
+      .filter(
+        (item) =>
+          !isPrimaryFamilyMatch(item, family) ||
+          shouldDemotePrimaryFamilyMatch(item, family)
+      )
+      .map((item) => ({ ...item, matchType: "related", matchScore: 5 }));
+
+    relatedMatches = [
+      ...demotedMatches,
+      ...allItems
+        .filter((item) => itemMatchesAnyPattern(item, family.relatedPatterns))
+        .filter(
+          (item) =>
+            !primaryMatches.some(
+              (primary) =>
+                primary.id === item.id &&
+                primary.name === item.name &&
+                primary.sectionName === item.sectionName
+            )
+        )
+        .map((item) => ({ ...item, matchType: "related", matchScore: 5 })),
+    ];
+
+    relatedMatches = relatedMatches.filter(
+      (item, index, array) =>
+        index ===
+        array.findIndex(
+          (other) =>
+            other.id === item.id &&
+            other.name === item.name &&
+            other.sectionName === item.sectionName
+        )
+    );
+  } else if (exactMatches.length) {
+    searchMode = "exact";
+    primaryMatches = exactMatches;
+    relatedMatches = [];
+  }
+
+  const totalPrimaryQuantity = primaryMatches.reduce(
+    (sum, item) => sum + Number(item.quantity || 0),
+    0
+  );
+  const totalRelatedQuantity = relatedMatches.reduce(
+    (sum, item) => sum + Number(item.quantity || 0),
+    0
+  );
+  const primaryTotal = primaryMatches.reduce(
+    (sum, item) => sum + Number(item.priceExtended || 0),
+    0
+  );
+  const relatedTotal = relatedMatches.reduce(
+    (sum, item) => sum + Number(item.priceExtended || 0),
+    0
+  );
+
+  const familyLabel =
+    searchMode === "exact"
+      ? `Item Search: ${rawSearchPhrase || "Item"}`
+      : family?.label || (rawSearchPhrase ? `Item Search: ${rawSearchPhrase}` : "Item Search");
+
+  return {
+    familyId: searchMode === "exact" ? null : family?.id || null,
+    familyLabel,
+    searchMode,
+    searchPhrase: rawSearchPhrase,
+    tokens,
+    primaryMatches: summarizeMatchedFlexItems(primaryMatches, 100),
+    relatedMatches: summarizeMatchedFlexItems(relatedMatches, 100),
+    primaryCount: primaryMatches.length,
+    relatedCount: relatedMatches.length,
+    totalCount: primaryMatches.length + relatedMatches.length,
+    totalPrimaryQuantity,
+    totalRelatedQuantity,
+    primaryTotal: Math.round(primaryTotal * 100) / 100,
+    primaryTotalFormatted: formatUsd(primaryTotal),
+    relatedTotal: Math.round(relatedTotal * 100) / 100,
+    relatedTotalFormatted: formatUsd(relatedTotal),
+    totalMatchedValue: Math.round((primaryTotal + relatedTotal) * 100) / 100,
+    totalMatchedValueFormatted: formatUsd(primaryTotal + relatedTotal),
+  };
+}
+
+
+function formatFlexDateTime(value) {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatFlexDate(value) {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function classifyFlexContextQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(pm|project manager)\b/i.test(text)) {
+    return "project_manager";
+  }
+
+  if (/\b(owner|owns|responsible|person responsible|salesperson|sales person|account manager)\b/i.test(text)) {
+    return "owner";
+  }
+
+  if (/\b(client|customer)\b/i.test(text)) {
+    return "client";
+  }
+
+  if (/\b(venue|where|location|site)\b/i.test(text)) {
+    return "venue";
+  }
+
+  if (/\b(load[- ]?in|load in|loadin)\b/i.test(text)) {
+    return "load_in";
+  }
+
+  if (/\b(load[- ]?out|load out|loadout|strike)\b/i.test(text)) {
+    return "load_out";
+  }
+
+  if (/\b(start|planned start|begins|begin)\b/i.test(text)) {
+    return "planned_start";
+  }
+
+  if (/\b(end|planned end|ends|finish|finishes)\b/i.test(text)) {
+    return "planned_end";
+  }
+
+  if (/\b(date|dates|when|schedule|timeline)\b/i.test(text)) {
+    return "dates";
+  }
+
+  return "overview";
+}
+
+function buildFlexContextAnswer(detail, question) {
+  const showContext = detail?.showContext || {};
+  const contextType = classifyFlexContextQuestion(question);
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const personResponsible = showContext.personResponsible || null;
+  const projectManager = showContext.projectManager || null;
+  const client = showContext.client || null;
+  const venue = showContext.venue || null;
+  const plannedStart = showContext.plannedStartDate || null;
+  const plannedEnd = showContext.plannedEndDate || null;
+  const loadIn = showContext.loadInDate || null;
+  const loadOut = showContext.loadOutDate || null;
+
+  const facts = {
+    personResponsible,
+    projectManager,
+    client,
+    venue,
+    plannedStart,
+    plannedStartFormatted: formatFlexDateTime(plannedStart),
+    plannedEnd,
+    plannedEndFormatted: formatFlexDateTime(plannedEnd),
+    loadIn,
+    loadInFormatted: formatFlexDateTime(loadIn),
+    loadOut,
+    loadOutFormatted: formatFlexDateTime(loadOut),
+  };
+
+  if (contextType === "owner") {
+    return {
+      headline: "Quote Owner",
+      contextType,
+      answer: `${documentLabel}: person responsible is ${personResponsible || "not assigned"}. Project manager is ${projectManager || "not assigned"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "project_manager") {
+    return {
+      headline: "Project Manager",
+      contextType,
+      answer: `${documentLabel}: project manager is ${projectManager || "not assigned"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "client") {
+    return {
+      headline: "Client",
+      contextType,
+      answer: `${documentLabel}: client is ${client || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "venue") {
+    return {
+      headline: "Venue",
+      contextType,
+      answer: `${documentLabel}: venue is ${venue || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "load_in") {
+    return {
+      headline: "Load In",
+      contextType,
+      answer: `${documentLabel}: load in is ${facts.loadInFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "load_out") {
+    return {
+      headline: "Load Out",
+      contextType,
+      answer: `${documentLabel}: load out is ${facts.loadOutFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "planned_start") {
+    return {
+      headline: "Planned Start",
+      contextType,
+      answer: `${documentLabel}: planned start is ${facts.plannedStartFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  if (contextType === "planned_end") {
+    return {
+      headline: "Planned End",
+      contextType,
+      answer: `${documentLabel}: planned end is ${facts.plannedEndFormatted || "not listed"}.`,
+      facts,
+    };
+  }
+
+  const dateParts = [
+    facts.plannedStartFormatted && facts.plannedEndFormatted
+      ? `planned ${facts.plannedStartFormatted} to ${facts.plannedEndFormatted}`
+      : null,
+    facts.loadInFormatted ? `load in ${facts.loadInFormatted}` : null,
+    facts.loadOutFormatted ? `load out ${facts.loadOutFormatted}` : null,
+  ].filter(Boolean);
+
+  if (contextType === "dates") {
+    return {
+      headline: "Dates",
+      contextType,
+      answer: `${documentLabel}: ${dateParts.length ? dateParts.join("; ") : "no dates are listed."}`,
+      facts,
+    };
+  }
+
+  return {
+    headline: "Quote Context",
+    contextType,
+    answer: `${documentLabel}: ${client || "No client listed"}${venue ? ` at ${venue}` : ""}. Person responsible is ${personResponsible || "not assigned"}; PM is ${projectManager || "not assigned"}.`,
+    facts,
+  };
+}
+
+
+function classifyFlexAskIntent(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(labor|crew|tech|technician|engineer|stagehand|operator|staffing)\b/i.test(text)) {
+    return "document_labor";
+  }
+
+  if (/\b(transport|transportation|truck|trucking|delivery|pickup|pick up|freight)\b/i.test(text)) {
+    return "document_transportation";
+  }
+
+  if (/\b(compare|comparison|versus|vs\.?|difference|different|changed|changes|between)\b/i.test(text)) {
+    return "document_compare";
+  }
+
+  if (/\b(paid|payment|payments|collected|received|deposit|balance|due|owed|outstanding|remaining|open|closed|real revenue|revenue quote|real quote|placeholder|zero|0 quote|\$0|category subtotal|subtotal|adjustment|discount|invoice total source)\b/i.test(text)) {
+    return "document_money";
+  }
+
+  if (/\b(total|price|cost|amount|invoice total|quote total)\b/i.test(text)) {
+    return "document_total";
+  }
+
+  if (/\b(owner|owns|responsible|person responsible|salesperson|sales person|account manager|pm|project manager|client|customer|venue|where|location|site|date|dates|when|schedule|timeline|load[- ]?in|load[- ]?out|loadin|loadout|strike|planned start|planned end)\b/i.test(text)) {
+    return "document_context";
+  }
+
+  if (/\b(operational summary|ops summary|operation summary|quick summary|quick overview|overview|summarize|sections?|categories|category breakdown|breakdown|departments?|dept|video vs|audio vs|lighting vs|truss vs|power vs)\b/i.test(text)) {
+    return "document_sections";
+  }
+
+  const hasItemQuestionShape = FLEX_ITEM_QUESTION_PATTERNS.some((pattern) =>
+    pattern.test(text)
+  );
+  const hasEquipmentFamily = Boolean(detectEquipmentFamilyFromQuestion(text));
+
+  if (hasEquipmentFamily || hasItemQuestionShape) {
+    return "document_item_search";
+  }
+
+  if (/\b(inventory|gear|equipment|rental|rentals|items|item list|what is on|what's on)\b/i.test(text)) {
+    return "document_inventory";
+  }
+
+  return "document_summary";
+}
+
+function summarizeItemsForAnswer(items, maxItems = 20) {
+  return (Array.isArray(items) ? items : [])
+    .slice(0, maxItems)
+    .map((item) => ({
+      name: item.name,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      pricingModel: item.pricingModel,
+      priceEach: item.priceEach,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: formatUsd(item.priceExtended),
+      lineMute: item.lineMute,
+    }));
+}
+
+function getSectionByCategoryOrName(detail, category, namePattern) {
+  const sections = Array.isArray(detail?.sections) ? detail.sections : [];
+
+  return sections.find((section) => {
+    const sectionName = String(section?.name || "");
+    return (
+      String(section?.category || "").toLowerCase() === category ||
+      (namePattern && namePattern.test(sectionName))
+    );
+  });
+}
+
+
+function pluralizeFlexWord(count, singular, plural = `${singular}s`) {
+  return Number(count || 0) === 1 ? singular : plural;
+}
+
+function formatFlexItemOneLine(item) {
+  if (!item) return "";
+  const qty = item.quantity != null ? `${item.quantity}x ` : "";
+  const section = item.sectionName ? ` from ${item.sectionName}` : "";
+  const price =
+    item.priceExtendedFormatted && item.priceExtendedFormatted !== "$0.00"
+      ? ` (${item.priceExtendedFormatted})`
+      : "";
+
+  return `${qty}${item.name}${section}${price}`;
+}
+
+function makeHumanItemSearchAnswer(documentLabel, itemSearch) {
+  const primary = Array.isArray(itemSearch?.primaryMatches)
+    ? itemSearch.primaryMatches
+    : [];
+  const related = Array.isArray(itemSearch?.relatedMatches)
+    ? itemSearch.relatedMatches
+    : [];
+  const searchPhrase = itemSearch?.searchPhrase || "that item";
+  const familyLabel = itemSearch?.familyLabel || "Item Search";
+  const primaryCount = Number(itemSearch?.primaryCount || 0);
+  const relatedCount = Number(itemSearch?.relatedCount || 0);
+  const totalPrimaryQuantity = Number(itemSearch?.totalPrimaryQuantity || 0);
+
+  if (!primaryCount && !relatedCount) {
+    return `${documentLabel}: I do not see ${searchPhrase} on this quote.`;
+  }
+
+  if (itemSearch?.searchMode === "exact") {
+    if (primaryCount === 1) {
+      return `Yes — ${documentLabel} has ${formatFlexItemOneLine(
+        primary[0]
+      )} on the quote.`;
+    }
+
+    return `Yes — ${documentLabel} has ${primaryCount} matches for ${searchPhrase}, totaling ${totalPrimaryQuantity} units and ${itemSearch.primaryTotalFormatted}.`;
+  }
+
+  const hasRelated = relatedCount > 0;
+
+  if (primaryCount === 1) {
+    return `${documentLabel} has ${formatFlexItemOneLine(primary[0])}. ${
+      hasRelated
+        ? `I also found ${relatedCount} related ${pluralizeFlexWord(
+            relatedCount,
+            "item"
+          )}.`
+        : ""
+    }`.trim();
+  }
+
+  return `${documentLabel} has ${totalPrimaryQuantity} primary ${familyLabel.toLowerCase()} units across ${primaryCount} ${pluralizeFlexWord(
+    primaryCount,
+    "line"
+  )}, totaling ${itemSearch.primaryTotalFormatted}.${
+    hasRelated
+      ? ` I also found ${relatedCount} related ${pluralizeFlexWord(
+          relatedCount,
+          "item"
+        )} totaling ${itemSearch.relatedTotalFormatted}.`
+      : ""
+  }`;
+}
+
+function makeHumanLaborAnswer(documentLabel, items, laborTotal) {
+  const count = Array.isArray(items) ? items.length : 0;
+
+  if (!count) {
+    return `${documentLabel}: I do not see any labor lines on this quote.`;
+  }
+
+  return `${documentLabel} has ${count} labor ${pluralizeFlexWord(
+    count,
+    "line"
+  )} totaling ${formatUsd(laborTotal)}.`;
+}
+
+function makeHumanTransportationAnswer(documentLabel, items, transportationTotal) {
+  const count = Array.isArray(items) ? items.length : 0;
+
+  if (!count) {
+    return `${documentLabel}: I do not see any transportation lines on this quote.`;
+  }
+
+  if (count === 1) {
+    return `${documentLabel} has ${formatFlexItemOneLine(
+      items[0]
+    )} for transportation.`;
+  }
+
+  return `${documentLabel} has ${count} transportation ${pluralizeFlexWord(
+    count,
+    "line"
+  )} totaling ${formatUsd(transportationTotal)}.`;
+}
+
+function makeHumanInventoryAnswer(documentLabel, detail, sections, inventoryTotal) {
+  const itemCount = detail?.counts?.inventoryItems || 0;
+  const sectionCount = Array.isArray(sections) ? sections.length : 0;
+
+  if (!itemCount) {
+    return `${documentLabel}: I do not see any rental inventory on this quote.`;
+  }
+
+  return `${documentLabel} has ${itemCount} rental inventory ${pluralizeFlexWord(
+    itemCount,
+    "item"
+  )} across ${sectionCount} ${pluralizeFlexWord(
+    sectionCount,
+    "section"
+  )}, totaling ${formatUsd(inventoryTotal)}.`;
+}
+
+function makeHumanTotalAnswer(documentLabel, invoiceTotal, categorySubtotal, balanceDue) {
+  return `${documentLabel} is ${formatUsd(invoiceTotal)} total, with ${formatUsd(
+    balanceDue || 0
+  )} still due. The category subtotal before final invoice adjustments is ${formatUsd(
+    categorySubtotal
+  )}.`;
+}
+
+
+
+function classifyFlexMoneyQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(is|is this|is it|paid in full|paid\?)\b/i.test(text) && /\bpaid\b/i.test(text)) {
+    return "paid_status";
+  }
+
+  if (/\b(how much|what amount|amount|payments?|collected|received|deposit)\b/i.test(text) && /\b(paid|payment|payments|collected|received|deposit)\b/i.test(text)) {
+    return "payments";
+  }
+
+  if (/\bpaid\b/i.test(text)) {
+    return "paid_status";
+  }
+
+  if (/\b(balance|due|owed|outstanding|remaining)\b/i.test(text)) {
+    return "balance";
+  }
+
+  if (/\b(open|closed|still open|outstanding)\b/i.test(text)) {
+    return "open_status";
+  }
+
+  if (/\b(real revenue|revenue quote|real quote|placeholder|zero|0 quote|\$0)\b/i.test(text)) {
+    return "revenue_signal";
+  }
+
+  if (/\b(category subtotal|subtotal|match|why.*total|adjustment|discount|invoice total source)\b/i.test(text)) {
+    return "subtotal_vs_invoice";
+  }
+
+  return "money_summary";
+}
+
+function buildFlexMoneyAnswer(detail, question) {
+  const showContext = detail?.showContext || {};
+  const summary = detail?.summary || {};
+  const financials = summary?.financials || {};
+  const totals = summary?.totals || {};
+  const moneyType = classifyFlexMoneyQuestion(question);
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const invoiceTotal = Number(financials.invoiceTotal ?? totals.document ?? 0);
+  const categorySubtotal = Number(financials.categorySubtotal ?? totals.document ?? 0);
+  const totalAppliedPayments = Number(financials.totalAppliedPayments || 0);
+  const balanceDue = Number(financials.balanceDue || 0);
+  const discount = Number(financials.discount || 0);
+  const additionalDiscount = Number(financials.additionalDiscount || 0);
+  const salesTax = Number(financials.salesTax || 0);
+  const creditCardFee = Number(financials.creditCardFee || 0);
+  const invoiceTotalSource = financials.invoiceTotalSource || null;
+
+  const isPaid = invoiceTotal > 0 && balanceDue <= 0;
+  const hasPayments = totalAppliedPayments > 0;
+  const isZeroPlaceholder = invoiceTotal === 0 && categorySubtotal === 0;
+  const hasRevenueSignal = invoiceTotal > 0 || categorySubtotal > 0;
+  const subtotalDelta = Math.round((categorySubtotal - invoiceTotal) * 100) / 100;
+
+  const facts = {
+    invoiceTotal,
+    invoiceTotalFormatted: formatUsd(invoiceTotal),
+    categorySubtotal,
+    categorySubtotalFormatted: formatUsd(categorySubtotal),
+    totalAppliedPayments,
+    totalAppliedPaymentsFormatted: formatUsd(totalAppliedPayments),
+    balanceDue,
+    balanceDueFormatted: formatUsd(balanceDue),
+    discount,
+    discountFormatted: formatUsd(discount),
+    additionalDiscount,
+    additionalDiscountFormatted: formatUsd(additionalDiscount),
+    salesTax,
+    salesTaxFormatted: formatUsd(salesTax),
+    creditCardFee,
+    creditCardFeeFormatted: formatUsd(creditCardFee),
+    invoiceTotalSource,
+    isPaid,
+    hasPayments,
+    isZeroPlaceholder,
+    hasRevenueSignal,
+    subtotalDelta,
+    subtotalDeltaFormatted: formatUsd(Math.abs(subtotalDelta)),
+  };
+
+  if (moneyType === "paid_status") {
+    return {
+      headline: "Paid Status",
+      moneyType,
+      answer: isPaid
+        ? `Yes — ${documentLabel} appears to be paid in full.`
+        : `No — ${documentLabel} does not appear to be paid yet. Balance due is ${facts.balanceDueFormatted}.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "payments") {
+    return {
+      headline: "Payments",
+      moneyType,
+      answer: hasPayments
+        ? `${documentLabel} has ${facts.totalAppliedPaymentsFormatted} in applied payments. Balance due is ${facts.balanceDueFormatted}.`
+        : `${documentLabel} does not show any applied payments yet. Balance due is ${facts.balanceDueFormatted}.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "balance") {
+    return {
+      headline: "Balance Due",
+      moneyType,
+      answer: isPaid
+        ? `${documentLabel} is paid in full.`
+        : `${documentLabel} has ${facts.balanceDueFormatted} still due against a ${facts.invoiceTotalFormatted} invoice total.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "open_status") {
+    return {
+      headline: "Open Balance",
+      moneyType,
+      answer: balanceDue > 0
+        ? `${documentLabel} still appears financially open, with ${facts.balanceDueFormatted} due.`
+        : `${documentLabel} does not show an open balance.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "revenue_signal") {
+    return {
+      headline: "Revenue Signal",
+      moneyType,
+      answer: isZeroPlaceholder
+        ? `${documentLabel} looks like a $0 placeholder from the financial fields I can see.`
+        : `${documentLabel} looks like a revenue quote: invoice total is ${facts.invoiceTotalFormatted}, category subtotal is ${facts.categorySubtotalFormatted}, and balance due is ${facts.balanceDueFormatted}.`,
+      facts,
+    };
+  }
+
+  if (moneyType === "subtotal_vs_invoice") {
+    let reason = "The category subtotal and invoice total match.";
+
+    if (subtotalDelta > 0) {
+      reason = `The category subtotal is ${facts.subtotalDeltaFormatted} higher than the invoice total, which usually means a final discount, adjustment, package price, or other invoice-level change was applied.`;
+    } else if (subtotalDelta < 0) {
+      reason = `The invoice total is ${facts.subtotalDeltaFormatted} higher than the category subtotal, which usually means tax, fees, or another invoice-level charge was added.`;
+    }
+
+    return {
+      headline: "Subtotal vs Invoice Total",
+      moneyType,
+      answer: `${documentLabel}: ${reason}`,
+      facts,
+    };
+  }
+
+  return {
+    headline: "Money Summary",
+    moneyType,
+    answer: `${documentLabel} is ${facts.invoiceTotalFormatted} total. ${facts.totalAppliedPaymentsFormatted} has been applied, leaving ${facts.balanceDueFormatted} due.`,
+    facts,
+  };
+}
+
+
+
+function classifyFlexSectionQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (/\b(operational summary|ops summary|operation summary|quick summary|quick overview|overview|summarize|summary)\b/i.test(text)) {
+    return "operational_summary";
+  }
+
+  if (/\b(sections?|categories|category breakdown|breakdown|departments?|dept|video vs|audio vs|lighting vs|truss vs|power vs)\b/i.test(text)) {
+    return "section_breakdown";
+  }
+
+  return "section_breakdown";
+}
+
+
+function buildSectionTotalAudit(section) {
+  const lines = Array.isArray(section?.lines) ? section.lines : [];
+  const visibleLineTotal = lines.reduce(
+    (sum, item) => sum + Number(item.priceExtended || 0),
+    0
+  );
+  const officialSectionTotal = Number(section?.total || 0);
+  const delta = Math.round((visibleLineTotal - officialSectionTotal) * 100) / 100;
+
+  return {
+    visibleLineTotal: Math.round(visibleLineTotal * 100) / 100,
+    visibleLineTotalFormatted: formatUsd(visibleLineTotal),
+    officialSectionTotal,
+    officialSectionTotalFormatted: formatUsd(officialSectionTotal),
+    delta,
+    deltaFormatted: formatUsd(Math.abs(delta)),
+    hasMismatch: Math.abs(delta) >= 0.01,
+  };
+}
+
+
+function buildFlexSectionSummary(detail, question) {
+  const showContext = detail?.showContext || {};
+  const summary = detail?.summary || {};
+  const totals = summary?.totals || {};
+  const financials = summary?.financials || {};
+  const sectionType = classifyFlexSectionQuestion(question);
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  const sections = (Array.isArray(detail.sections) ? detail.sections : []).map((section) => {
+    const mapped = {
+      name: section.name,
+      category: section.category,
+      total: Number(section.total || 0),
+      totalFormatted: formatUsd(section.total || 0),
+      itemCount: section.itemCount || 0,
+      lines: summarizeItemsForAnswer(section.items, 100),
+    };
+
+    return {
+      ...mapped,
+      totalAudit: buildSectionTotalAudit(mapped),
+    };
+  });
+
+  const billableSections = sections.filter((section) => Number(section.total || 0) !== 0 || section.itemCount > 0);
+  const rentalSections = sections.filter(
+    (section) =>
+      section.category === "rental" &&
+      !/labor|transport/i.test(String(section.name || ""))
+  );
+  const laborSections = sections.filter(
+    (section) => section.category === "labor" || /labor/i.test(String(section.name || ""))
+  );
+  const transportationSections = sections.filter(
+    (section) =>
+      section.category === "transportation" || /transport/i.test(String(section.name || ""))
+  );
+
+  const topSections = [...billableSections]
+    .sort((a, b) => Number(b.total || 0) - Number(a.total || 0))
+    .slice(0, 6);
+
+  const sectionsWithTotalMismatches = sections.filter(
+    (section) => section.totalAudit?.hasMismatch
+  );
+
+  const facts = {
+    invoiceTotal: financials.invoiceTotal || totals.document || 0,
+    invoiceTotalFormatted: formatUsd(financials.invoiceTotal || totals.document || 0),
+    categorySubtotal: financials.categorySubtotal || totals.document || 0,
+    categorySubtotalFormatted: formatUsd(financials.categorySubtotal || totals.document || 0),
+    rentalTotal: totals.rental || 0,
+    rentalTotalFormatted: formatUsd(totals.rental || 0),
+    laborTotal: totals.labor || 0,
+    laborTotalFormatted: formatUsd(totals.labor || 0),
+    transportationTotal: totals.transportation || 0,
+    transportationTotalFormatted: formatUsd(totals.transportation || 0),
+    sectionCount: sections.length,
+    rentalSectionCount: rentalSections.length,
+    inventoryItemCount: detail?.counts?.inventoryItems || 0,
+    laborItemCount: detail?.counts?.laborItems || 0,
+    transportationItemCount: detail?.counts?.transportationItems || 0,
+    sectionsWithTotalMismatchCount: sectionsWithTotalMismatches.length,
+    hasSectionTotalMismatches: sectionsWithTotalMismatches.length > 0,
+  };
+
+  const sectionTotalNote = sectionsWithTotalMismatches.length
+    ? ` Note: ${sectionsWithTotalMismatches.length} section ${pluralizeFlexWord(
+        sectionsWithTotalMismatches.length,
+        "total does",
+        "totals do"
+      )} not match the visible line-item sum, so I am using FLEX section totals as the official section numbers.`
+    : "";
+
+  if (sectionType === "operational_summary") {
+    const topSectionText = topSections
+      .slice(0, 3)
+      .map((section) => `${section.name} ${section.totalFormatted}`)
+      .join(", ");
+
+    return {
+      headline: "Operational Summary",
+      sectionType,
+      answer: `${documentLabel}: ${facts.invoiceTotalFormatted} total with ${facts.inventoryItemCount} rental inventory ${pluralizeFlexWord(
+        facts.inventoryItemCount,
+        "item"
+      )}, ${facts.laborItemCount} labor ${pluralizeFlexWord(
+        facts.laborItemCount,
+        "line"
+      )}, and ${facts.transportationItemCount} transportation ${pluralizeFlexWord(
+        facts.transportationItemCount,
+        "line"
+      )}.${topSectionText ? ` Biggest sections: ${topSectionText}.` : ""}${sectionTotalNote}`,
+      facts,
+      sections,
+      topSections,
+      rentalSections,
+      laborSections,
+      transportationSections,
+    };
+  }
+
+  return {
+    headline: "Section Breakdown",
+    sectionType,
+    answer: `${documentLabel} has ${sections.length} ${pluralizeFlexWord(
+      sections.length,
+      "section"
+    )}. Rental totals ${facts.rentalTotalFormatted}, labor totals ${facts.laborTotalFormatted}, and transportation totals ${facts.transportationTotalFormatted}.${sectionTotalNote}`,
+    facts,
+    sections,
+    topSections,
+    rentalSections,
+    laborSections,
+    transportationSections,
+  };
+}
+
+
+function buildFlexAskAnswer(intent, detail, question) {
+  const showContext = detail?.showContext || {};
+  const summary = detail?.summary || {};
+  const totals = summary?.totals || {};
+  const financials = summary?.financials || {};
+
+  const documentLabel = [
+    showContext.documentNumber,
+    showContext.showName,
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
+  if (intent === "document_money") {
+    return buildFlexMoneyAnswer(detail, question);
+  }
+
+  if (intent === "document_context") {
+    return buildFlexContextAnswer(detail, question);
+  }
+
+  if (intent === "document_sections") {
+    return buildFlexSectionSummary(detail, question);
+  }
+
+  if (intent === "document_labor") {
+    const laborSection = getSectionByCategoryOrName(detail, "labor", /labor/i);
+    const laborTotal = laborSection?.total ?? totals.labor ?? 0;
+    const items = summarizeItemsForAnswer(detail.laborItems, 50);
+
+    return {
+      answer: makeHumanLaborAnswer(documentLabel, items, laborTotal),
+      headline: "Labor",
+      total: laborTotal,
+      totalFormatted: formatUsd(laborTotal),
+      items,
+    };
+  }
+
+  if (intent === "document_transportation") {
+    const transportationSection = getSectionByCategoryOrName(
+      detail,
+      "transportation",
+      /transport/i
+    );
+    const transportationTotal =
+      transportationSection?.total ?? totals.transportation ?? 0;
+    const items = summarizeItemsForAnswer(detail.transportationItems, 50);
+
+    return {
+      answer: makeHumanTransportationAnswer(
+        documentLabel,
+        items,
+        transportationTotal
+      ),
+      headline: "Transportation",
+      total: transportationTotal,
+      totalFormatted: formatUsd(transportationTotal),
+      items,
+    };
+  }
+
+  if (intent === "document_item_search") {
+    const itemSearch = buildFlexSmartItemSearch(detail, question);
+    const primaryText =
+      itemSearch.primaryCount === 1
+        ? "1 primary match"
+        : `${itemSearch.primaryCount} primary matches`;
+    const relatedText =
+      itemSearch.relatedCount === 1
+        ? "1 related match"
+        : `${itemSearch.relatedCount} related matches`;
+
+    const answer = makeHumanItemSearchAnswer(documentLabel, itemSearch);
+
+    return {
+      answer,
+      headline: itemSearch.familyLabel,
+      itemSearch,
+      total: itemSearch.primaryTotal,
+      totalFormatted: itemSearch.primaryTotalFormatted,
+      items: itemSearch.primaryMatches,
+      relatedItems: itemSearch.relatedMatches,
+    };
+  }
+
+  if (intent === "document_inventory") {
+    const sections = (Array.isArray(detail.sections) ? detail.sections : [])
+      .filter(
+        (section) =>
+          section.category === "rental" &&
+          !/labor|transport/i.test(String(section.name || ""))
+      )
+      .map((section) => ({
+        name: section.name,
+        total: section.total,
+        totalFormatted: formatUsd(section.total),
+        itemCount: section.itemCount,
+        items: summarizeItemsForAnswer(section.items, 50),
+      }));
+
+    const inventoryTotal = sections.reduce(
+      (sum, section) => sum + Number(section.total || 0),
+      0
+    );
+
+    return {
+      answer: makeHumanInventoryAnswer(
+        documentLabel,
+        detail,
+        sections,
+        inventoryTotal
+      ),
+      headline: "Inventory",
+      total: Math.round(inventoryTotal * 100) / 100,
+      totalFormatted: formatUsd(inventoryTotal),
+      sections,
+    };
+  }
+
+  if (intent === "document_total") {
+    const invoiceTotal = financials.invoiceTotal ?? totals.document ?? 0;
+    const categorySubtotal = financials.categorySubtotal ?? totals.document ?? 0;
+
+    return {
+      answer: makeHumanTotalAnswer(
+        documentLabel,
+        invoiceTotal,
+        categorySubtotal,
+        financials.balanceDue || 0
+      ),
+      headline: "Quote Total",
+      invoiceTotal,
+      invoiceTotalFormatted: formatUsd(invoiceTotal),
+      categorySubtotal,
+      categorySubtotalFormatted: formatUsd(categorySubtotal),
+      balanceDue: financials.balanceDue || 0,
+      balanceDueFormatted: formatUsd(financials.balanceDue || 0),
+      invoiceTotalSource: financials.invoiceTotalSource || null,
+      categoryBreakdown: {
+        rental: totals.rental || 0,
+        rentalFormatted: formatUsd(totals.rental || 0),
+        labor: totals.labor || 0,
+        laborFormatted: formatUsd(totals.labor || 0),
+        transportation: totals.transportation || 0,
+        transportationFormatted: formatUsd(totals.transportation || 0),
+        other: totals.other || 0,
+        otherFormatted: formatUsd(totals.other || 0),
+      },
+    };
+  }
+
+  return {
+    answer: `${documentLabel} is ${formatUsd(
+      financials.invoiceTotal || totals.document || 0
+    )} total: ${formatUsd(totals.rental || 0)} rental, ${formatUsd(
+      totals.labor || 0
+    )} labor, and ${formatUsd(totals.transportation || 0)} transportation.`,
+    headline: "Document Summary",
+    totals,
+    financials,
+    counts: detail.counts,
+  };
+}
+
+
+function buildFlexAskBriefPayload(fullResult) {
+  const result = fullResult?.result || {};
+  const showContext = fullResult?.showContext || {};
+  const summary = fullResult?.supportingData?.summary || {};
+  const financials = summary?.financials || {};
+  const totals = summary?.totals || {};
+
+  const payload = {
+    question: fullResult?.question || null,
+    intent: fullResult?.intent || null,
+    documentNumber: fullResult?.documentNumber || showContext?.documentNumber || null,
+    elementId: fullResult?.elementId || null,
+    showName: showContext?.showName || null,
+    client: showContext?.client || null,
+    venue: showContext?.venue || null,
+    plannedStartDate: showContext?.plannedStartDate || null,
+    answer: fullResult?.answer || result?.answer || "",
+    headline: result?.headline || null,
+    warnings: summary?.warnings || [],
+  };
+
+  if (fullResult?.needsSelection) {
+    payload.needsSelection = true;
+    payload.searchQuery = fullResult.searchQuery || null;
+    payload.filters = fullResult.filters || null;
+    payload.filterDescriptions = fullResult.filterDescriptions || [];
+    payload.search = fullResult.search || null;
+    payload.matches = Array.isArray(fullResult.matches) ? fullResult.matches : [];
+    payload.matchCount = payload.matches.length;
+    payload.initialDisplayCount = fullResult.initialDisplayCount || 5;
+    payload.hasMoreMatches =
+      fullResult.hasMoreMatches != null
+        ? Boolean(fullResult.hasMoreMatches)
+        : payload.matches.length > payload.initialDisplayCount;
+    payload.headline = "Choose a FLEX Quote";
+    payload.lines = payload.matches.map((match) => ({
+      text: `${match.index}. ${match.documentNumber || "No quote #"} — ${match.name || "Untitled"} — ${match.client || "No client"} — ${match.invoiceTotalFormatted || "$0.00"}`,
+      index: match.index,
+      documentNumber: match.documentNumber,
+      elementId: match.elementId,
+      name: match.name,
+      client: match.client,
+      venue: match.venue,
+      plannedStartDate: match.plannedStartDate,
+      invoiceTotal: match.invoiceTotal,
+      invoiceTotalFormatted: match.invoiceTotalFormatted,
+      balanceDue: match.balanceDue,
+      balanceDueFormatted: match.balanceDueFormatted,
+      searchRank: match.searchRank,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.needsClarification) {
+    payload.needsClarification = true;
+    payload.lines = [];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_compare") {
+    payload.documents = result.documents || null;
+    payload.comparisonType = result.comparisonType || null;
+    payload.financialRows = result.financialRows || [];
+    payload.sectionRows = result.sectionRows || [];
+    payload.itemRows = result.itemRows || [];
+    payload.counts = result.counts || {};
+    payload.lines = (result.sectionRows || []).slice(0, 10).map((row) => ({
+      text: `${row.name} — ${row.aFormatted} → ${row.bFormatted} (${row.deltaFormatted})`,
+      name: row.name,
+      a: row.a,
+      aFormatted: row.aFormatted,
+      b: row.b,
+      bFormatted: row.bFormatted,
+      delta: row.delta,
+      deltaFormatted: row.deltaFormatted,
+      category: row.category,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_sections") {
+    payload.sectionType = result.sectionType || null;
+    payload.facts = result.facts || {};
+    payload.total = result.facts?.invoiceTotal || 0;
+    payload.totalFormatted = result.facts?.invoiceTotalFormatted || formatUsd(0);
+    payload.sections = (result.sections || []).map((section) => ({
+      name: section.name,
+      category: section.category,
+      total: section.total,
+      totalFormatted: section.totalFormatted,
+      itemCount: section.itemCount,
+      totalAudit: section.totalAudit || null,
+      lines: (section.lines || []).map((item) => ({
+        text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+        name: item.name,
+        quantity: item.quantity,
+        timeQty: item.timeQty,
+        priceExtended: item.priceExtended,
+        priceExtendedFormatted: item.priceExtendedFormatted,
+      })),
+    }));
+    payload.topSections = result.topSections || [];
+    payload.lines = (result.topSections || []).map((section) => ({
+      text: `${section.name} — ${section.itemCount} item(s) — ${section.totalFormatted}`,
+      name: section.name,
+      itemCount: section.itemCount,
+      total: section.total,
+      totalFormatted: section.totalFormatted,
+      category: section.category,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_money") {
+    payload.moneyType = result.moneyType || null;
+    payload.facts = result.facts || {};
+    payload.lines = [
+      {
+        label: "Invoice total",
+        value: result.facts?.invoiceTotalFormatted || "$0.00",
+      },
+      {
+        label: "Category subtotal",
+        value: result.facts?.categorySubtotalFormatted || "$0.00",
+      },
+      {
+        label: "Applied payments",
+        value: result.facts?.totalAppliedPaymentsFormatted || "$0.00",
+      },
+      {
+        label: "Balance due",
+        value: result.facts?.balanceDueFormatted || "$0.00",
+      },
+      {
+        label: "Paid in full",
+        value: result.facts?.isPaid ? "Yes" : "No",
+      },
+      {
+        label: "Revenue signal",
+        value: result.facts?.hasRevenueSignal ? "Yes" : "No / $0 placeholder",
+      },
+      {
+        label: "Invoice total source",
+        value: result.facts?.invoiceTotalSource || "FLEX header / calculated fields",
+      },
+    ];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_context") {
+    payload.contextType = result.contextType || null;
+    payload.facts = result.facts || {};
+    payload.lines = [
+      {
+        label: "Person responsible",
+        value: result.facts?.personResponsible || "Not assigned",
+      },
+      {
+        label: "Project manager",
+        value: result.facts?.projectManager || "Not assigned",
+      },
+      {
+        label: "Client",
+        value: result.facts?.client || "Not listed",
+      },
+      {
+        label: "Venue",
+        value: result.facts?.venue || "Not listed",
+      },
+      {
+        label: "Planned start",
+        value: result.facts?.plannedStartFormatted || "Not listed",
+      },
+      {
+        label: "Planned end",
+        value: result.facts?.plannedEndFormatted || "Not listed",
+      },
+      {
+        label: "Load in",
+        value: result.facts?.loadInFormatted || "Not listed",
+      },
+      {
+        label: "Load out",
+        value: result.facts?.loadOutFormatted || "Not listed",
+      },
+    ];
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_item_search") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.itemSearch = result.itemSearch || null;
+    payload.lines = (result.items || []).map((item) => ({
+      text: `${item.name} — ${item.sectionName || "Inventory"} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      sectionName: item.sectionName,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+      matchType: item.matchType,
+      matchScore: item.matchScore,
+    }));
+    payload.relatedLines = (result.relatedItems || []).map((item) => ({
+      text: `${item.name} — ${item.sectionName || "Inventory"} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      sectionName: item.sectionName,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+      matchType: item.matchType,
+      matchScore: item.matchScore,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_labor") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.lines = (result.items || []).map((item) => ({
+      text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_transportation") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.lines = (result.items || []).map((item) => ({
+      text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+      name: item.name,
+      quantity: item.quantity,
+      timeQty: item.timeQty,
+      priceExtended: item.priceExtended,
+      priceExtendedFormatted: item.priceExtendedFormatted,
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_inventory") {
+    payload.total = result.total || 0;
+    payload.totalFormatted = result.totalFormatted || formatUsd(result.total || 0);
+    payload.sections = (result.sections || []).map((section) => ({
+      name: section.name,
+      total: section.total,
+      totalFormatted: section.totalFormatted,
+      itemCount: section.itemCount,
+      lines: (section.items || []).map((item) => ({
+        text: `${item.name} — Qty ${item.quantity}, Time Qty ${item.timeQty} — ${item.priceExtendedFormatted}`,
+        name: item.name,
+        quantity: item.quantity,
+        timeQty: item.timeQty,
+        priceExtended: item.priceExtended,
+        priceExtendedFormatted: item.priceExtendedFormatted,
+        lineMute: item.lineMute,
+      })),
+    }));
+    return payload;
+  }
+
+  if (fullResult?.intent === "document_total") {
+    payload.invoiceTotal = result.invoiceTotal || financials.invoiceTotal || 0;
+    payload.invoiceTotalFormatted =
+      result.invoiceTotalFormatted || formatUsd(payload.invoiceTotal);
+    payload.categorySubtotal =
+      result.categorySubtotal || financials.categorySubtotal || totals.document || 0;
+    payload.categorySubtotalFormatted =
+      result.categorySubtotalFormatted || formatUsd(payload.categorySubtotal);
+    payload.balanceDue = result.balanceDue || financials.balanceDue || 0;
+    payload.balanceDueFormatted =
+      result.balanceDueFormatted || formatUsd(payload.balanceDue);
+    payload.invoiceTotalSource = result.invoiceTotalSource || financials.invoiceTotalSource || null;
+    payload.categoryBreakdown = result.categoryBreakdown || {
+      rental: totals.rental || 0,
+      rentalFormatted: formatUsd(totals.rental || 0),
+      labor: totals.labor || 0,
+      laborFormatted: formatUsd(totals.labor || 0),
+      transportation: totals.transportation || 0,
+      transportationFormatted: formatUsd(totals.transportation || 0),
+      other: totals.other || 0,
+      otherFormatted: formatUsd(totals.other || 0),
+    };
+    return payload;
+  }
+
+  payload.totals = totals;
+  payload.financials = financials;
+  payload.counts = fullResult?.supportingData?.counts || null;
+  return payload;
+}
+
+
+function extractQuoteSearchQueryFromQuestion(question) {
+  let text = String(question || "").trim();
+
+  // Remove quote-number patterns if present.
+  text = text.replace(/\b\d{2}-\d{3,6}\b/g, " ");
+
+  // Remove common question / intent words while leaving the likely quote name.
+  const removePatterns = [
+    /\bwhat\b/gi,
+    /\bwhat's\b/gi,
+    /\bwho\b/gi,
+    /\bwhose\b/gi,
+    /\bshow\b/gi,
+    /\bme\b/gi,
+    /\bgive\b/gi,
+    /\btell\b/gi,
+    /\bfind\b/gi,
+    /\blook\b/gi,
+    /\bup\b/gi,
+    /\bsearch\b/gi,
+    /\bfor\b/gi,
+    /\bthe\b/gi,
+    /\ba\b/gi,
+    /\ban\b/gi,
+    /\bon\b/gi,
+    /\bin\b/gi,
+    /\bof\b/gi,
+    /\bis\b/gi,
+    /\bare\b/gi,
+    /\bthere\b/gi,
+    /\bany\b/gi,
+    /\bto\b/gi,
+    /\bassigned\b/gi,
+    /\bquote\b/gi,
+    /\bjob\b/gi,
+    /\bshow\b/gi,
+    /\bdocument\b/gi,
+    /\bflex\b/gi,
+    /\blabor\b/gi,
+    /\bcrew\b/gi,
+    /\bstaffing\b/gi,
+    /\btechs?\b/gi,
+    /\btechnicians?\b/gi,
+    /\binventory\b/gi,
+    /\bgear\b/gi,
+    /\bequipment\b/gi,
+    /\brentals?\b/gi,
+    /\bitems?\b/gi,
+    /\btransportation\b/gi,
+    /\btransport\b/gi,
+    /\btrucking\b/gi,
+    /\btrucks?\b/gi,
+    /\bdelivery\b/gi,
+    /\bpickup\b/gi,
+    /\btotal\b/gi,
+    /\bprice\b/gi,
+    /\bcost\b/gi,
+    /\bamount\b/gi,
+    /\bbalance\b/gi,
+    /\bsummary\b/gi,
+    /\babout\b/gi,
+
+    // Context-question intent words. These should not pollute quote-name search.
+    /\bowner\b/gi,
+    /\bowns\b/gi,
+    /\bresponsible\b/gi,
+    /\bperson responsible\b/gi,
+    /\bsalesperson\b/gi,
+    /\bsales person\b/gi,
+    /\baccount manager\b/gi,
+    /\bpm\b/gi,
+    /\bproject manager\b/gi,
+    /\bclient\b/gi,
+    /\bcustomer\b/gi,
+    /\bvenue\b/gi,
+    /\bwhere\b/gi,
+    /\blocation\b/gi,
+    /\bsite\b/gi,
+    /\bdate\b/gi,
+    /\bdates\b/gi,
+    /\bwhen\b/gi,
+    /\bschedule\b/gi,
+    /\btimeline\b/gi,
+    /\bload[- ]?in\b/gi,
+    /\bload[- ]?out\b/gi,
+    /\bloadin\b/gi,
+    /\bloadout\b/gi,
+    /\bstrike\b/gi,
+    /\bplanned start\b/gi,
+    /\bplanned end\b/gi,
+  ];
+
+  for (const pattern of removePatterns) {
+    text = text.replace(pattern, " ");
+  }
+
+  text = text
+    .replace(/[?!.:,;()[\]{}"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text;
+}
+
+
+
+function parseFlexSearchFilters(questionOrQuery, options = {}) {
+  const text = String(questionOrQuery || "").toLowerCase();
+  const filters = {
+    year: options.year ? Number(options.year) : null,
+    quoteOnly: Boolean(options.quoteOnly || options.excludeInvoices),
+    invoiceOnly: Boolean(options.invoiceOnly),
+    currentOnly: Boolean(options.currentOnly),
+    futureOnly: Boolean(options.futureOnly),
+    openOnly: Boolean(options.openOnly),
+    paidOnly: Boolean(options.paidOnly),
+    revenueOnly: Boolean(options.revenueOnly),
+    includeInvoices: options.includeInvoices != null ? Boolean(options.includeInvoices) : true,
+  };
+
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  if (!filters.year && yearMatch) {
+    filters.year = Number(yearMatch[1]);
+  }
+
+  if (/\b(no invoices|don't show invoices|do not show invoices|hide invoices|exclude invoices|quotes only|only quotes|quote only)\b/i.test(text)) {
+    filters.quoteOnly = true;
+    filters.includeInvoices = false;
+  }
+
+  if (/\b(only invoices|invoice only|invoices only|show invoices)\b/i.test(text)) {
+    filters.invoiceOnly = true;
+    filters.quoteOnly = false;
+    filters.includeInvoices = true;
+  }
+
+  if (/\b(current|active|open\/current|current\/open|recent)\b/i.test(text)) {
+    filters.currentOnly = true;
+  }
+
+  if (/\b(future|upcoming)\b/i.test(text)) {
+    filters.futureOnly = true;
+  }
+
+  if (/\b(open|outstanding|balance due|unpaid)\b/i.test(text)) {
+    filters.openOnly = true;
+  }
+
+  if (/\b(paid|paid in full|closed)\b/i.test(text)) {
+    filters.paidOnly = true;
+  }
+
+  if (/\b(real revenue|revenue quote|over \$0|greater than \$0|not \$0|nonzero|non-zero)\b/i.test(text)) {
+    filters.revenueOnly = true;
+  }
+
+  return filters;
+}
+
+function flexSearchFiltersAreActive(filters) {
+  if (!filters) return false;
+
+  return Boolean(
+    filters.year ||
+      filters.quoteOnly ||
+      filters.invoiceOnly ||
+      filters.currentOnly ||
+      filters.futureOnly ||
+      filters.openOnly ||
+      filters.paidOnly ||
+      filters.revenueOnly ||
+      filters.includeInvoices === false
+  );
+}
+
+function matchPassesFlexSearchFilters(match, filters) {
+  if (!filters) return true;
+
+  const doc = String(match?.documentNumber || "");
+  const isInvoice = /^INV-/i.test(doc);
+  const isQuote = /^\d{2}-\d{3,6}$/i.test(doc);
+  const plannedTime = getDateTimestamp(match?.plannedStartDate);
+  const plannedYear = plannedTime ? new Date(plannedTime).getFullYear() : null;
+  const now = Date.now();
+
+  if (filters.quoteOnly && !isQuote) return false;
+  if (filters.includeInvoices === false && isInvoice) return false;
+  if (filters.invoiceOnly && !isInvoice) return false;
+  if (filters.year && plannedYear !== Number(filters.year)) return false;
+  if (filters.futureOnly && (!plannedTime || plannedTime < now)) return false;
+
+  if (filters.currentOnly) {
+    // "Current" is intentionally broad: current-era jobs, not old archive noise.
+    const jan2025 = Date.UTC(2025, 0, 1);
+    if (!plannedTime || plannedTime < jan2025) return false;
+  }
+
+  if (filters.openOnly && !(Number(match?.balanceDue || 0) > 0)) return false;
+  if (filters.paidOnly && !(Number(match?.balanceDue || 0) <= 0 && Number(match?.invoiceTotal || 0) > 0)) return false;
+  if (filters.revenueOnly && !(Number(match?.invoiceTotal || 0) > 0 || Number(match?.categorySubtotal || 0) > 0)) return false;
+
+  return true;
+}
+
+function describeFlexSearchFilters(filters) {
+  if (!filters || !flexSearchFiltersAreActive(filters)) return [];
+
+  const descriptions = [];
+
+  if (filters.year) descriptions.push(`${filters.year}`);
+  if (filters.quoteOnly || filters.includeInvoices === false) descriptions.push("quotes only");
+  if (filters.invoiceOnly) descriptions.push("invoices only");
+  if (filters.currentOnly) descriptions.push("current/recent");
+  if (filters.futureOnly) descriptions.push("future/upcoming");
+  if (filters.openOnly) descriptions.push("open balance");
+  if (filters.paidOnly) descriptions.push("paid");
+  if (filters.revenueOnly) descriptions.push("revenue > $0");
+
+  return descriptions;
+}
+
+function removeFilterWordsFromQuoteSearchQuery(value) {
+  let text = String(value || "");
+
+  const patterns = [
+    /\bshow\b/gi,
+    /\bonly\b/gi,
+    /\bcurrent\b/gi,
+    /\bactive\b/gi,
+    /\brecent\b/gi,
+    /\bfuture\b/gi,
+    /\bupcoming\b/gi,
+    /\bopen\b/gi,
+    /\bpaid\b/gi,
+    /\bunpaid\b/gi,
+    /\boutstanding\b/gi,
+    /\bbalance due\b/gi,
+    /\bquotes?\b/gi,
+    /\binvoices?\b/gi,
+    /\bdon't show invoices\b/gi,
+    /\bdo not show invoices\b/gi,
+    /\bhide invoices\b/gi,
+    /\bexclude invoices\b/gi,
+    /\bno invoices\b/gi,
+    /\bquotes only\b/gi,
+    /\bonly quotes\b/gi,
+    /\binvoices only\b/gi,
+    /\bonly invoices\b/gi,
+    /\breal revenue\b/gi,
+    /\brevenue quote\b/gi,
+    /\bover \$0\b/gi,
+    /\bgreater than \$0\b/gi,
+    /\bnot \$0\b/gi,
+    /\bnonzero\b/gi,
+    /\bnon-zero\b/gi,
+    /\b20\d{2}\b/g,
+  ];
+
+  for (const pattern of patterns) {
+    text = text.replace(pattern, " ");
+  }
+
+  return text.replace(/\s+/g, " ").trim();
+}
+
+
+function getDocumentNumberRank(documentNumber) {
+  const doc = String(documentNumber || "");
+
+  // Quotes look like 26-1747. Invoices look like INV-08668.
+  if (/^\d{2}-\d{3,6}$/i.test(doc)) return 0;
+  if (/^INV-/i.test(doc)) return 2;
+  return 1;
+}
+
+function getDateTimestamp(value) {
+  if (!value) return 0;
+  const date = new Date(value);
+  const time = date.getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function getSearchRelevanceScore(match, query) {
+  const q = String(query || "").toLowerCase().trim();
+  const name = String(match?.name || "").toLowerCase();
+  const client = String(match?.client || "").toLowerCase();
+  const venue = String(match?.venue || "").toLowerCase();
+  const documentNumber = String(match?.documentNumber || "").toLowerCase();
+
+  if (!q) return 0;
+
+  let score = 0;
+  const tokens = q.split(/\s+/).filter(Boolean);
+
+  if (documentNumber === q) score += 1000;
+  if (name === q) score += 400;
+  if (name.includes(q)) score += 240;
+  if (client.includes(q)) score += 150;
+  if (venue.includes(q)) score += 80;
+
+  for (const token of tokens) {
+    if (name.includes(token)) score += 35;
+    if (client.includes(token)) score += 20;
+    if (venue.includes(token)) score += 12;
+    if (documentNumber.includes(token)) score += 25;
+  }
+
+  return score;
+}
+
+function rankFlexQuoteMatches(matches, query) {
+  const now = Date.now();
+  const oneYearMs = 365 * 24 * 60 * 60 * 1000;
+
+  return [...(Array.isArray(matches) ? matches : [])]
+    .map((match, originalIndex) => {
+      const plannedTime = getDateTimestamp(match.plannedStartDate);
+      const agePenalty = plannedTime
+        ? Math.max(0, Math.floor((now - plannedTime) / oneYearMs)) * 20
+        : 20;
+      const futureBonus = plannedTime && plannedTime >= now ? 60 : 0;
+      const currentEraBonus = plannedTime && plannedTime >= Date.UTC(2025, 0, 1) ? 40 : 0;
+      const quoteBonus = getDocumentNumberRank(match.documentNumber) === 0 ? 120 : 0;
+      const invoicePenalty = /^INV-/i.test(String(match.documentNumber || "")) ? 220 : 0;
+      const valueBonus = Number(match.invoiceTotal || 0) > 0 ? 15 : 0;
+      const relevanceScore = getSearchRelevanceScore(match, query);
+
+      return {
+        ...match,
+        searchRank: Math.round(
+          relevanceScore +
+            futureBonus +
+            currentEraBonus +
+            quoteBonus +
+            valueBonus -
+            invoicePenalty -
+            agePenalty
+        ),
+        _originalIndex: originalIndex,
+      };
+    })
+    .sort((a, b) => {
+      if (b.searchRank !== a.searchRank) return b.searchRank - a.searchRank;
+
+      const docRankA = getDocumentNumberRank(a.documentNumber);
+      const docRankB = getDocumentNumberRank(b.documentNumber);
+      if (docRankA !== docRankB) return docRankA - docRankB;
+
+      const dateA = getDateTimestamp(a.plannedStartDate);
+      const dateB = getDateTimestamp(b.plannedStartDate);
+      if (dateA !== dateB) return dateB - dateA;
+
+      return a._originalIndex - b._originalIndex;
+    })
+    .map((match, index) => {
+      const { _originalIndex, ...clean } = match;
+      return {
+        ...clean,
+        index: index + 1,
+      };
+    });
+}
+
+
+async function searchFlexQuotes(query, options = {}) {
+  const normalizedQuery = String(query || "").trim();
+  const filters = options.filters || parseFlexSearchFilters(normalizedQuery, options);
+  const limit = Math.max(1, Math.min(Number(options.limit || 5), 25));
+
+  if (!normalizedQuery) {
+    return {
+      query: normalizedQuery,
+      count: 0,
+      matches: [],
+      filters,
+      filterDescriptions: describeFlexSearchFilters(filters),
+      requestUrl: null,
+    };
+  }
+
+  const searchResult = await fetchFlexSearch(normalizedQuery);
+  const results = normalizeFlexSearchResults(searchResult.data);
+  const enrichLimit = Math.max(limit, Math.min(Number(options.enrichLimit || 25), 40));
+
+  const baseCandidates = results
+    .map((result) => ({
+      raw: result,
+      elementId: extractSearchResultId(result),
+      name:
+        result?.name ||
+        result?.displayName ||
+        result?.preferredDisplayString ||
+        result?.text ||
+        result?.label ||
+        null,
+      type:
+        result?.type ||
+        result?.definitionName ||
+        result?.className ||
+        result?.category ||
+        null,
+    }))
+    .filter((candidate) => candidate.elementId)
+    .slice(0, enrichLimit);
+
+  const matches = [];
+
+  for (const candidate of baseCandidates) {
+    try {
+      const intake = await fetchFlexShowIntake(candidate.elementId);
+      const summary = buildFlexDocumentSummary(intake);
+      const showContext = intake.showContext || {};
+
+      matches.push({
+        elementId: candidate.elementId,
+        documentNumber: showContext.documentNumber || null,
+        name: showContext.showName || candidate.name,
+        client: showContext.client || null,
+        venue: showContext.venue || null,
+        plannedStartDate: showContext.plannedStartDate || null,
+        plannedEndDate: showContext.plannedEndDate || null,
+        loadInDate: showContext.loadInDate || null,
+        loadOutDate: showContext.loadOutDate || null,
+        personResponsible: showContext.personResponsible || null,
+        projectManager: showContext.projectManager || null,
+        invoiceTotal: summary?.financials?.invoiceTotal || 0,
+        invoiceTotalFormatted: formatUsd(summary?.financials?.invoiceTotal || 0),
+        balanceDue: summary?.financials?.balanceDue || 0,
+        balanceDueFormatted: formatUsd(summary?.financials?.balanceDue || 0),
+        categorySubtotal: summary?.financials?.categorySubtotal || 0,
+        categorySubtotalFormatted: formatUsd(summary?.financials?.categorySubtotal || 0),
+        rawSearchName: candidate.name,
+        type: candidate.type,
+      });
+    } catch (error) {
+      matches.push({
+        elementId: candidate.elementId,
+        documentNumber: null,
+        name: candidate.name,
+        client: null,
+        venue: null,
+        plannedStartDate: null,
+        invoiceTotal: 0,
+        invoiceTotalFormatted: formatUsd(0),
+        balanceDue: 0,
+        balanceDueFormatted: formatUsd(0),
+        rawSearchName: candidate.name,
+        type: candidate.type,
+        enrichmentError: error.message || "Unable to enrich search result.",
+      });
+    }
+  }
+
+  const rankedAllMatches = rankFlexQuoteMatches(matches, normalizedQuery);
+  const filteredMatches = rankedAllMatches.filter((match) =>
+    matchPassesFlexSearchFilters(match, filters)
+  );
+  const rankedMatches = filteredMatches.slice(0, limit);
+
+  return {
+    query: normalizedQuery,
+    count: rankedMatches.length,
+    rawCount: results.length,
+    enrichedCount: matches.length,
+    filteredCount: filteredMatches.length,
+    filters,
+    filterDescriptions: describeFlexSearchFilters(filters),
+    ranking: {
+      prefersQuotesOverInvoices: true,
+      prefersNewerAndFutureJobs: true,
+      invoiceResultsArePenalized: true,
+      filtersApplied: flexSearchFiltersAreActive(filters),
+    },
+    matches: rankedMatches,
+    requestUrl: searchResult.requestUrl,
+  };
+}
+
+function buildQuoteSearchSelectionResponse(question, intent, searchQuery, searchResult) {
+  const matches = Array.isArray(searchResult?.matches) ? searchResult.matches : [];
+
+  if (matches.length === 0) {
+    return {
+      question,
+      intent,
+      searchQuery,
+      found: false,
+      needsClarification: true,
+      answer: `I could not find any FLEX quotes matching "${searchQuery}".`,
+      matches: [],
+      search: searchResult,
+    };
+  }
+
+  return {
+    question,
+    intent,
+    searchQuery,
+    found: true,
+    needsSelection: true,
+    answer:
+      matches.length === 1
+        ? `I found one possible FLEX quote for "${searchQuery}".`
+        : `I found ${matches.length} possible FLEX quotes for "${searchQuery}". Which one do you mean?`,
+    initialDisplayCount: 5,
+    hasMoreMatches: matches.length > 5,
+    matches: matches.map((match, index) => ({
+      index: match.index || index + 1,
+      elementId: match.elementId,
+      documentNumber: match.documentNumber,
+      name: match.name,
+      client: match.client,
+      venue: match.venue,
+      plannedStartDate: match.plannedStartDate,
+      invoiceTotal: match.invoiceTotal,
+      invoiceTotalFormatted: match.invoiceTotalFormatted,
+      balanceDue: match.balanceDue,
+      balanceDueFormatted: match.balanceDueFormatted,
+      searchRank: match.searchRank,
+    })),
+    filters: searchResult.filters || null,
+    filterDescriptions: searchResult.filterDescriptions || [],
+    search: {
+      query: searchResult.query,
+      count: searchResult.count,
+      rawCount: searchResult.rawCount,
+      enrichedCount: searchResult.enrichedCount,
+      filteredCount: searchResult.filteredCount,
+      requestUrl: searchResult.requestUrl,
+    },
+  };
+}
+
+async function answerFlexAskQuestion(question) {
+  const documentNumbers = extractDocumentNumbersFromQuestion(question);
+  const documentNumber = documentNumbers[0] || null;
+  const intent = documentNumbers.length >= 2 ? "document_compare" : classifyFlexAskIntent(question);
+
+  if (intent === "document_compare") {
+    if (documentNumbers.length < 2) {
+      return {
+        question,
+        intent,
+        needsClarification: true,
+        answer: "I need two FLEX quote numbers to compare, like 26-1747 and 26-0829.",
+      };
+    }
+
+    const [documentNumberA, documentNumberB] = documentNumbers;
+    const [resultA, resultB] = await Promise.all([
+      fetchFlexDetailByDocumentNumber(documentNumberA),
+      fetchFlexDetailByDocumentNumber(documentNumberB),
+    ]);
+
+    if (!resultA.found || !resultB.found) {
+      return {
+        question,
+        intent,
+        found: false,
+        answer: `I could not find ${
+          !resultA.found && !resultB.found
+            ? `${documentNumberA} or ${documentNumberB}`
+            : !resultA.found
+              ? documentNumberA
+              : documentNumberB
+        } in FLEX.`,
+        lookups: {
+          [documentNumberA]: resultA.lookup,
+          [documentNumberB]: resultB.lookup,
+        },
+      };
+    }
+
+    const comparison = buildFlexDocumentComparison(
+      question,
+      resultA.detail,
+      resultB.detail
+    );
+
+    return {
+      question,
+      intent,
+      found: true,
+      documentNumbers,
+      answer: comparison.answer,
+      result: comparison,
+      supportingData: {
+        documents: comparison.documents,
+        financialRows: comparison.financialRows,
+        sectionRows: comparison.sectionRows,
+        itemRows: comparison.itemRows,
+      },
+      lookups: {
+        [documentNumberA]: resultA.lookup,
+        [documentNumberB]: resultB.lookup,
+      },
+    };
+  }
+
+  let quoteLookup = null;
+
+  if (documentNumber) {
+    quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+    if (!quoteLookup.found || !quoteLookup.elementId) {
+      return {
+        question,
+        intent,
+        documentNumber,
+        found: false,
+        answer: `I could not find a FLEX quote for ${documentNumber}.`,
+        lookup: quoteLookup,
+      };
+    }
+  } else {
+    const searchFilters = parseFlexSearchFilters(question);
+    const rawSearchQuery = extractQuoteSearchQueryFromQuestion(question);
+    const searchQuery = removeFilterWordsFromQuoteSearchQuery(rawSearchQuery) || rawSearchQuery;
+
+    if (!searchQuery) {
+      return {
+        question,
+        intent,
+        needsClarification: true,
+        answer:
+          "I need either a FLEX quote number like 26-1747 or enough of a quote name to search for it.",
+      };
+    }
+
+    const searchResult = await searchFlexQuotes(searchQuery, {
+      limit: 15,
+      enrichLimit: 40,
+      filters: searchFilters,
+    });
+
+    if (searchResult.matches.length !== 1) {
+      return buildQuoteSearchSelectionResponse(
+        question,
+        intent,
+        searchQuery,
+        searchResult
+      );
+    }
+
+    const match = searchResult.matches[0];
+
+    quoteLookup = {
+      documentNumber: match.documentNumber,
+      found: true,
+      elementId: match.elementId,
+      name: match.name,
+      type: match.type || null,
+      matches: searchResult.matches,
+      requestUrl: searchResult.requestUrl,
+      rawCount: searchResult.rawCount,
+      searchQuery,
+    };
+  }
+
+  const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+  const detail = buildFlexDocumentDetail(intake);
+  const result = buildFlexAskAnswer(intent, detail, question);
+
+  return {
+    question,
+    intent,
+    documentNumber: detail.showContext?.documentNumber || documentNumber || quoteLookup.documentNumber || null,
+    found: true,
+    elementId: quoteLookup.elementId,
+    showContext: detail.showContext,
+    answer: result.answer,
+    result,
+    supportingData: {
+      summary: detail.summary,
+      counts: detail.counts,
+      laborItems: intent === "document_labor" ? detail.laborItems : undefined,
+      transportationItems:
+        intent === "document_transportation" ? detail.transportationItems : undefined,
+      inventoryItems:
+        intent === "document_inventory" || intent === "document_item_search" ? detail.inventoryItems : undefined,
+    },
+    lookup: quoteLookup,
+  };
+}
+
+
+/**
+ * CUE product-rule post-processing.
+ * This makes output more reliable than prompt-only behavior.
+ */
+function normalizeCueAnalysis(analysis, payload) {
+  const normalized = {
+    summary: analysis?.summary || "",
+    cue_review_cards: Array.isArray(analysis?.cue_review_cards)
+      ? analysis.cue_review_cards
+      : [],
+    questions_for_pm: Array.isArray(analysis?.questions_for_pm)
+      ? analysis.questions_for_pm
+      : [],
+    recommended_next_actions: Array.isArray(analysis?.recommended_next_actions)
+      ? analysis.recommended_next_actions
+      : [],
+  };
+
+  const showContext = payload?.show_context || {};
+  const projectManager = showContext.projectManager;
+  const hasProjectManager =
+    projectManager != null &&
+    String(projectManager).trim() !== "" &&
+    String(projectManager).trim() !== "—";
+
+  const allLineItems = [
+    ...(Array.isArray(payload?.staffing) ? payload.staffing : []),
+    ...(Array.isArray(payload?.trucking) ? payload.trucking : []),
+  ];
+
+  const explicitDriverLineExists = allLineItems.some((item) =>
+    /\b(driver|cdl|truck driver)\b/i.test(String(item?.name || ""))
+  );
+
+  normalizeOwners(normalized, hasProjectManager, projectManager);
+  normalizeComplexityCards(normalized);
+  removeInvalidPmQuestions(normalized, hasProjectManager);
+  removeExtraPmSupportQuestions(normalized, hasProjectManager);
+  removeDriverMentionsWhenNoExplicitDriver(normalized, explicitDriverLineExists);
+  normalizeStaffingTruckingStatuses(normalized);
+
+  return normalized;
+}
+
+function normalizeOwners(analysis, hasProjectManager, projectManager) {
+  for (const card of analysis.cue_review_cards) {
+    const type = String(card.card_type || "").toLowerCase();
+
+    if (type === "staffing") {
+      card.owner = "Staffing Coordinator";
+    }
+
+    if (type === "trucking") {
+      card.owner = "Brian Kee / Trucking Coordinator";
+    }
+
+    if (type === "show_context") {
+      card.owner = hasProjectManager
+        ? `${projectManager} / Project Manager`
+        : "Operations Review";
+    }
+
+    if (type === "coordination") {
+      card.owner = hasProjectManager
+        ? `${projectManager} / Project Manager`
+        : "Operations Review";
+    }
+  }
+}
+
+function normalizeComplexityCards(analysis) {
+  const complexityPattern =
+    /\b(complexity|coordination|pm recommendation|project manager recommendation|large equipment|large pa|warehouse coordination|trucking coordination|multi-day|multiple trucks|festival|load-in|load-out|equipment scope|rigging|fiber|power distribution|delay|fill)\b/i;
+
+  for (const card of analysis.cue_review_cards) {
+    const combinedText = [
+      card.card_type,
+      card.title,
+      card.summary,
+      ...(Array.isArray(card.risks) ? card.risks : []),
+      ...(Array.isArray(card.recommended_actions)
+        ? card.recommended_actions
+        : []),
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const type = String(card.card_type || "").toLowerCase();
+
+    if (
+      (type === "risk" || type === "next_actions") &&
+      complexityPattern.test(combinedText)
+    ) {
+      card.card_type = "coordination";
+      card.status = "review_needed";
+      card.priority = card.priority || "medium";
+
+      if (/risk/i.test(String(card.title || ""))) {
+        card.title = card.title.replace(/risk/gi, "Coordination").trim();
+      }
+
+      if (!card.title || card.title.toLowerCase().includes("operational complexity")) {
+        card.title = "Operational Coordination Review";
+      }
+
+      card.risks = Array.isArray(card.risks) ? card.risks : [];
+    }
+  }
+}
+
+function removeInvalidPmQuestions(analysis, hasProjectManager) {
+  if (!hasProjectManager) return;
+
+  const pmMissingPattern =
+    /\b(no|not|none|missing|unassigned)\b.*\b(project manager|pm)\b|\b(project manager|pm)\b.*\b(no|not|none|missing|unassigned)\b/i;
+
+  analysis.questions_for_pm = analysis.questions_for_pm.filter(
+    (question) => !pmMissingPattern.test(String(question || ""))
+  );
+
+  analysis.recommended_next_actions = analysis.recommended_next_actions.filter(
+    (action) => !pmMissingPattern.test(String(action || ""))
+  );
+
+  for (const card of analysis.cue_review_cards) {
+    card.risks = Array.isArray(card.risks)
+      ? card.risks.filter((risk) => !pmMissingPattern.test(String(risk || "")))
+      : [];
+
+    card.recommended_actions = Array.isArray(card.recommended_actions)
+      ? card.recommended_actions.filter(
+          (action) => !pmMissingPattern.test(String(action || ""))
+        )
+      : [];
+
+    if (pmMissingPattern.test(String(card.summary || ""))) {
+      card.summary = card.summary
+        .replace(/No project manager is assigned\.?/gi, "")
+        .replace(/No PM is assigned\.?/gi, "")
+        .trim();
+    }
+  }
+}
+
+function removeExtraPmSupportQuestions(analysis, hasProjectManager) {
+  if (!hasProjectManager) return;
+
+  const extraPmSupportPattern =
+    /\b(additional|extra|more|support)\b.*\b(pm|project manager|project management)\b|\b(pm|project manager|project management)\b.*\b(additional|extra|more|support)\b/i;
+
+  analysis.questions_for_pm = analysis.questions_for_pm.filter(
+    (question) => !extraPmSupportPattern.test(String(question || ""))
+  );
+
+  analysis.recommended_next_actions = analysis.recommended_next_actions.map((action) => {
+    const text = String(action || "");
+
+    if (extraPmSupportPattern.test(text)) {
+      return "Assigned PM to review coordination needs across staffing, trucking, warehouse, venue access, equipment scope, and load-in/load-out timing.";
+    }
+
+    return action;
+  });
+
+  for (const card of analysis.cue_review_cards) {
+    card.recommended_actions = Array.isArray(card.recommended_actions)
+      ? card.recommended_actions.map((action) => {
+          const text = String(action || "");
+
+          if (extraPmSupportPattern.test(text)) {
+            return "Assigned PM to review coordination needs across staffing, trucking, warehouse, venue access, equipment scope, and load-in/load-out timing.";
+          }
+
+          return action;
+        })
+      : [];
+
+    if (extraPmSupportPattern.test(String(card.summary || ""))) {
+      card.summary = card.summary
+        .replace(/Are additional PM resources or support needed\??/gi, "")
+        .replace(/additional PM resources or support/gi, "assigned PM coordination")
+        .trim();
+    }
+  }
+}
+
+function removeDriverMentionsWhenNoExplicitDriver(
+  analysis,
+  explicitDriverLineExists
+) {
+  if (explicitDriverLineExists) return;
+
+  const driverMentionPattern =
+    /\b(driver|drivers|driver labor|driver assignment|driver confirmation|driver coverage|missing driver|driver line|driver lines|driver-related)\b/i;
+
+  const stripDriverSentence = (text) => {
+    if (!text || typeof text !== "string") return text;
+
+    return text
+      .split(/(?<=[.!?])\s+/)
+      .filter((sentence) => !driverMentionPattern.test(sentence))
+      .join(" ")
+      .trim();
+  };
+
+  analysis.summary = stripDriverSentence(analysis.summary);
+
+  analysis.questions_for_pm = analysis.questions_for_pm.filter(
+    (question) => !driverMentionPattern.test(String(question || ""))
+  );
+
+  analysis.recommended_next_actions = analysis.recommended_next_actions.filter(
+    (action) => !driverMentionPattern.test(String(action || ""))
+  );
+
+  for (const card of analysis.cue_review_cards) {
+    card.summary = stripDriverSentence(card.summary);
+
+    card.risks = Array.isArray(card.risks)
+      ? card.risks.filter((risk) => !driverMentionPattern.test(String(risk || "")))
+      : [];
+
+    card.recommended_actions = Array.isArray(card.recommended_actions)
+      ? card.recommended_actions.filter(
+          (action) => !driverMentionPattern.test(String(action || ""))
+        )
+      : [];
+
+    card.detected_items = Array.isArray(card.detected_items)
+      ? card.detected_items.map((item) => ({
+          ...item,
+          interpretation: stripDriverSentence(item.interpretation),
+        }))
+      : [];
+  }
+}
+
+function normalizeStaffingTruckingStatuses(analysis) {
+  for (const card of analysis.cue_review_cards) {
+    const type = String(card.card_type || "").toLowerCase();
+    const detectedItems = Array.isArray(card.detected_items)
+      ? card.detected_items
+      : [];
+
+    if (
+      (type === "staffing" || type === "trucking") &&
+      detectedItems.length > 0 &&
+      String(card.status || "").toLowerCase() === "passed"
+    ) {
+      card.status = "review_needed";
+    }
+  }
+}
+
+function selectCueModel(requestBody, payloadFallback = {}) {
+  const requestedAiMode = String(
+    requestBody?.aiMode ||
+      requestBody?.mode ||
+      payloadFallback?.aiMode ||
+      payloadFallback?.mode ||
+      "advanced"
+  ).toLowerCase();
+
+  const currentModel = process.env.OPENAI_CURRENT_MODEL || "gpt-4.1-mini";
+  const advancedModel = process.env.OPENAI_ADVANCED_MODEL || "gpt-5.4";
+  const model = requestedAiMode === "current" ? currentModel : advancedModel;
+
+  return {
+    requestedAiMode,
+    currentModel,
+    advancedModel,
+    model
+  };
+}
+
+function normalizeOperationalSummaryShape(summary, fallbackSummary) {
+  const base = summary && typeof summary === "object" ? summary : {};
+  const fallback = fallbackSummary && typeof fallbackSummary === "object" ? fallbackSummary : {};
+
+  const modelRecommendedSteps = Array.isArray(base.recommendedNextSteps)
+    ? base.recommendedNextSteps
+    : Array.isArray(base.recommended_next_steps)
+      ? base.recommended_next_steps
+      : [];
+
+  const recommendedNextSteps = modelRecommendedSteps
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .slice(0, 5)
+    ;
+
+  let complexityLevel = String(base.complexityLevel || base.complexity_level || "").trim();
+  if (!["Low", "Medium", "High"].includes(complexityLevel)) {
+    complexityLevel = String(fallback.complexityLevel || "Medium");
+    if (!["Low", "Medium", "High"].includes(complexityLevel)) {
+      complexityLevel = "Medium";
+    }
+  }
+
+  const assessmentFromModel =
+    String(base.assessment || "").trim();
+  const coordinationFromModel =
+    String(base.coordinationRequired || base.coordination_required || "").trim();
+  const usedFallback =
+    !assessmentFromModel ||
+    recommendedNextSteps.length === 0 ||
+    !coordinationFromModel;
+
+  return {
+    assessment:
+      assessmentFromModel ||
+      String(fallback.assessment || "").trim() ||
+      "Operational summary is available after FLEX intake review.",
+    recommendedNextSteps:
+      recommendedNextSteps.length > 0
+        ? recommendedNextSteps
+        : Array.isArray(fallback.recommendedNextSteps)
+          ? fallback.recommendedNextSteps
+          : [],
+    complexityLevel,
+    coordinationRequired:
+      coordinationFromModel ||
+      String(fallback.coordinationRequired || "").trim() ||
+      "Staffing + Trucking",
+    source: usedFallback ? "local_fallback" : "openai"
+  };
+}
+
+
+function getCookieValue(req, cookieName) {
+  const cookieHeader = req.headers.cookie || "";
+  const cookies = cookieHeader.split(";").map((item) => item.trim());
+
+  for (const cookie of cookies) {
+    const [name, ...valueParts] = cookie.split("=");
+
+    if (name === cookieName) {
+      return decodeURIComponent(valueParts.join("="));
+    }
+  }
+
+  return "";
+}
+
+function getPilotSessionToken() {
+  return crypto
+    .createHash("sha256")
+    .update(`${CUE_PILOT_PASSWORD}|${CUE_PILOT_SESSION_SECRET}`)
+    .digest("hex");
+}
+
+function isPilotAuthorized(req) {
+  if (!CUE_PILOT_PASSWORD) return true;
+
+  const token = getCookieValue(req, "cue_pilot_auth");
+
+  return token && token === getPilotSessionToken();
+}
+
+function isAutomationAuthorized(req, url) {
+  const configuredToken = process.env.CUE_AUTOMATION_TOKEN || "";
+
+  if (!configuredToken) return false;
+
+  const queryToken = url.searchParams.get("automationToken") || "";
+  const headerToken = req.headers["x-cue-automation-token"] || "";
+
+  return queryToken === configuredToken || headerToken === configuredToken;
+}
+
+function isAutomationAllowedPath(pathname) {
+  return [
+    "/api/flex/monthly-sales",
+    "/api/flex/sales-goals-rollup",
+    "/api/flex/sales-goals-row",
+    "/api/flex/document-detail",
+    "/api/flex/find-quote",
+    "/api/flex/search-quotes",
+    "/api/flex/ask",
+    "/api/flex/ask-brief",
+  ].includes(pathname);
+}
+
+function renderLoginPage(message = "") {
+  const escapedMessage = String(message || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CUE Private Pilot</title>
+  <style>
+    :root {
+      --bg: #020403;
+      --border: rgba(128, 255, 153, 0.18);
+      --text: #f4fff7;
+      --muted: #9bb5aa;
+      --green: #43d154;
+      --cyan: #00d5e8;
+      --danger: #ff6b6b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 20% 20%, rgba(67, 209, 84, 0.12), transparent 32%),
+        radial-gradient(circle at 80% 40%, rgba(0, 213, 232, 0.08), transparent 28%),
+        var(--bg);
+    }
+
+    .shell {
+      width: min(520px, calc(100vw - 32px));
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(11, 21, 18, 0.96), rgba(4, 8, 7, 0.96));
+      box-shadow: 0 0 80px rgba(67, 209, 84, 0.10);
+      padding: 34px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 26px;
+    }
+
+    .mark {
+      width: 46px;
+      height: 46px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      color: var(--green);
+      background: rgba(67, 209, 84, 0.16);
+      font-weight: 900;
+      letter-spacing: -0.02em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.05;
+    }
+
+    .subtitle {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      margin-bottom: 22px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 213, 232, 0.24);
+      background: rgba(0, 213, 232, 0.08);
+      color: #b9f8ff;
+      font-size: 13px;
+    }
+
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.045);
+      color: var(--text);
+      font-size: 18px;
+      padding: 14px 16px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: rgba(67, 209, 84, 0.65);
+      box-shadow: 0 0 0 4px rgba(67, 209, 84, 0.10);
+    }
+
+    button {
+      width: 100%;
+      margin-top: 16px;
+      border: 0;
+      border-radius: 16px;
+      background: var(--green);
+      color: #041006;
+      font-weight: 800;
+      font-size: 16px;
+      padding: 14px 16px;
+      cursor: pointer;
+    }
+
+    .message {
+      min-height: 20px;
+      margin-top: 14px;
+      color: var(--danger);
+      font-size: 14px;
+    }
+
+    .note {
+      margin-top: 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="brand">
+      <div class="mark">C</div>
+      <div>
+        <h1>CUE Private Pilot</h1>
+        <p class="subtitle">Crew Utilization Engine</p>
+      </div>
+    </div>
+
+    <div class="pill">Private access · Real FLEX data</div>
+
+    <form method="POST" action="/api/login">
+      <label for="password">Access password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
+      <button type="submit">Enter Private Pilot</button>
+      <div class="message">${escapedMessage}</div>
+    </form>
+
+    <div class="note">
+      This pilot can pull live FLEX show intake data and generate CUE review cards. Access is limited to approved Music Matters stakeholders.
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function redirectToLogin(res) {
+  res.writeHead(302, {
+    Location: "/login",
+    "Cache-Control": "no-store",
+  });
+  res.end();
+}
+
+
+const TRUCKING_SHEET_ID =
+  process.env.TRUCKING_SHEET_ID || "1CY6wk2Heuw0JxO4inMaLnCd9bhCQa4NpLuAG9FO6nDo";
+
+const TRUCKING_WEEKLY_RUNS_SHEET =
+  process.env.TRUCKING_WEEKLY_RUNS_SHEET || "Weekly Runs";
+
+function parseCsvRows(csvText) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let insideQuotes = false;
+
+  for (let index = 0; index < csvText.length; index += 1) {
+    const char = csvText[index];
+    const next = csvText[index + 1];
+
+    if (char === '"' && insideQuotes && next === '"') {
+      value += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+
+    if (char === "," && !insideQuotes) {
+      row.push(value);
+      value = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !insideQuotes) {
+      if (char === "\r" && next === "\n") {
+        index += 1;
+      }
+
+      row.push(value);
+      value = "";
+
+      if (row.some((cell) => String(cell || "").trim() !== "")) {
+        rows.push(row);
+      }
+
+      row = [];
+      continue;
+    }
+
+    value += char;
+  }
+
+  row.push(value);
+
+  if (row.some((cell) => String(cell || "").trim() !== "")) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function normalizeHeaderKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function rowsToObjects(rows) {
+  if (!Array.isArray(rows) || rows.length < 2) return [];
+
+  const headerRowIndex = rows.findIndex((row) =>
+    row.some((cell) => /quote|runs|driver|truck|trailer|info|lpo/i.test(String(cell || "")))
+  );
+
+  if (headerRowIndex < 0) return [];
+
+  const headers = rows[headerRowIndex].map((header) => String(header || "").trim());
+  const dataRows = rows.slice(headerRowIndex + 1);
+
+  return dataRows.map((row) => {
+    const object = {};
+
+    headers.forEach((header, index) => {
+      const key = normalizeHeaderKey(header);
+      if (!key) return;
+      object[key] = row[index] || "";
+      object[header] = row[index] || "";
+    });
+
+    return object;
+  });
+}
+
+function getFirstCell(row, names) {
+  for (const name of names) {
+    const key = normalizeHeaderKey(name);
+
+    if (row[key] != null && String(row[key]).trim() !== "") {
+      return row[key];
+    }
+
+    if (row[name] != null && String(row[name]).trim() !== "") {
+      return row[name];
+    }
+  }
+
+  return "";
+}
+
+function safeIncludes(haystack, needle) {
+  if (!needle) return false;
+  return String(haystack || "").toLowerCase().includes(String(needle || "").toLowerCase());
+}
+
+async function fetchWeeklyRunsRowsFromGoogleSheet() {
+  const sheetName = encodeURIComponent(TRUCKING_WEEKLY_RUNS_SHEET);
+
+  const urls = [
+    `https://docs.google.com/spreadsheets/d/${TRUCKING_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${sheetName}`,
+    `https://docs.google.com/spreadsheets/d/${TRUCKING_SHEET_ID}/export?format=csv&sheet=${sheetName}`,
+  ];
+
+  let lastError = null;
+
+  for (const csvUrl of urls) {
+    try {
+      console.log("[TRUCKING SHEET]", TRUCKING_WEEKLY_RUNS_SHEET);
+
+      const response = await fetch(csvUrl);
+      const text = await response.text();
+
+      if (!response.ok) {
+        throw new Error(`Google Sheets CSV request failed: ${response.status} ${response.statusText}`);
+      }
+
+      if (/<!doctype html>|<html/i.test(text)) {
+        throw new Error("Google Sheets returned HTML instead of CSV. The sheet may not be accessible to this local server.");
+      }
+
+      const csvRows = parseCsvRows(text);
+      const rowObjects = rowsToObjects(csvRows);
+
+      if (!rowObjects.length) {
+        throw new Error("No parseable Weekly Runs rows found in CSV.");
+      }
+
+      return rowObjects;
+    } catch (error) {
+      lastError = error;
+      console.warn("[TRUCKING SHEET WARNING]", error.message);
+    }
+  }
+
+  throw lastError || new Error("Unable to fetch Weekly Runs CSV.");
+}
+
+function normalizeLiveTruckingRow(row) {
+  const quote = getFirstCell(row, ["QUOTE", "Quote", "quote", "Job", "Job #"]);
+  const runName = getFirstCell(row, ["Runs", "Run", "Run Name", "run"]);
+  const date = getFirstCell(row, ["Date", "date"]);
+  const when = getFirstCell(row, ["When", "Time", "when"]);
+  const truck = getFirstCell(row, ["Truck", "truck", "Unit"]);
+  const trailer = getFirstCell(row, ["Trailer", "trailer"]);
+  const where = getFirstCell(row, ["Where", "Location", "Venue", "where"]);
+  const stage = getFirstCell(row, ["Stage", "stage"]);
+  const notes = getFirstCell(row, ["Notes", "Note", "notes"]);
+
+  const driverName = getFirstCell(row, [
+    "Who",
+    "Driver",
+    "Driver Name",
+    "Name",
+  ]);
+
+  const driverConfirmedRaw = getFirstCell(row, [
+    "Driver Confirmed",
+    "Driver Confirmed?",
+    "Confirmed",
+  ]) || driverName;
+
+  const infoSentRaw = getFirstCell(row, [
+    "Info Sent",
+    "Info Sent?",
+    "Info",
+  ]);
+
+  const lpoSentRaw = getFirstCell(row, [
+    "LPO Sent",
+    "LPO Sent?",
+    "LPO",
+  ]);
+
+  const combined = `${runName} ${notes} ${truck} ${trailer} ${where} ${stage}`;
+
+  return {
+    quote: String(quote || "").trim(),
+    driverName: String(driverName || "").trim(),
+    runName: String(runName || "").trim(),
+    date: String(date || "").trim(),
+    when: String(when || "").trim(),
+    driverConfirmed: normalizeTruckingBoolean(driverConfirmedRaw),
+    infoSent: normalizeTruckingBoolean(infoSentRaw),
+    lpoSent: normalizeTruckingBoolean(lpoSentRaw),
+    truck: String(truck || "").trim(),
+    trailer: String(trailer || "").trim(),
+    where: String(where || "").trim(),
+    stage: String(stage || "").trim(),
+    maybeTruck: /maybe truck/i.test(combined),
+    needDriver: /need driver/i.test(combined),
+    notes: String(notes || "").trim(),
+  };
+}
+
+async function matchLiveTruckingRows({ showId, showName, quoteNumbers }) {
+  const quoteSet = new Set(
+    (Array.isArray(quoteNumbers) ? quoteNumbers : [])
+      .map((quote) => String(quote || "").trim())
+      .filter(Boolean)
+  );
+
+  const weeklyRunsRows = await fetchWeeklyRunsRowsFromGoogleSheet();
+
+  const showWords = String(showName || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((word) => word.length >= 4);
+
+  const matchedRows = weeklyRunsRows
+    .map(normalizeLiveTruckingRow)
+    .filter((row) => {
+      const quoteMatch = row.quote && quoteSet.has(row.quote);
+
+      const nameText = `${row.runName} ${row.where} ${row.stage} ${row.notes}`.toLowerCase();
+      const nameMatch =
+        showWords.length >= 2 &&
+        showWords.filter((word) => nameText.includes(word)).length >= 2;
+
+      return quoteMatch || nameMatch;
+    });
+
+  return matchedRows;
+}
+
+async function matchTruckingRowsWithFallback({ showId, showName, quoteNumbers }) {
+  try {
+    const liveRows = await matchLiveTruckingRows({
+      showId,
+      showName,
+      quoteNumbers,
+    });
+
+    return {
+      source: "Trucking Schedule / Weekly Runs",
+      safeRows: liveRows,
+      usedFallback: false,
+    };
+  } catch (error) {
+    console.warn("[TRUCKING FALLBACK]", error.message);
+
+    return {
+      source: "trucking-weekly-runs-safe-mock",
+      safeRows: matchSafeTruckingRows({
+        showId,
+        showName,
+        quoteNumbers,
+      }),
+      usedFallback: true,
+      fallbackReason: error.message,
+    };
+  }
+}
+
+
+const SAFE_TRUCKING_ROWS = [
+  // Desibels Raleigh
+  {
+    quote: "26-1603",
+    driverName: "Driver assigned",
+    showKey: "desibels-raleigh",
+    runName: "Desibels Raleigh - Lighting & Rigging",
+    date: "7/3",
+    when: "LI: 6 AM LO: 11 PM",
+    driverConfirmed: true,
+    infoSent: true,
+    lpoSent: true,
+    truck: "Salem Sleeper 20528 #2",
+    trailer: "5320 Dock 7",
+    where: "Martin Marietta Center for the Performing Arts, Raleigh, NC",
+    notes: "Driver/truck mapped; Info and LPO sent."
+  },
+  {
+    quote: "26-1624",
+    driverName: "Driver assigned",
+    showKey: "desibels-raleigh",
+    runName: "Desibels Raleigh - Audio & Video",
+    date: "7/3",
+    when: "LI: 7 AM LO: 11 PM",
+    driverConfirmed: true,
+    infoSent: true,
+    lpoSent: true,
+    truck: "1108",
+    trailer: "5316 Dock 14",
+    where: "Martin Marietta Center for the Performing Arts, Raleigh, NC",
+    notes: "Driver/truck mapped; Info and LPO sent."
+  },
+
+  // Production Design Associates
+  {
+    quote: "26-1777",
+    driverName: "Geneva Gardner",
+    showKey: "production-design-associates",
+    runName: "Production Design Associates - Depart / Charleston",
+    date: "7/5",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: true,
+    truck: "2605",
+    trailer: "",
+    where: "Credit One Stadium / Charleston",
+    notes: "Trucking begins before folder date suggests."
+  },
+  {
+    quote: "26-1777",
+    driverName: "Geneva Gardner",
+    showKey: "production-design-associates",
+    runName: "Production Design Associates - Load In",
+    date: "7/6",
+    when: "LI",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: true,
+    truck: "2605",
+    trailer: "",
+    where: "Credit One Stadium / Charleston",
+    notes: "Info Sent remains false."
+  },
+  {
+    quote: "26-1777",
+    driverName: "Geneva Gardner",
+    showKey: "production-design-associates",
+    runName: "Production Design Associates - Load Out",
+    date: "7/7",
+    when: "LO",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: true,
+    truck: "2605",
+    trailer: "",
+    where: "Credit One Stadium / Charleston",
+    notes: "Info Sent remains false."
+  },
+
+  // Sound Haven
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LI Continuum - SL320 - Sound Haven",
+    date: "7/27",
+    when: "LI: 8 AM",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    notes: "Info/LPO false."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LI Continuum - SL320 - Sound Haven - Flatbed",
+    date: "7/27",
+    when: "LI: 8 AM",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    notes: "Info/LPO false."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LI Continuum - SL320 - Sound Haven - Maybe Truck",
+    date: "7/27",
+    when: "LI: 12 PM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "26",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LO Continuum - SL320 - Sound Haven",
+    date: "8/3",
+    when: "TBD",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    notes: "Load-out timing/confirmation still needs review."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LO Continuum - SL320 - Sound Haven - Flatbed",
+    date: "8/3",
+    when: "TBD",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Tractor",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    needDriver: true,
+    notes: "NEED DRIVER."
+  },
+  {
+    quote: "26-1421",
+    driverName: "TBD",
+    showKey: "sound-haven",
+    runName: "LO Continuum - SL320 - Sound Haven - Maybe Truck",
+    date: "8/3",
+    when: "TBD",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "26",
+    trailer: "",
+    where: "Sound Haven, Gruetli-Laager, TN",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+
+  // Summer X Games
+  ...["26-0714", "26-0715", "26-0716"].flatMap((quote) => [
+    {
+      quote,
+      showKey: "summer-x-games-nola",
+      runName: `Departs Summer X Games // NOLA 26 - ${quote}`,
+      date: "7/22",
+      when: "AM",
+      driverConfirmed: true,
+      infoSent: false,
+      lpoSent: false,
+      truck: "Sleeper",
+      trailer: "53",
+      where: "Smoothie King Arena, New Orleans, LA",
+      notes: "Main truck mapped; Info/LPO false."
+    },
+    {
+      quote,
+      showKey: "summer-x-games-nola",
+      runName: `LI Summer X Games // NOLA 26 - ${quote}`,
+      date: "7/23",
+      when: "8:00 AM",
+      driverConfirmed: true,
+      infoSent: false,
+      lpoSent: false,
+      truck: "Sleeper",
+      trailer: "53",
+      where: "Smoothie King Arena, New Orleans, LA",
+      notes: "Main truck mapped; Info/LPO false."
+    },
+    {
+      quote,
+      showKey: "summer-x-games-nola",
+      runName: `LO Summer X Games // NOLA 26 - ${quote}`,
+      date: "7/25",
+      when: "11:00 PM",
+      driverConfirmed: true,
+      infoSent: false,
+      lpoSent: false,
+      truck: "Sleeper",
+      trailer: "53",
+      where: "Smoothie King Arena, New Orleans, LA",
+      notes: "Main truck mapped; Info/LPO false."
+    }
+  ]),
+  {
+    quote: "26-0717",
+    driverName: "TBD",
+    showKey: "summer-x-games-nola",
+    runName: "Departs Summer X Games // NOLA 26 - Maybe Truck",
+    date: "7/22",
+    when: "AM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Sleeper",
+    trailer: "53",
+    where: "Smoothie King Arena, New Orleans, LA",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+  {
+    quote: "26-0717",
+    driverName: "TBD",
+    showKey: "summer-x-games-nola",
+    runName: "LI Summer X Games // NOLA 26 - Maybe Truck",
+    date: "7/23",
+    when: "8:00 AM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Sleeper",
+    trailer: "53",
+    where: "Smoothie King Arena, New Orleans, LA",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+  {
+    quote: "26-0717",
+    driverName: "TBD",
+    showKey: "summer-x-games-nola",
+    runName: "LO Summer X Games // NOLA 26 - Maybe Truck",
+    date: "7/25",
+    when: "11:00 PM",
+    driverConfirmed: false,
+    infoSent: false,
+    lpoSent: false,
+    truck: "Sleeper",
+    trailer: "53",
+    where: "Smoothie King Arena, New Orleans, LA",
+    maybeTruck: true,
+    notes: "Maybe Truck unresolved."
+  },
+
+  // FIFA / early mock signal rows. Phase 2 will replace this with the live sheet.
+  {
+    quote: "26-0071",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "FIFA Finals Watch Party / Piedmont Park",
+    date: "7/18",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "Piedmont Park / Atlanta",
+    notes: "FIFA row mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1752",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "Stage 2 Audio - FIFA Finals Watch Party",
+    date: "7/18",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "Piedmont Park / Atlanta",
+    notes: "FIFA Stage 2 Audio trucking mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1759",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "Stage 2 Video - FIFA Finals Watch Party",
+    date: "7/18",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "Piedmont Park / Atlanta",
+    notes: "FIFA Stage 2 Video trucking mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1804",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "WAC FIFA Watch Party / Calaway Plaza",
+    date: "7/9",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "16' Box Truck",
+    trailer: "",
+    where: "Woodruff Arts Center",
+    notes: "WAC FIFA row mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1225",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "FIFA @ Coca-Cola / Centennial Park",
+    date: "6/4",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "26' Box Truck",
+    trailer: "",
+    where: "Centennial Park / Atlanta",
+    notes: "Filmworks/Coke row mapped; Info/LPO false."
+  },
+  {
+    quote: "26-1637",
+    driverName: "Driver assigned",
+    showKey: "fifa-final-piedmont",
+    runName: "FIFA Viewing HQ - Video Distribution",
+    date: "6/9",
+    when: "TBD",
+    driverConfirmed: true,
+    infoSent: false,
+    lpoSent: false,
+    truck: "TBD",
+    trailer: "",
+    where: "FIFA Viewing HQ",
+    notes: "HQ video distribution row mapped; Info/LPO false."
+  }
+];
+
+function normalizeTruckingBoolean(value) {
+  if (typeof value === "boolean") return value;
+  const text = String(value || "").trim().toLowerCase();
+  return text === "true" || text === "yes" || text === "y";
+}
+
+function summarizeTruckingRows(rows, quoteNumbers = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  const summary = {
+    rowsFound: safeRows.length,
+    quoteNumbersRequested: quoteNumbers,
+    quoteNumbersMatched: [...new Set(safeRows.map((row) => row.quote).filter(Boolean))],
+    driverConfirmedTrue: 0,
+    driverConfirmedFalse: 0,
+    infoSentTrue: 0,
+    infoSentFalse: 0,
+    lpoSentTrue: 0,
+    lpoSentFalse: 0,
+    maybeTruckRows: 0,
+    needDriverRows: 0,
+    tbdRows: 0,
+    dates: [...new Set(safeRows.map((row) => row.date).filter(Boolean))],
+  };
+
+  for (const row of safeRows) {
+    if (normalizeTruckingBoolean(row.driverConfirmed)) {
+      summary.driverConfirmedTrue += 1;
+    } else {
+      summary.driverConfirmedFalse += 1;
+    }
+
+    if (normalizeTruckingBoolean(row.infoSent)) {
+      summary.infoSentTrue += 1;
+    } else {
+      summary.infoSentFalse += 1;
+    }
+
+    if (normalizeTruckingBoolean(row.lpoSent)) {
+      summary.lpoSentTrue += 1;
+    } else {
+      summary.lpoSentFalse += 1;
+    }
+
+    if (row.maybeTruck || /maybe truck/i.test(String(row.runName || ""))) {
+      summary.maybeTruckRows += 1;
+    }
+
+    if (row.needDriver || /need driver/i.test(String(row.runName || row.notes || ""))) {
+      summary.needDriverRows += 1;
+    }
+
+    if (/tbd/i.test(String(row.when || row.truck || row.notes || ""))) {
+      summary.tbdRows += 1;
+    }
+  }
+
+  let status = "GREEN - Trucking aligned";
+  const findings = [];
+  const actions = [];
+
+  if (summary.rowsFound === 0) {
+    status = "RED - No trucking rows found";
+    findings.push("No trucking rows were found for the requested FLEX quote numbers or show name.");
+    actions.push("Brian Kee / PM to confirm whether transportation should exist in Weekly Runs.");
+  } else {
+    findings.push(`${summary.rowsFound} trucking row${summary.rowsFound === 1 ? "" : "s"} found.`);
+    findings.push(`${summary.quoteNumbersMatched.length} quote number${summary.quoteNumbersMatched.length === 1 ? "" : "s"} matched in trucking.`);
+
+    if (summary.infoSentFalse > 0) {
+      status = "MAGENTA - Trucking admin incomplete";
+      findings.push(`${summary.infoSentFalse} row${summary.infoSentFalse === 1 ? "" : "s"} still have Info Sent = FALSE.`);
+      actions.push("Brian Kee / PM to confirm Info Sent status.");
+    }
+
+    if (summary.lpoSentFalse > 0) {
+      status = "MAGENTA - Trucking admin incomplete";
+      findings.push(`${summary.lpoSentFalse} row${summary.lpoSentFalse === 1 ? "" : "s"} still have LPO Sent = FALSE.`);
+      actions.push("Brian Kee / PM to confirm LPO Sent status.");
+    }
+
+    if (summary.maybeTruckRows > 0) {
+      status = "MAGENTA - Maybe Truck unresolved";
+      findings.push(`${summary.maybeTruckRows} Maybe Truck row${summary.maybeTruckRows === 1 ? "" : "s"} found.`);
+      actions.push("Resolve Maybe Truck rows or mark them not needed.");
+    }
+
+    if (summary.needDriverRows > 0) {
+      status = "RED - NEED DRIVER";
+      findings.push(`${summary.needDriverRows} NEED DRIVER row${summary.needDriverRows === 1 ? "" : "s"} found.`);
+      actions.push("Assign/confirm driver coverage for NEED DRIVER rows.");
+    }
+  }
+
+  return {
+    ...summary,
+    status,
+    findings,
+    actions,
+  };
+}
+
+
+function buildFlexVsTruckingComparison({ quoteNumbers, truckingSummary }) {
+  const requestedQuotes = [...new Set(
+    (Array.isArray(quoteNumbers) ? quoteNumbers : [])
+      .map((quote) => String(quote || "").trim())
+      .filter(Boolean)
+  )];
+
+  const matchedQuotes = truckingSummary?.quoteNumbersMatched || [];
+  const rowsFound = Number(truckingSummary?.rowsFound || 0);
+  const infoFalse = Number(truckingSummary?.infoSentFalse || 0);
+  const lpoFalse = Number(truckingSummary?.lpoSentFalse || 0);
+  const maybeTruckRows = Number(truckingSummary?.maybeTruckRows || 0);
+  const needDriverRows = Number(truckingSummary?.needDriverRows || 0);
+
+  const missingQuotes = requestedQuotes.filter(
+    (quote) => !matchedQuotes.includes(quote)
+  );
+
+  let status = "GREEN - FLEX and trucking aligned";
+  const findings = [];
+  const actions = [];
+
+  findings.push(`FLEX quote/workstream hints checked: ${requestedQuotes.length}.`);
+  findings.push(`Trucking matched ${matchedQuotes.length} quote number${matchedQuotes.length === 1 ? "" : "s"}.`);
+  findings.push(`Weekly Runs returned ${rowsFound} row${rowsFound === 1 ? "" : "s"}.`);
+
+  if (requestedQuotes.length > 0 && matchedQuotes.length === 0) {
+    status = "RED - FLEX transport not represented in trucking";
+    findings.push("No trucking rows matched the requested FLEX quote numbers.");
+    actions.push("Brian Kee / PM to confirm whether transportation rows need to be created or linked.");
+  } else if (missingQuotes.length > 0) {
+    status = "MAGENTA - Some FLEX quotes missing trucking rows";
+    findings.push(`Missing trucking matches for: ${missingQuotes.join(", ")}.`);
+    actions.push("Confirm whether each missing quote has transportation scope or should be excluded from trucking.");
+  }
+
+  if (infoFalse > 0 || lpoFalse > 0) {
+    if (!status.startsWith("RED")) {
+      status = "MAGENTA - Trucking mapped, admin incomplete";
+    }
+
+    if (infoFalse > 0) {
+      findings.push(`${infoFalse} trucking row${infoFalse === 1 ? "" : "s"} still have Info Sent = FALSE.`);
+      actions.push("Confirm Info Sent status for incomplete trucking rows.");
+    }
+
+    if (lpoFalse > 0) {
+      findings.push(`${lpoFalse} trucking row${lpoFalse === 1 ? "" : "s"} still have LPO Sent = FALSE.`);
+      actions.push("Confirm LPO Sent status for incomplete trucking rows.");
+    }
+  }
+
+  if (maybeTruckRows > 0) {
+    if (!status.startsWith("RED")) {
+      status = "MAGENTA - Maybe Truck unresolved";
+    }
+
+    findings.push(`${maybeTruckRows} Maybe Truck row${maybeTruckRows === 1 ? "" : "s"} found.`);
+    actions.push("Resolve Maybe Truck rows or mark them not needed.");
+  }
+
+  if (needDriverRows > 0) {
+    status = "RED - NEED DRIVER";
+    findings.push(`${needDriverRows} NEED DRIVER row${needDriverRows === 1 ? "" : "s"} found.`);
+    actions.push("Assign/confirm driver coverage for NEED DRIVER rows.");
+  }
+
+  if (status.startsWith("GREEN")) {
+    findings.push("FLEX transportation appears represented in Weekly Runs with no current trucking exceptions.");
+    actions.push("No trucking action required beyond normal monitoring.");
+  }
+
+  return {
+    status,
+    requestedQuotes,
+    matchedQuotes,
+    missingQuotes,
+    rowsFound,
+    infoFalse,
+    lpoFalse,
+    maybeTruckRows,
+    needDriverRows,
+    findings,
+    actions,
+  };
+}
+
+function matchSafeTruckingRows({ showId, showName, quoteNumbers }) {
+  const quotes = (Array.isArray(quoteNumbers) ? quoteNumbers : [])
+    .map((quote) => String(quote || "").trim())
+    .filter(Boolean);
+
+  const nameText = String(showName || "").toLowerCase();
+  const showIdText = String(showId || "").toLowerCase();
+
+  const rows = SAFE_TRUCKING_ROWS.filter((row) => {
+    const quoteMatch = quotes.length ? quotes.includes(row.quote) : false;
+    const showIdMatch = showIdText && row.showKey === showIdText;
+    const nameMatch =
+      nameText &&
+      (
+        String(row.runName || "").toLowerCase().includes(nameText) ||
+        String(row.where || "").toLowerCase().includes(nameText)
+      );
+
+    return quoteMatch || showIdMatch || nameMatch;
+  });
+
+  return rows.map((row) => ({
+    quote: row.quote,
+    driverName: row.driverName || (row.needDriver ? "NEED DRIVER" : row.driverConfirmed ? "Assigned" : "TBD"),
+    runName: row.runName,
+    date: row.date,
+    when: row.when,
+    driverConfirmed: Boolean(row.driverConfirmed),
+    infoSent: Boolean(row.infoSent),
+    lpoSent: Boolean(row.lpoSent),
+    truck: row.truck || "",
+    trailer: row.trailer || "",
+    where: row.where || "",
+    maybeTruck: Boolean(row.maybeTruck),
+    needDriver: Boolean(row.needDriver),
+    notes: row.notes || "",
+  }));
+}
+
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+
+    if (req.method === "GET" && url.pathname === "/login") {
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(renderLoginPage());
+      return;
+    }
+    // Active Shows dashboard route. Uses readFileSync because this server imports callback-style fs.
+    if (req.method === "GET" && url.pathname === "/active-shows") {
+      const html = fs.readFileSync(
+        path.resolve("./active-shows.html"),
+        "utf8"
+      );
+
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(html);
+      return;
+    }
+    
+    const mockActiveShows = [
+      {
+        id: "desibels-raleigh",
+        name: "Desibels Raleigh",
+        timing: "Live / Active Today",
+        priority: "High",
+        readinessStatus: "RED - Day-of attention",
+        changeSignal: "Cyan - trucking/docs improved",
+        topIssue:
+          "Final day-of checks; confirm V2 patch relationship and show command sheet owner.",
+        nextAction:
+          "PM to validate final tech package, onsite labor, and day-of execution notes.",
+        flexSignal:
+          "FLEX match needed from authoritative FLEX engine. Trucking hints: 26-1603; 26-1624.",
+        trucking:
+          "Driver/truck mapped. Use trucking only as execution evidence.",
+      },
+      {
+        id: "fifa-final-piedmont",
+        name: "FIFA Final Piedmont Park",
+        timing: "16 days out",
+        priority: "High",
+        readinessStatus: "MAGENTA - Needs confirmation",
+        changeSignal: "Cyan - new global PDF / coverage improved",
+        topIssue:
+          "Need to confirm global A001 PDF against ROS, logistics, production grid, LED engineering, and trucking.",
+        nextAction:
+          "Pull authoritative FLEX scope and separate each quote/workstream.",
+        flexSignal:
+          "Ask FLEX should identify official FLEX records; trucking hints include multiple quote numbers.",
+        trucking:
+          "Many rows mapped; Info Sent / LPO Sent remain FALSE.",
+      },
+      {
+        id: "sound-haven",
+        name: "Sound Haven",
+        timing: "27 days out",
+        priority: "High",
+        readinessStatus: "MAGENTA - Needs follow-up",
+        changeSignal: "Cyan - rigging/trucking improved",
+        topIssue:
+          "Rigging control improved, but PM owner and final tech/labor coverage are unclear.",
+        nextAction:
+          "Confirm PM owner, final v2.0 tech pack, rigging sign-off, and trucking Info/LPO.",
+        flexSignal:
+          "Use Ask FLEX to confirm official FLEX record. Trucking hint: 26-1421.",
+        trucking:
+          "Maybe truck rows; load-out NEED DRIVER; Info/LPO FALSE.",
+      },
+      {
+        id: "summer-x-games-nola",
+        name: "Summer X Games NOLA",
+        timing: "20 days out",
+        priority: "High",
+        readinessStatus: "MAGENTA - Strong docs, open ops gaps",
+        changeSignal: "Cyan - logistics/trucking coverage found",
+        topIssue:
+          "Strong V2.5 package, but logistics/trucking need validation and Info/LPO are FALSE.",
+        nextAction:
+          "Pull official FLEX scope and compare audio, lighting, LED/cameras, and maybe truck.",
+        flexSignal:
+          "Trucking hints: 26-0714; 26-0715; 26-0716; 26-0717.",
+        trucking:
+          "Drivers mapped for main trucks; maybe truck unresolved; Info/LPO FALSE.",
+      },
+      {
+        id: "production-design-associates",
+        name: "Production Design Associates",
+        timing: "Date check / trucking starts 7/5",
+        priority: "High",
+        readinessStatus: "RED - Very soon trucking/date conflict",
+        changeSignal: "Cyan - trucking found",
+        topIssue:
+          "Folder date suggests 7/26, but trucking begins 7/5 with load-in 7/6.",
+        nextAction:
+          "Confirm real event date, Charleston trucking tie-in, folder naming, PM owner, and Info Sent FALSE.",
+        flexSignal:
+          "Use Ask FLEX to confirm whether 26-1777 is authoritative FLEX record.",
+        trucking:
+          "Runs found on 7/5, 7/6, 7/7. Driver/LPO true; Info Sent FALSE.",
+      },
+    ];
+    
+    function extractActiveShowDocumentNumbers(show) {
+      const textToScan = [
+        show.id,
+        show.name,
+        show.timing,
+        show.priority,
+        show.readinessStatus,
+        show.changeSignal,
+        show.topIssue,
+        show.nextAction,
+        show.flexSignal,
+        show.trucking,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const quoteMatches = textToScan.match(/\b\d{2}-\d{3,6}\b/g) || [];
+      return [...new Set(quoteMatches.map((item) => item.trim()))];
+    }
+
+    function getFlexSoldDepartments(detail) {
+      return Array.from(
+        new Set(
+          [
+            ...(detail.sections || []).map((section) => section.name),
+            ...((detail.summary && detail.summary.lineItems) || []).map(
+              (item) => item.name
+            ),
+          ]
+            .filter(Boolean)
+            .map((item) => String(item).trim())
+        )
+      );
+    }
+
+    function sumFlexNumber(values) {
+      return Math.round(
+        values.reduce((sum, value) => sum + Number(value || 0), 0) * 100
+      ) / 100;
+    }
+
+    function buildCombinedFlexTotals(verifiedDocuments) {
+      const totalsList = verifiedDocuments.map((doc) => doc.totals || {});
+      const financialsList = verifiedDocuments.map((doc) => doc.financials || {});
+
+      return {
+        totals: {
+          document: sumFlexNumber(totalsList.map((item) => item.document)),
+          rental: sumFlexNumber(totalsList.map((item) => item.rental)),
+          labor: sumFlexNumber(totalsList.map((item) => item.labor)),
+          transportation: sumFlexNumber(totalsList.map((item) => item.transportation)),
+          other: sumFlexNumber(totalsList.map((item) => item.other)),
+          categorySubtotal: sumFlexNumber(totalsList.map((item) => item.categorySubtotal)),
+        },
+        financials: {
+          invoiceTotal: sumFlexNumber(financialsList.map((item) => item.invoiceTotal)),
+          balanceDue: sumFlexNumber(financialsList.map((item) => item.balanceDue)),
+          totalAppliedPayments: sumFlexNumber(financialsList.map((item) => item.totalAppliedPayments)),
+          categorySubtotal: sumFlexNumber(financialsList.map((item) => item.categorySubtotal)),
+        },
+        counts: {
+          sections: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.sections || 0), 0),
+          flattenedRows: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.flattenedRows || 0), 0),
+          inventoryItems: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.inventoryItems || 0), 0),
+          laborItems: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.laborItems || 0), 0),
+          transportationItems: verifiedDocuments.reduce((sum, doc) => sum + Number(doc.counts?.transportationItems || 0), 0),
+        },
+      };
+    }
+
+    async function resolveActiveShowFlexDocument(documentNumber) {
+      try {
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          return {
+            status: "Missing",
+            approvalNeeded: true,
+            documentNumber,
+            elementId: null,
+            showName: null,
+            client: null,
+            venue: null,
+            plannedStartDate: null,
+            plannedEndDate: null,
+            loadInDate: null,
+            loadOutDate: null,
+            soldDepartments: [],
+            totals: null,
+            financials: null,
+            counts: null,
+            quoteLookup,
+            message: `No FLEX quote found for ${documentNumber}.`,
+          };
+        }
+
+        const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+        const soldDepartments = getFlexSoldDepartments(detail);
+
+        return {
+          status: "Verified",
+          approvalNeeded: false,
+          documentNumber,
+          elementId: quoteLookup.elementId,
+          showName:
+            detail.showContext?.showName || quoteLookup.name || null,
+          client: detail.showContext?.client || null,
+          venue: detail.showContext?.venue || null,
+          plannedStartDate: detail.showContext?.plannedStartDate || null,
+          plannedEndDate: detail.showContext?.plannedEndDate || null,
+          loadInDate: detail.showContext?.loadInDate || null,
+          loadOutDate: detail.showContext?.loadOutDate || null,
+          soldDepartments,
+          totals: detail.summary?.totals || null,
+          financials: detail.summary?.financials || null,
+          counts: detail.counts || null,
+          quoteLookup,
+        };
+      } catch (error) {
+        return {
+          status: "Error",
+          approvalNeeded: true,
+          documentNumber,
+          elementId: null,
+          showName: null,
+          client: null,
+          venue: null,
+          plannedStartDate: null,
+          plannedEndDate: null,
+          loadInDate: null,
+          loadOutDate: null,
+          soldDepartments: [],
+          totals: null,
+          financials: null,
+          counts: null,
+          quoteLookup: null,
+          message: error.message || "FLEX enrichment failed.",
+        };
+      }
+    }
+
+    async function enrichActiveShowWithFlex(show) {
+      const documentNumbers = extractActiveShowDocumentNumbers(show);
+      const lastPullAt = new Date().toISOString();
+
+      if (!documentNumbers.length) {
+        return {
+          ...show,
+          flex: {
+            status: "Missing",
+            approvalNeeded: true,
+            documentNumber: null,
+            documentNumbers,
+            elementId: null,
+            showName: null,
+            client: null,
+            venue: null,
+            plannedStartDate: null,
+            plannedEndDate: null,
+            loadInDate: null,
+            loadOutDate: null,
+            soldDepartments: [],
+            totals: null,
+            financials: null,
+            counts: null,
+            documents: [],
+            lastPullAt,
+            message:
+              "No FLEX document number found in this Active Shows row. Needs direct FLEX ID, command sheet, quote document, or PM approval.",
+          },
+          flexSignal:
+            "FLEX Missing - no direct document number found. Trucking, folder, and Drive evidence remain hints only.",
+        };
+      }
+
+      const documents = await Promise.all(
+        documentNumbers.map((documentNumber) =>
+          resolveActiveShowFlexDocument(documentNumber)
+        )
+      );
+
+      const verifiedDocuments = documents.filter(
+        (document) => document.status === "Verified"
+      );
+      const unresolvedDocuments = documents.filter(
+        (document) => document.status !== "Verified"
+      );
+      const primary = verifiedDocuments[0] || documents[0];
+      const soldDepartments = Array.from(
+        new Set(
+          verifiedDocuments.flatMap((document) => document.soldDepartments || [])
+        )
+      );
+      const combined = buildCombinedFlexTotals(verifiedDocuments);
+
+      const status = verifiedDocuments.length === 0
+        ? unresolvedDocuments.some((document) => document.status === "Error")
+          ? "Error"
+          : "Missing"
+        : unresolvedDocuments.length > 0
+          ? "Partial"
+          : "Verified";
+
+      const approvalNeeded = status !== "Verified";
+      const checkedText = `${verifiedDocuments.length}/${documentNumbers.length}`;
+      const unresolvedText = unresolvedDocuments.length
+        ? ` Unresolved: ${unresolvedDocuments
+            .map((document) => `${document.documentNumber} ${document.status}`)
+            .join(", ")}.`
+        : "";
+
+      const flexSignal = verifiedDocuments.length
+        ? `FLEX ${status} - ${checkedText} quote${documentNumbers.length === 1 ? "" : "s"} verified. Primary: ${primary.documentNumber} / ${primary.elementId}. Combined sold scope: ${soldDepartments.join(", ") || "No departments found"}.${unresolvedText}`
+        : `FLEX ${status} - ${documentNumbers.join(", ")} did not fully resolve. Treat trucking / Drive evidence as hints only.${unresolvedText}`;
+
+      return {
+        ...show,
+        flex: {
+          status,
+          approvalNeeded,
+          documentNumber: primary?.documentNumber || documentNumbers[0] || null,
+          documentNumbers,
+          elementId: primary?.elementId || null,
+          showName: primary?.showName || show.name,
+          client: primary?.client || null,
+          venue: primary?.venue || null,
+          plannedStartDate: primary?.plannedStartDate || null,
+          plannedEndDate: primary?.plannedEndDate || null,
+          loadInDate: primary?.loadInDate || null,
+          loadOutDate: primary?.loadOutDate || null,
+          soldDepartments,
+          totals: combined.totals,
+          financials: combined.financials,
+          counts: combined.counts,
+          documents,
+          verifiedDocumentCount: verifiedDocuments.length,
+          unresolvedDocumentCount: unresolvedDocuments.length,
+          lastPullAt,
+          quoteLookup: primary?.quoteLookup || null,
+          message: unresolvedText.trim() || null,
+        },
+        flexSignal,
+      };
+    }
+
+    const ACTIVE_SHOWS_INDEX_SHEET_ID =
+      process.env.ACTIVE_SHOWS_INDEX_SHEET_ID ||
+      "1U0rotUCZ2o5gUMkZb5hDfIzALA1SAQOmsVXYJJ9-ajc";
+
+    const ACTIVE_SHOWS_INDEX_SHEET_NAME =
+      process.env.ACTIVE_SHOWS_INDEX_SHEET_NAME || "Active Shows Index";
+
+    function activeShowsSlug(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "active-show";
+    }
+
+    function normalizeActiveShowsHeader(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+    }
+
+    function getActiveShowsCell(rowObject, names) {
+      for (const name of names) {
+        const key = normalizeActiveShowsHeader(name);
+
+        if (rowObject[key] != null && String(rowObject[key]).trim() !== "") {
+          return String(rowObject[key]).trim();
+        }
+      }
+
+      return "";
+    }
+
+    function activeShowsIndexRowsToObjects(csvRows) {
+      if (!Array.isArray(csvRows) || csvRows.length < 2) return [];
+
+      const headerRowIndex = csvRows.findIndex((row) =>
+        row.some((cell) => /show\s*\/\s*project|event date|technical coverage|risk/i.test(String(cell || "")))
+      );
+
+      if (headerRowIndex < 0) return [];
+
+      const headers = csvRows[headerRowIndex].map((header) => String(header || "").trim());
+      const dataRows = csvRows.slice(headerRowIndex + 1);
+
+      return dataRows
+        .map((row) => {
+          const object = {};
+
+          headers.forEach((header, index) => {
+            const key = normalizeActiveShowsHeader(header);
+            if (!key) return;
+            object[key] = row[index] || "";
+          });
+
+          return object;
+        })
+        .filter((rowObject) =>
+          getActiveShowsCell(rowObject, ["Show / Project", "Show", "Project"])
+        );
+    }
+
+    function mapActiveShowsIndexRow(rowObject) {
+      const name = getActiveShowsCell(rowObject, ["Show / Project", "Show", "Project"]);
+      const eventDate = getActiveShowsCell(rowObject, ["Event Date"]);
+      const daysOut = getActiveShowsCell(rowObject, ["Days Out"]);
+      const status = getActiveShowsCell(rowObject, ["Status"]);
+      const client = getActiveShowsCell(rowObject, ["Client / Account", "Client", "Account"]);
+      const showFolder = getActiveShowsCell(rowObject, ["Show Folder"]);
+      const keyDocs = getActiveShowsCell(rowObject, ["Key Docs / Subfolders Found", "Key Docs"]);
+      const technicalCoverage = getActiveShowsCell(rowObject, ["Technical Coverage"]);
+      const risk = getActiveShowsCell(rowObject, ["Risk / Missing Items", "Risk", "Missing Items"]);
+      const priority = getActiveShowsCell(rowObject, ["Priority"]);
+      const lastMapped = getActiveShowsCell(rowObject, ["Last Mapped"]);
+
+      return {
+        id: activeShowsSlug(name),
+        name,
+        timing: [eventDate, daysOut ? `${daysOut} days out` : ""].filter(Boolean).join(" / "),
+        priority: priority || "Medium",
+        readinessStatus: status || "Active",
+        changeSignal: lastMapped ? `Drive Index - last mapped ${lastMapped}` : "Drive Index",
+        topIssue: risk || "No risk/missing-items note mapped in Active Shows Index.",
+        nextAction: risk || "Review current Active Shows Index row and confirm owner / readiness status.",
+        flexSignal: [
+          keyDocs,
+          technicalCoverage,
+          risk,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        trucking: risk || technicalCoverage || "No trucking note mapped in Active Shows Index row.",
+        activeShowsIndex: {
+          eventDate: eventDate || null,
+          daysOut: daysOut || null,
+          client: client || null,
+          showFolder: showFolder || null,
+          keyDocs: keyDocs || null,
+          technicalCoverage: technicalCoverage || null,
+          risk: risk || null,
+          lastMapped: lastMapped || null,
+        },
+      };
+    }
+
+    async function fetchActiveShowsFromIndexSheet() {
+      const sheetName = encodeURIComponent(ACTIVE_SHOWS_INDEX_SHEET_NAME);
+      const urls = [
+        `https://docs.google.com/spreadsheets/d/${ACTIVE_SHOWS_INDEX_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${sheetName}`,
+        `https://docs.google.com/spreadsheets/d/${ACTIVE_SHOWS_INDEX_SHEET_ID}/export?format=csv&sheet=${sheetName}`,
+      ];
+
+      let lastError = null;
+
+      for (const csvUrl of urls) {
+        try {
+          console.log("[ACTIVE SHOWS INDEX]", ACTIVE_SHOWS_INDEX_SHEET_NAME);
+
+          const response = await fetch(csvUrl);
+          const text = await response.text();
+
+          if (!response.ok) {
+            throw new Error(`Active Shows Index CSV request failed: ${response.status} ${response.statusText}`);
+          }
+
+          if (/<!doctype html>|<html/i.test(text)) {
+            throw new Error("Active Shows Index returned HTML instead of CSV. The sheet may not be readable by this server.");
+          }
+
+          const csvRows = parseCsvRows(text);
+          const rowObjects = activeShowsIndexRowsToObjects(csvRows);
+          const shows = rowObjects.map(mapActiveShowsIndexRow);
+
+          if (!shows.length) {
+            throw new Error("No parseable Active Shows Index rows found in CSV.");
+          }
+
+          return {
+            source: "Active Shows Index Google Sheet",
+            usedFallback: false,
+            sheetId: ACTIVE_SHOWS_INDEX_SHEET_ID,
+            sheetName: ACTIVE_SHOWS_INDEX_SHEET_NAME,
+            rowCount: shows.length,
+            shows,
+          };
+        } catch (error) {
+          lastError = error;
+          console.warn("[ACTIVE SHOWS INDEX WARNING]", error.message);
+        }
+      }
+
+      throw lastError || new Error("Unable to fetch Active Shows Index CSV.");
+    }
+
+    async function getActiveShowsRowsWithFallback() {
+      try {
+        return await fetchActiveShowsFromIndexSheet();
+      } catch (error) {
+        console.warn("[ACTIVE SHOWS INDEX FALLBACK]", error.message);
+
+        return {
+          source: "active-shows-safe-mock",
+          usedFallback: true,
+          fallbackReason: error.message,
+          sheetId: ACTIVE_SHOWS_INDEX_SHEET_ID,
+          sheetName: ACTIVE_SHOWS_INDEX_SHEET_NAME,
+          rowCount: mockActiveShows.length,
+          shows: mockActiveShows,
+        };
+      }
+    }
+
+    async function buildActiveShowsResponse(sourceLabel) {
+      const activeShowsSource = await getActiveShowsRowsWithFallback();
+      const shows = await Promise.all(
+        activeShowsSource.shows.map((show) => enrichActiveShowWithFlex(show))
+      );
+
+      const flexSummary = {
+        verified: shows.filter((show) => show.flex?.status === "Verified").length,
+        partial: shows.filter((show) => show.flex?.status === "Partial").length,
+        missing: shows.filter((show) => show.flex?.status === "Missing").length,
+        error: shows.filter((show) => show.flex?.status === "Error").length,
+        approvalNeeded: shows.filter((show) => show.flex?.approvalNeeded).length,
+      };
+
+      return {
+        ok: true,
+        source: sourceLabel,
+        activeShowsSource: activeShowsSource.source,
+        activeShowsSourceUsedFallback: activeShowsSource.usedFallback,
+        activeShowsSourceFallbackReason: activeShowsSource.fallbackReason || null,
+        activeShowsIndex: {
+          sheetId: activeShowsSource.sheetId,
+          sheetName: activeShowsSource.sheetName,
+          rowCount: activeShowsSource.rowCount,
+        },
+        flexAuthority: "live",
+        generatedAt: new Date().toISOString(),
+        message:
+          "Active Shows now reads rows from the Active Shows Index when available, then enriches every FLEX/document number found on each row with live FLEX search, header fetch, and line-item pull.",
+        flexSummary,
+        shows,
+      };
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/active-shows") {
+      const payload = await buildActiveShowsResponse("active-shows-flex-live");
+
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(JSON.stringify(payload));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/active-shows/sync") {
+      const payload = await buildActiveShowsResponse("active-shows-flex-sync");
+
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(JSON.stringify(payload));
+      return;
+    }
+
+
+    if (req.method === "POST" && url.pathname === "/api/login") {
+      const rawBody = await readRequestBody(req);
+      const form = new URLSearchParams(rawBody);
+      const password = form.get("password") || "";
+
+      if (!CUE_PILOT_PASSWORD) {
+        res.writeHead(500, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+        });
+        res.end(renderLoginPage("CUE_PILOT_PASSWORD is not configured on this server."));
+        return;
+      }
+
+      if (password !== CUE_PILOT_PASSWORD) {
+        res.writeHead(401, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+        });
+        res.end(renderLoginPage("Incorrect password."));
+        return;
+      }
+
+      const secureCookie = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
+      res.writeHead(302, {
+        Location: "/",
+        "Set-Cookie": `cue_pilot_auth=${encodeURIComponent(getPilotSessionToken())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secureCookie}`,
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/logout") {
+      const secureCookie = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Set-Cookie": `cue_pilot_auth=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureCookie}`,
+        "Cache-Control": "no-store",
+      });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    const automationAuthorized =
+      isAutomationAllowedPath(url.pathname) && isAutomationAuthorized(req, url);
+
+    if (!isPilotAuthorized(req) && !automationAuthorized) {
+      if (url.pathname.startsWith("/api/")) {
+        sendJson(res, 401, {
+          error:
+            "Unauthorized. Enter the CUE Private Pilot password first, or provide a valid automation token for approved automation endpoints.",
+        });
+        return;
+      }
+
+      redirectToLogin(res);
+      return;
+    }
+
+    if (
+      req.method === "GET" &&
+      (url.pathname === "/" || url.pathname === "/cue-flex-intake-lab.html")
+    ) {
+      const html = fs.readFileSync(HTML_FILE, "utf8");
+
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(html);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ask-flex") {
+      const html = fs.readFileSync(ASK_FLEX_HTML_FILE, "utf8");
+
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+
+      res.end(html);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex-line-items") {
+      const elementId = url.searchParams.get("elementId");
+
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId",
+        });
+        return;
+      }
+
+      const result = await fetchFlexRowData(elementId);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex-show-intake") {
+      const elementId = url.searchParams.get("elementId");
+
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId",
+        });
+        return;
+      }
+
+      const result = await fetchFlexShowIntake(elementId);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+
+    if (req.method === "GET" && url.pathname === "/api/flex-document-summary") {
+      const elementId = url.searchParams.get("elementId");
+
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId",
+        });
+        return;
+      }
+
+      const intake = await fetchFlexShowIntake(elementId);
+      const summary = buildFlexDocumentSummary(intake);
+
+      sendJson(res, 200, summary);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/search-quotes") {
+      const query = url.searchParams.get("query") || url.searchParams.get("q");
+      const limit = url.searchParams.get("limit") || 5;
+      const filters = parseFlexSearchFilters(query, {
+        year: url.searchParams.get("year"),
+        quoteOnly:
+          url.searchParams.get("quoteOnly") === "true" ||
+          url.searchParams.get("excludeInvoices") === "true",
+        invoiceOnly: url.searchParams.get("invoiceOnly") === "true",
+        currentOnly: url.searchParams.get("currentOnly") === "true",
+        futureOnly: url.searchParams.get("futureOnly") === "true",
+        openOnly: url.searchParams.get("openOnly") === "true",
+        paidOnly: url.searchParams.get("paidOnly") === "true",
+        revenueOnly: url.searchParams.get("revenueOnly") === "true",
+        includeInvoices: url.searchParams.get("includeInvoices") !== "false",
+      });
+
+      if (!query) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: query",
+        });
+        return;
+      }
+
+      const result = await searchFlexQuotes(query, { limit, filters });
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (
+      (url.pathname === "/api/flex/ask" || url.pathname === "/api/flex/ask-brief") &&
+      (req.method === "GET" || req.method === "POST")
+    ) {
+      let question = url.searchParams.get("question");
+      let format = url.searchParams.get("format") || "";
+
+      if (url.pathname === "/api/flex/ask-brief") {
+        format = "brief";
+      }
+
+      if (req.method === "POST") {
+        const rawBody = await readRequestBody(req);
+        const requestBody = JSON.parse(rawBody || "{}");
+        question = requestBody.question || question;
+        format = requestBody.format || format;
+      }
+
+      if (!question) {
+        sendJson(res, 400, {
+          error: "Missing required question. Use POST JSON { question } or GET ?question=...",
+        });
+        return;
+      }
+
+      const result = await answerFlexAskQuestion(question);
+
+      if (String(format).toLowerCase() === "brief") {
+        sendJson(res, 200, buildFlexAskBriefPayload(result));
+        return;
+      }
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/find-quote") {
+      const documentNumber = url.searchParams.get("documentNumber");
+
+      if (!documentNumber) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: documentNumber",
+        });
+        return;
+      }
+
+      const result = await findFlexQuoteByDocumentNumber(documentNumber);
+
+      sendJson(res, result.found ? 200 : 404, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/document-detail") {
+      let elementId = url.searchParams.get("elementId");
+      const documentNumber = url.searchParams.get("documentNumber");
+
+      if (!elementId && documentNumber) {
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          sendJson(res, 404, {
+            error: `No FLEX quote found for documentNumber ${documentNumber}`,
+            lookup: quoteLookup,
+          });
+          return;
+        }
+
+        elementId = quoteLookup.elementId;
+      }
+
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId or documentNumber",
+        });
+        return;
+      }
+
+      const intake = await fetchFlexShowIntake(elementId);
+      const detail = buildFlexDocumentDetail(intake);
+
+      sendJson(res, 200, {
+        ...detail,
+        lookup: documentNumber
+          ? {
+              documentNumber,
+              resolvedElementId: elementId,
+            }
+          : null,
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/monthly-sales") {
+      const year = url.searchParams.get("year");
+      const month = url.searchParams.get("month");
+
+      if (!year || !month) {
+        sendJson(res, 400, {
+          error: "Missing required query parameters: year and month",
+        });
+        return;
+      }
+
+      const result = await fetchFlexMonthlySales(year, month);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/sales-goals-rollup") {
+      const year = url.searchParams.get("year");
+
+      if (!year) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: year",
+        });
+        return;
+      }
+
+      const result = await fetchFlexSalesGoalsRollup(year);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/sales-goals-row") {
+      const year = url.searchParams.get("year");
+
+      if (!year) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: year",
+        });
+        return;
+      }
+
+      const result = await fetchFlexSalesGoalsRow(year);
+
+      sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/operational-summary") {
+      if (!process.env.OPENAI_API_KEY) {
+        sendJson(res, 500, {
+          error: "Missing OPENAI_API_KEY in .env",
+        });
+        return;
+      }
+
+      const rawBody = await readRequestBody(req);
+      const requestBody = JSON.parse(rawBody || "{}");
+      const compactPayload = requestBody?.payload || {};
+      const fallbackSummary = requestBody?.fallbackSummary || {};
+
+      const modelConfig = selectCueModel(requestBody, compactPayload);
+      console.log("[CUE OPS SUMMARY MODEL SELECT]", {
+        requestedAiMode: modelConfig.requestedAiMode,
+        currentModel: modelConfig.currentModel,
+        advancedModel: modelConfig.advancedModel,
+        selectedModel: modelConfig.model
+      });
+
+      const response = await openai.responses.create({
+        model: modelConfig.model,
+        input: [
+          {
+            role: "system",
+            content:
+              "You are CUE, an operational intelligence layer for Music Matters. Write like confident ops leadership: clear routing, decisive next moves, no filler. Return only valid JSON. Do not include markdown."
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              task: "Generate the top dashboard CUE Operational Summary from this compact FLEX payload.",
+              output_requirement: "Return only valid JSON. Do not include markdown.",
+              rules: [
+                "Be calm, specific, and operational.",
+                "Do not sound like generic AI or a data dump; avoid stacked comma lists and wall-of-text sentences.",
+                "Assessment: exactly 1–2 tight sentences; plain operational English.",
+                "Recommended next steps: short, directive, task-like (verbs first); not passive review notes.",
+                "Use the actual show data when useful.",
+                "Keep it concise enough for a dashboard card.",
+                "Do not overstate risk.",
+                "Do not mention whether drivers are included, missing, present, or absent.",
+                "If trucking or transportation lines exist (counts.truckingLines > 0 or trucking lines in payload), route trucking review to Brian Kee / Trucking Coordinator.",
+                "If no Project Manager is assigned in showContext (null, empty, or Not assigned), include exactly this sentence verbatim as one of the recommended next steps: \"No PM is assigned — does this show need one?\"",
+                "Separate staffing, trucking, timing, equipment, and PM coordination where relevant.",
+                "Complexity should be Low, Medium, or High.",
+                "Coordination Required should be a compact plus-separated label like: Staffing + Trucking + Warehouse + PM."
+              ],
+              required_schema: {
+                assessment: "1-2 sentence operational assessment.",
+                recommendedNextSteps: ["Action 1", "Action 2", "Action 3"],
+                complexityLevel: "Low | Medium | High",
+                coordinationRequired: "Staffing + Trucking"
+              },
+              compact_flex_payload: compactPayload
+            })
+          }
+        ],
+        text: {
+          format: {
+            type: "json_object",
+          },
+        },
+      });
+
+      const rawSummary = safeParseModelJson(response.output_text);
+      const summary = normalizeOperationalSummaryShape(rawSummary, fallbackSummary);
+      const summarySource = summary.source;
+      const { source: _omitSource, ...summaryForClient } = summary;
+
+      sendJson(res, 200, {
+        model: modelConfig.model,
+        summary: summaryForClient,
+        source: summarySource
+      });
+
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/analyze-flex-intake") {
+      if (!process.env.OPENAI_API_KEY) {
+        sendJson(res, 500, {
+          error: "Missing OPENAI_API_KEY in .env",
+        });
+        return;
+      }
+
+      const rawBody = await readRequestBody(req);
+      const payload = JSON.parse(rawBody);
+
+      // CUE_AI_REVIEW_RULES_V2
+// Music Matters operational interpretation rules for CUE review cards.
+const CUE_OPERATIONAL_RULES_V2 = `
+CUE operational rules v2:
+
+1. Quantity and Time Quantity interpretation:
+   - Do not multiply Qty x Time Qty and call that headcount.
+   - Qty usually means the number of people/items.
+   - Time Qty usually means billing duration, day count, or time quantity.
+   - Example: Audio Engineer - Patch, Qty 2, Time Qty 3 means 2 patch engineers over 3 billed days. It does not mean 6 patch engineers.
+   - When summarizing staffing, say both clearly when useful: "2 patch engineers over 3 billed days."
+
+2. Staffing interpretation:
+   - Staffing review should focus on roles, headcount, dates, call times, and coverage.
+   - Staffing should not own trucking line approval.
+   - Staffing should not be asked to create or validate truck movements.
+
+3. Trucking interpretation:
+   - Trucking review belongs to Brian Kee / Trucking Coordinator.
+   - Trucking review should focus on truck count/type, dispatch timing, site access, dock/staging, load-in, load-out, return logistics, and warehouse coordination.
+   - Transportation line items at Music Matters usually include normal driver coverage.
+   - Do not mention whether drivers are included, missing, present, absent, assumed, covered, or required.
+   - Do not warn about missing driver labor when a truck/transportation line exists.
+
+4. Project Manager interpretation:
+   - If no Project Manager is assigned, ask once in measured language: "No PM is assigned — does this show need one?"
+   - Do not repeatedly escalate missing PM as a risk.
+   - Do not say "assign a PM" as a hard recommendation unless the payload clearly shows a major coordination burden.
+   - Prefer: "Confirm whether PM ownership is needed."
+   - If complexity signals are present, explain the rationale calmly.
+
+5. Coordination vs risk:
+   - Large shows, festivals, multiple trucks, large equipment scope, and multi-department work are not automatically risks.
+   - Frame them as coordination-heavy unless there is a specific blocker, missing critical date, impossible timing, or conflicting data.
+   - Use "needs_review" for coordination-heavy normal operations.
+   - Use "at_risk" only when the payload supports a real operational risk.
+
+6. Show context:
+   - Use header dates as the planning source of truth when available.
+   - Do not infer show timing from billing quantities if header dates are available.
+   - If dates conflict, identify the conflict as data quality rather than guessing.
+
+7. Tone:
+   - Be concise, calm, and operational.
+   - Write as if TJ, Brian Kee, Chelsea, David, or a PM will actually use the card.
+   - Avoid dramatic language.
+   - Prefer clear action routing: Staffing Coordinator, Brian Kee / Trucking Coordinator, Operations Review, PM if assigned.
+`;
+// CUE_MODEL_COMPARE_PATCH_SERVER
+// Explicit current / advanced model selection.
+// This block intentionally does NOT let OPENAI_MODEL override OPENAI_CURRENT_MODEL or OPENAI_ADVANCED_MODEL.
+const cueAiRequestBody =
+  typeof body !== "undefined"
+    ? body
+    : typeof requestBody !== "undefined"
+      ? requestBody
+      : typeof parsedBody !== "undefined"
+        ? parsedBody
+        : typeof data !== "undefined"
+          ? data
+          : {};
+
+const cueAiPayload =
+  typeof payload !== "undefined" && payload && typeof payload === "object"
+    ? payload
+    : {};
+
+const requestedAiMode = String(
+  cueAiRequestBody.aiMode ||
+  cueAiRequestBody.mode ||
+  cueAiPayload.aiMode ||
+  cueAiPayload.mode ||
+  "advanced"
+).toLowerCase();
+
+const currentModel = process.env.OPENAI_CURRENT_MODEL || "gpt-4.1-mini";
+const advancedModel = process.env.OPENAI_ADVANCED_MODEL || "gpt-5.4";
+
+const model = requestedAiMode === "current" ? currentModel : advancedModel;
+
+console.log("[CUE AI MODEL SELECT]", {
+  requestedAiMode,
+  currentModel,
+  advancedModel,
+  selectedModel: model
+});
+
+      const response = await openai.responses.create({
+        model,
+        input: [
+          {
+            role: "system",
+            content:
+              'You are CUE AI, an operations assistant for Music Matters, a live event production company. Analyze FLEX show context and line-item data and return practical operations guidance. Be direct, structured, and conservative. AI recommends only; humans approve all staffing and trucking actions. Driver-related line items belong to trucking ownership, even if FLEX type.name is Labor. Do not assign drivers to the staffing workflow. IMPORTANT: Never mention driver assignment, driver confirmation, driver coverage, missing driver labor, or whether driver labor is present/absent for normal Transportation lines. Only discuss drivers if a FLEX line item explicitly names a driver. When transportation or truck line items are detected, trucking/Brian Kee handles driver assignment as part of normal trucking workflow. For trucking review cards, focus only on truck type, truck count, dispatch timing, dock timing, load-in/load-out, return logistics, vehicle/trailer plan, PM coordination, and warehouse coordination. Use header dates when available instead of guessing from billing quantity. For staffing counts, quantity is the headcount/role count. Do not multiply quantity by timeQty and call it positions. If referencing quantity multiplied by timeQty, call it person-days or billing units, not positions. Do not use Person Responsible as the staffing owner. Person Responsible is FLEX quote/account ownership context. Staffing review owner should be Staffing Coordinator unless a specific staffing owner exists. Trucking review owner should be Brian Kee / Trucking Coordinator. Show context owner should be Operations Review, or Project Manager if a projectManager is present. Project Manager logic: if no projectManager is assigned in FLEX, ask once whether this show needs a PM. Do not treat missing PM as an automatic risk. If a projectManager is assigned, do not ask whether additional PM resources or support are needed unless the payload explicitly indicates multiple PMs, PM support, or an actual blocker. When a PM is assigned and the show is complex, route coordination review to the assigned PM for alignment across staffing, trucking, warehouse, venue access, equipment scope, and load-in/load-out timing. If the show appears operationally complex, recommend PM review and explain the specific complexity signals. When equipment_summary indicates large PA, rigging, fiber/control, power, delay/fill, large equipment scope, multiple trucks, or significant warehouse/trucking coordination, create a coordination review card instead of a risk card. Use card_type "coordination", status "review_needed", and priority "medium" unless there is an actual blocker. Do not label normal operational complexity as a risk.',
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              operationalRules: CUE_OPERATIONAL_RULES_V2,
+              task:
+                "Analyze this FLEX intake payload and return CUE-ready operational review cards. Return only valid JSON matching the requested schema. Make the output practical, product-ready, and suitable for display in the CUE interface.",
+              operating_principles: [
+                "CUE is an operational execution layer for Music Matters.",
+                "AI recommends only. Humans approve all staffing and trucking actions.",
+                "Use show_context/header data for dates, venue, PM, client, and shipping method when available.",
+                "Use equipment_summary to understand equipment scope, PM complexity, trucking/warehouse coordination, and whether the show has large PA, lighting, rigging, fiber/control, power, delay/fill, or video scope.",
+                "Do not guess operational dates from timeQty when header dates are available.",
+                "Driver-related labor belongs to trucking ownership, even if FLEX type.name is Labor.",
+                "Do not assign drivers to the staffing workflow.",
+                "Never mention driver assignment, driver confirmation, driver coverage, missing driver labor, or whether driver labor is present/absent for normal Transportation lines.",
+                "Only discuss drivers if a FLEX line item explicitly names a driver.",
+                "At Music Matters, truck and transportation line items route to trucking. Brian Kee/trucking handles driver assignment as part of normal trucking workflow.",
+                "Staffing review should focus on non-driver labor roles.",
+                "Trucking review should focus only on truck type, truck count, dispatch timing, dock timing, load-in/load-out, return logistics, vehicle/trailer plan, trucking ownership, PM coordination, and warehouse coordination.",
+                "Do not recommend verifying whether separate driver labor lines are required or missing.",
+                "Avoid over-focusing on finance unless a price/cost anomaly creates operational risk.",
+                "For simple clean shows, say that clearly instead of inventing risks.",
+                "For staffing and trucking cards, use status review_needed whenever line items exist and require human review, even if no risks are found. Use passed only for validation/check cards such as missing data or conflict checks.",
+                "For staffing counts, quantity is the headcount/role count. Do not multiply quantity by timeQty and call it positions.",
+                "If referencing quantity multiplied by timeQty, call it person-days or billing units, not positions.",
+                "Do not use Person Responsible as the owner for staffing review cards. Person Responsible is FLEX quote/account ownership context.",
+                "Staffing review owner should be Staffing Coordinator unless a specific staffing owner exists in the payload.",
+                "Trucking review owner should always be Brian Kee / Trucking Coordinator.",
+                "Show context owner should be Operations Review, or Project Manager if a projectManager is present.",
+                "Project Manager logic: If projectManager is missing, ask once whether the show needs a PM. Do not repeatedly list missing PM as a generic risk.",
+                "If a projectManager is assigned, do not ask whether additional PM resources or support are needed unless the payload explicitly indicates multiple PMs, PM support, or an actual blocker.",
+                "When a projectManager is assigned and coordination is needed, route the coordination review to that PM for alignment across staffing, trucking, warehouse, venue access, equipment scope, and load-in/load-out timing.",
+                "If the show appears operationally complex, explain why PM review may be recommended using specific scope signals such as multi-department work, large labor count, multiple trucks, outdoor/festival context, complex load-in/load-out, tight schedule, large equipment scope, or significant warehouse/trucking coordination.",
+                "If the show does not appear complex, keep the PM question measured and simple: 'No PM is assigned — does this show need one?'",
+                "When equipment_summary shows operational complexity, create a coordination review card instead of a risk card.",
+                "Use card_type coordination for PM/warehouse/trucking/staffing alignment recommendations that are not actual risks.",
+                "Operational complexity is not automatically a risk. Treat it as a coordination review unless there is a blocker, missing critical data, or confirmed conflict.",
+                "Coordination review cards should focus on aligning PM, staffing, trucking, warehouse, venue access, load-in/load-out, and equipment scope.",
+              ],
+              required_schema: {
+                summary: "string",
+                cue_review_cards: [
+                  {
+                    card_type:
+                      "show_context | staffing | trucking | coordination | missing_data | risk | next_actions",
+                    title: "string",
+                    owner: "string",
+                    status: "passed | review_needed | warning | blocked",
+                    priority: "low | medium | high",
+                    summary: "string",
+                    detected_items: [
+                      {
+                        name: "string",
+                        quantity: "number | null",
+                        timeQty: "number | null",
+                        note: "string | null",
+                        source_type: "string | null",
+                        interpretation: "string",
+                      },
+                    ],
+                    risks: ["string"],
+                    recommended_actions: ["string"],
+                  },
+                ],
+                questions_for_pm: ["string"],
+                recommended_next_actions: ["string"],
+              },
+              flex_intake_payload: payload,
+            }),
+          },
+        ],
+        text: {
+          format: {
+            type: "json_object",
+          },
+        },
+      });
+
+      const rawAnalysis = safeParseModelJson(response.output_text);
+      const analysis = normalizeCueAnalysis(rawAnalysis, payload);
+
+      sendJson(res, 200, {
+        model,
+        analysis,
+      });
+
+      return;
+    }
+
+
+    if (
+      (req.method === "GET" || req.method === "POST") &&
+      url.pathname === "/api/active-shows/test-flex-match"
+    ) {
+      try {
+        const documentNumber =
+          url.searchParams.get("documentNumber") || "26-1777";
+
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+
+        if (!quoteLookup.found || !quoteLookup.elementId) {
+          sendJson(res, 404, {
+            ok: false,
+            error: `No FLEX quote found for ${documentNumber}`,
+            quoteLookup,
+          });
+          return;
+        }
+
+        const intake = await fetchFlexShowIntake(quoteLookup.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+
+        sendJson(res, 200, {
+          ok: true,
+          source: "flex",
+          documentNumber,
+          quoteLookup,
+          showContext: detail.showContext,
+          summary: detail.summary,
+          counts: detail.counts,
+          sections: detail.sections,
+          laborItems: detail.laborItems,
+          transportationItems: detail.transportationItems,
+        });
+
+        return;
+      } catch (error) {
+        sendJson(res, 500, {
+          ok: false,
+          error: error.message || "Unable to test FLEX match.",
+        });
+        return;
+      }
+    }
+
+
+    if (
+      (req.method === "GET" || req.method === "POST") &&
+      url.pathname === "/api/active-shows/trucking-sync"
+    ) {
+      try {
+        let body = {};
+
+        if (req.method === "POST") {
+          const rawBody = await readRequestBody(req);
+          body = rawBody ? JSON.parse(rawBody) : {};
+        }
+
+        const showId = body.showId || url.searchParams.get("showId") || "";
+        const showName = body.showName || url.searchParams.get("showName") || "";
+        const queryQuoteNumbers =
+          url.searchParams.get("quoteNumbers") ||
+          url.searchParams.get("quotes") ||
+          "";
+
+        const quoteNumbers = Array.isArray(body.quoteNumbers)
+          ? body.quoteNumbers
+          : String(queryQuoteNumbers)
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean);
+
+        const truckingResult = await matchTruckingRowsWithFallback({
+          showId,
+          showName,
+          quoteNumbers,
+        });
+
+        const summary = summarizeTruckingRows(
+          truckingResult.safeRows,
+          quoteNumbers
+        );
+
+        const comparison = buildFlexVsTruckingComparison({
+          quoteNumbers,
+          truckingSummary: summary,
+        });
+
+        sendJson(res, 200, {
+          ok: true,
+          source: truckingResult.source,
+          usedFallback: truckingResult.usedFallback,
+          fallbackReason: truckingResult.fallbackReason || null,
+          note: truckingResult.usedFallback
+            ? "Using safe mock fallback because the live Weekly Runs sheet was not readable from this local server."
+            : "Live data pulled from Trucking Schedule / Weekly Runs.",
+          showId,
+          showName,
+          quoteNumbers,
+          summary,
+          comparison,
+          safeRows: truckingResult.safeRows,
+        });
+
+        return;
+      } catch (error) {
+        sendJson(res, 500, {
+          ok: false,
+          error: error.message || "Unable to sync trucking.",
+        });
+        return;
+      }
+    }
+
+    sendJson(res, 404, {
+      error: "Not found",
+    });
+  } catch (error) {
+    console.error(error);
+    sendJson(res, 500, {
+      error: error.message || "Unexpected server error",
+    });
+  }
+});
+
+server.listen(PORT, () => {
+    console.log(`CUE FLEX Intelligence Server running at http://localhost:${PORT}`);
+
+  if (!CUE_PILOT_PASSWORD) {
+    console.warn("WARNING: CUE_PILOT_PASSWORD is not set. Password gate is disabled for local development.");
+  } else {
+    console.log("Password gate enabled.");
+  }
+});
+
+
+
