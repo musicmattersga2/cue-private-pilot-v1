@@ -371,9 +371,34 @@
       color: #ffd79a;
     }
 
-    .ops-pill.ready-blocked {
-      border-color: rgba(255, 107, 107, 0.55);
-      color: #ffb4b4;
+    .ops-pill.confidence-pill {
+      opacity: 0.72;
+      font-size: 11px;
+      border-style: dashed;
+    }
+
+    .ops-card details {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .ops-card details summary {
+      cursor: pointer;
+      color: var(--cyan);
+    }
+
+    .ops-card .ops-facts,
+    .ops-card .ops-actions {
+      margin: 10px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .ops-card .ops-actions {
+      color: var(--text);
     }
 
     .ops-grid {
@@ -1461,6 +1486,32 @@
         .join("");
     }
 
+    function formatReadinessLabel(status) {
+      const map = {
+        clear: "Clear",
+        review_needed: "Needs review",
+        at_risk: "At risk",
+        blocked: "Blocked",
+      };
+      return map[String(status || "").toLowerCase()] || String(status || "—");
+    }
+
+    function formatSeverityLabel(severity) {
+      const value = String(severity || "").toLowerCase();
+      if (value === "low") return "Low";
+      if (value === "medium") return "Medium";
+      if (value === "high") return "High";
+      return String(severity || "—");
+    }
+
+    function formatConfidenceLabel(confidence) {
+      const value = String(confidence || "").toLowerCase();
+      if (value === "low") return "Low";
+      if (value === "medium") return "Medium";
+      if (value === "high") return "High";
+      return String(confidence || "—");
+    }
+
     function renderListBlock(title, items) {
       if (!Array.isArray(items) || !items.length) return "";
       return `
@@ -1477,6 +1528,10 @@
       if (!block || typeof block !== "object") return "";
       const findings = Array.isArray(block.findings) ? block.findings : [];
       const actions = Array.isArray(block.actions) ? block.actions : [];
+      const visibleFindings = findings.slice(0, 3);
+      const visibleActions = actions.slice(0, 2);
+      const extraFindings = findings.slice(3);
+      const extraActions = actions.slice(2);
       const metaBits = [];
 
       if (title === "Labor") {
@@ -1487,9 +1542,9 @@
         metaBits.push(`${block.lineCount} line(s)`);
       }
       if (title === "Equipment") {
-        if (block.itemCount != null) metaBits.push(`${block.itemCount} item(s)`);
+        if (block.itemCount != null) metaBits.push(`${block.itemCount} equipment line items`);
         if (Array.isArray(block.majorFamilies) && block.majorFamilies.length) {
-          metaBits.push(block.majorFamilies.join(", "));
+          metaBits.push(block.majorFamilies.slice(0, 4).join(", "));
         }
       }
       if (title === "Warehouse") {
@@ -1499,13 +1554,22 @@
         }
       }
 
+      const extraCount = extraFindings.length + extraActions.length;
+
       return `
         <div class="ops-card">
           <h3>${escapeHtml(title)}</h3>
           ${metaBits.length ? `<div class="hint">${escapeHtml(metaBits.join(" · "))}</div>` : ""}
           <p>${escapeHtml(block.assessment || "")}</p>
-          ${findings.length ? `<ul>${findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
-          ${actions.length ? `<ul>${actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          ${visibleFindings.length ? `<ul class="ops-facts">${visibleFindings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          ${visibleActions.length ? `<ul class="ops-actions">${visibleActions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+          ${extraCount ? `
+            <details>
+              <summary>More detail (${escapeHtml(extraCount)})</summary>
+              ${extraFindings.length ? `<ul class="ops-facts">${extraFindings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+              ${extraActions.length ? `<ul class="ops-actions">${extraActions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+            </details>
+          ` : ""}
         </div>
       `;
     }
@@ -1519,19 +1583,26 @@
         ? data.coordinationRequired
         : [];
       const redFlags = Array.isArray(data.redFlags) ? data.redFlags : [];
-      const questions = Array.isArray(data.questionsForPm) ? data.questionsForPm : [];
+      const needsConfirmation = Array.isArray(data.needsConfirmation)
+        ? data.needsConfirmation
+        : Array.isArray(data.questionsForPm)
+          ? data.questionsForPm
+          : [];
       const nextActions = Array.isArray(data.recommendedNextActions)
         ? data.recommendedNextActions
         : [];
       const assumptions = Array.isArray(data.assumptions) ? data.assumptions : [];
       const show = data.showSummary || {};
+      const commercial = data.commercial && data.commercial.meaningful !== false
+        ? data.commercial
+        : null;
 
       const pills = `
         <div class="ops-pill-row">
           <span class="ops-pill"><strong>Complexity</strong> ${escapeHtml(data.complexityLevel || "—")}</span>
-          <span class="ops-pill ready-${escapeHtml(readiness)}"><strong>Readiness</strong> ${escapeHtml(data.readinessStatus || "—")}</span>
-          ${coordination.map((item) => `<span class="ops-pill"><strong>Coord</strong> ${escapeHtml(item)}</span>`).join("")}
-          ${data.confidence ? `<span class="ops-pill"><strong>Confidence</strong> ${escapeHtml(data.confidence)}</span>` : ""}
+          <span class="ops-pill ready-${escapeHtml(readiness)}"><strong>Readiness</strong> ${escapeHtml(formatReadinessLabel(readiness))}</span>
+          ${coordination.length ? `<span class="ops-pill"><strong>Coordination</strong> ${escapeHtml(coordination.join(" · "))}</span>` : ""}
+          ${data.confidence ? `<span class="ops-pill confidence-pill">${escapeHtml(formatConfidenceLabel(data.confidence))} confidence</span>` : ""}
         </div>
       `;
 
@@ -1540,7 +1611,9 @@
         show.showName || null,
         show.client || null,
         show.venue || null,
-        show.projectManager ? `PM ${show.projectManager}` : null,
+        show.projectManager
+          ? `PM ${show.projectManager}`
+          : "No PM is visible on this FLEX quote",
         show.shippingMethod || null,
       ].filter(Boolean);
 
@@ -1556,7 +1629,7 @@
               return `
               <div class="ops-flag sev-${escapeHtml(severity)}">
                 <div class="ops-flag-top">
-                  <strong>${escapeHtml(severity.toUpperCase())}</strong>
+                  <strong>${escapeHtml(formatSeverityLabel(severity))}</strong>
                   <span>${escapeHtml(flag.area || "")}</span>
                 </div>
                 <div>${escapeHtml(flag.finding || "")}</div>
@@ -1570,16 +1643,12 @@
         : `
           <div class="section">
             <h3>Red Flags</h3>
-            <div class="hint">No material red flags were detected from the available FLEX data.</div>
+            <div class="hint">No material red flags detected from FLEX data.</div>
           </div>
         `;
 
       return `
-        <div class="section">
-          <h3>Assessment</h3>
-          <p>${escapeHtml(data.assessment || data.answer || "")}</p>
-          ${showBits.length ? `<div class="meta" style="margin-top:10px">${showBits.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>` : ""}
-        </div>
+        ${showBits.length ? `<div class="meta" style="margin-top:4px">${showBits.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>` : ""}
         ${pills}
         <div class="ops-grid">
           ${renderOpsDeptCard("Labor", data.labor)}
@@ -1587,21 +1656,21 @@
           ${renderOpsDeptCard("Equipment", data.equipment)}
           ${renderOpsDeptCard("Warehouse", data.warehouse)}
         </div>
-        ${data.commercial?.assessment ? `
+        ${commercial?.assessment ? `
           <div class="section">
             <h3>Commercial</h3>
-            <p>${escapeHtml(data.commercial.assessment)}</p>
-            ${Array.isArray(data.commercial.findings) && data.commercial.findings.length
-              ? `<ul>${data.commercial.findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+            <p>${escapeHtml(commercial.assessment)}</p>
+            ${Array.isArray(commercial.findings) && commercial.findings.length
+              ? `<ul>${commercial.findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
               : ""}
           </div>
         ` : ""}
         ${redFlagsHtml}
-        ${renderListBlock("Questions for PM", questions)}
+        ${renderListBlock("Needs Confirmation", needsConfirmation)}
         ${renderListBlock("Recommended Next Actions", nextActions)}
         <details>
           <summary>Assumptions &amp; confidence</summary>
-          <div class="hint" style="margin-top:10px">Confidence: ${escapeHtml(data.confidence || "—")}</div>
+          <div class="hint" style="margin-top:10px">Confidence: ${escapeHtml(formatConfidenceLabel(data.confidence))}</div>
           ${assumptions.length
             ? `<ul>${assumptions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
             : `<div class="hint">No assumptions listed.</div>`}

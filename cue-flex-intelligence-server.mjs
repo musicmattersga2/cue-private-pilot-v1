@@ -3158,9 +3158,12 @@ function buildFlexAskBriefPayload(fullResult) {
     payload.warehouse = result.warehouse || null;
     payload.commercial = result.commercial || null;
     payload.redFlags = Array.isArray(result.redFlags) ? result.redFlags : [];
-    payload.questionsForPm = Array.isArray(result.questionsForPm)
-      ? result.questionsForPm
-      : [];
+    payload.needsConfirmation = Array.isArray(result.needsConfirmation)
+      ? result.needsConfirmation
+      : Array.isArray(result.questionsForPm)
+        ? result.questionsForPm
+        : [];
+    payload.questionsForPm = payload.needsConfirmation;
     payload.recommendedNextActions = Array.isArray(result.recommendedNextActions)
       ? result.recommendedNextActions
       : [];
@@ -3993,6 +3996,87 @@ function hasAssignedProjectManager(value) {
   return true;
 }
 
+function pmNotVisibleMessage() {
+  return "No PM is visible on this FLEX quote.";
+}
+
+function pmNotVisibleQuestion() {
+  return "No PM is visible on this FLEX quote — does this show need one?";
+}
+
+function scrubAskFlexOperationalWording(text, { hasPm = false } = {}) {
+  let out = String(text ?? "");
+  if (!out) return out;
+
+  out = out.replace(/\bequipment items\b/gi, "equipment line items");
+  out = out.replace(/\binventory items\b/gi, "equipment line items");
+  out = out.replace(/\bitem count\b/gi, "line-item count");
+  out = out.replace(/\bboth truck units\b/gi, "the quoted transportation quantity");
+  out = out.replace(/\btruck units\b/gi, "transportation quantity");
+
+  if (!hasPm) {
+    out = out.replace(
+      /No PM is assigned(?: in FLEX)?/gi,
+      pmNotVisibleMessage().replace(/\.$/, "")
+    );
+    out = out.replace(
+      /no project manager is assigned/gi,
+      "no PM is visible on this FLEX quote"
+    );
+    out = out.replace(
+      /Null project manager means no PM is currently assigned in FLEX/gi,
+      "A blank projectManagerId means no PM is visible on this FLEX quote"
+    );
+  }
+
+  return out;
+}
+
+function buildTruckingQuantityNotes(truckingLines) {
+  const notes = [];
+
+  for (const line of Array.isArray(truckingLines) ? truckingLines : []) {
+    const qty = Number(line?.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+
+    notes.push(
+      `FLEX lists "${line.name || "Transportation line"}" with quantity ${qty}. That quantity may represent vehicles, trips, or billing units — confirm with Brian Kee / Trucking Coordinator before treating it as a truck count.`
+    );
+  }
+
+  return notes;
+}
+
+function isMeaningfulCommercialIssue(commercial, financials = {}) {
+  if (commercial == null) return false;
+  if (commercial?.meaningful === true) return true;
+  if (commercial?.meaningful === false) return false;
+
+  const text = [
+    commercial?.assessment,
+    ...(Array.isArray(commercial?.findings) ? commercial.findings : []),
+  ]
+    .map((item) => String(item || ""))
+    .join(" ")
+    .toLowerCase();
+
+  if (!text.trim()) return false;
+  if (
+    /no (material |meaningful )?(commercial|pricing|operating) (issue|concern|risk|red flag)/.test(
+      text
+    ) ||
+    /commercially,? the quote appears straightforward/.test(text) ||
+    /no pricing-based operating concern/.test(text) ||
+    /secondary unless/.test(text)
+  ) {
+    return false;
+  }
+
+  return /\b(discount|underpriced|overpriced|scope creep|pricing concern|commercial risk|\$0 placeholder|zero[- ]dollar|credit card fee|unusual balance|collections)\b/.test(
+    text
+  );
+}
+
 function detectAskFlexEquipmentSignals(items) {
   const names = (Array.isArray(items) ? items : [])
     .map((item) => String(item?.name || "").toLowerCase())
@@ -4100,22 +4184,22 @@ function buildAskFlexOperationalFallback(detail, question) {
     .slice(0, 8);
 
   const assessmentParts = [
-    `${show.documentNumber || "This quote"} has ${laborHeadcount} labor headcount across ${staffing.length} staffing line(s), ${trucking.length} trucking line(s), and ${equipment.length} equipment item(s).`,
+    `${show.documentNumber || "This quote"} has ${laborHeadcount} labor headcount across ${staffing.length} staffing line(s), ${trucking.length} trucking line(s), and ${equipment.length} equipment line item(s).`,
     `Complexity is estimated ${complexityLevel} from FLEX line counts and department scope.`,
   ];
 
   if (!hasPm) {
-    assessmentParts.push("No PM is assigned in FLEX.");
+    assessmentParts.push(pmNotVisibleMessage());
   } else {
     assessmentParts.push(`PM ownership is listed as ${show.projectManager}.`);
   }
 
-  const questionsForPm = [];
+  const needsConfirmation = [];
   if (!hasPm) {
-    questionsForPm.push("No PM is assigned — does this show need one?");
+    needsConfirmation.push(pmNotVisibleQuestion());
   }
   if (missingDates.length) {
-    questionsForPm.push(
+    needsConfirmation.push(
       `Confirm missing schedule fields in FLEX: ${missingDates.join(", ")}.`
     );
   }
@@ -4140,11 +4224,9 @@ function buildAskFlexOperationalFallback(detail, question) {
     recommendedNextActions.push(
       `Align staffing, trucking, and warehouse timing with ${show.projectManager}.`
     );
-  } else if (!questionsForPm.length) {
-    recommendedNextActions.push(
-      "No PM is assigned — does this show need one?"
-    );
   }
+
+  const truckingQuantityNotes = buildTruckingQuantityNotes(trucking);
 
   return {
     headline: "Operational Review",
@@ -4186,55 +4268,62 @@ function buildAskFlexOperationalFallback(detail, question) {
         : "No transportation lines were found on this FLEX quote.",
       lineCount: trucking.length,
       findings: trucking.length
-        ? [`Transportation line count from FLEX: ${trucking.length}.`]
+        ? [
+            `Transportation line count from FLEX: ${trucking.length}.`,
+            ...truckingQuantityNotes.slice(0, 2),
+          ]
         : ["No trucking lines present in FLEX."],
       actions: trucking.length
-        ? ["Route truck timing and dispatch planning to Brian Kee / Trucking Coordinator."]
+        ? [
+            "Route truck timing and dispatch planning to Brian Kee / Trucking Coordinator.",
+            truckingQuantityNotes.length
+              ? "Confirm whether transportation quantities mean vehicles, trips, or billing units."
+              : null,
+          ].filter(Boolean)
         : [],
     },
     equipment: {
       assessment: equipment.length
-        ? `FLEX lists ${equipment.length} equipment item(s) across ${sections.length} section(s).`
+        ? `FLEX lists ${equipment.length} equipment line items across ${sections.length} section(s).`
         : "No equipment/inventory lines were found on this FLEX quote.",
       itemCount: equipment.length,
       majorFamilies: signals.majorFamilies,
       findings: equipment.length
         ? [
-            `Equipment item count from FLEX: ${equipment.length}.`,
+            `Quoted equipment rows from FLEX: ${equipment.length}.`,
             signals.majorFamilies.length
               ? `Detected equipment families from names: ${signals.majorFamilies.join(", ")}.`
               : "No major equipment family keywords were detected from item names.",
           ]
         : ["No equipment lines present in FLEX."],
       actions: equipment.length
-        ? ["Validate warehouse pull lists against FLEX equipment lines."]
+        ? ["Validate warehouse pull lists against FLEX equipment line items."]
         : [],
     },
     warehouse: {
-      assessment: `Warehouse complexity estimated ${complexityLevel} from ${sections.length} department/section(s), ${equipment.length} item(s), and schedule/trucking signals in FLEX.`,
+      assessment: `Warehouse complexity estimated ${complexityLevel} from ${sections.length} department/section(s), ${equipment.length} equipment line item(s), and schedule/trucking signals in FLEX.`,
       complexity: complexityLevel,
       likelyDepartments,
       findings: [
         `Department/section count: ${sections.length}.`,
-        `Equipment item count: ${equipment.length}.`,
+        `Equipment line-item count: ${equipment.length}.`,
       ],
       actions: sections.length
         ? ["Confirm warehouse department ownership for the listed FLEX sections."]
         : [],
     },
-    commercial: {
-      assessment:
-        "Commercial review is secondary unless pricing or scope data indicates a meaningful operating concern.",
-      findings: [],
-    },
+    commercial: null,
     redFlags: [],
-    questionsForPm,
+    needsConfirmation,
+    questionsForPm: needsConfirmation,
     recommendedNextActions,
     confidence: "medium",
     assumptions: [
       "Fallback used FLEX line counts and header fields only.",
       "No AI interpretation was applied; no red flags were invented.",
       "Quantity is treated as labor headcount; quantity × timeQty is person-days only.",
+      "A blank projectManagerId means no PM is visible on this FLEX quote, not a confirmed unassignment statement beyond the header field.",
+      "Equipment line-item count is quoted row count, not physical unit quantity.",
     ],
     source: "local_fallback",
   };
@@ -4352,11 +4441,12 @@ function normalizeAskFlexOperationalAnalysis(raw, fallback) {
   warehouse.complexity = warehouseComplexity;
 
   const modelCommercial = isPlainObject(base.commercial) ? base.commercial : {};
-  const commercial = {
+  let commercial = {
     assessment: String(
       modelCommercial.assessment || fb.commercial?.assessment || ""
     ).trim(),
     findings: asStringArray(modelCommercial.findings, 8),
+    meaningful: modelCommercial.meaningful,
   };
 
   const areaAllowed = new Set([
@@ -4391,34 +4481,72 @@ function normalizeAskFlexOperationalAnalysis(raw, fallback) {
         .filter(Boolean)
     : [];
 
-  // Never invent red flags in post-processing; keep model flags only when present.
-  // Enforce PM rule: missing PM is not automatically high-risk.
   const hasPm = hasAssignedProjectManager(showSummary.projectManager);
+  const movedPmConfirmations = [];
+
+  // Missing/unconfirmed PM ownership is confirmation work, not a red flag.
   redFlags = redFlags.filter((flag) => {
-    if (flag.area !== "PM") return true;
-    if (hasPm) return true;
-    if (flag.severity === "high") return false;
+    const blob = `${flag.finding} ${flag.action} ${flag.evidence}`.toLowerCase();
+    const isPmVisibilityIssue =
+      flag.area === "PM" &&
+      /\b(no pm|missing pm|pm is (not |un)?assigned|not visible|project manager|pm ownership|pm assignment)\b/.test(
+        blob
+      ) &&
+      !/\b(conflict|contradict|blocker|shortage|missing critical)\b/.test(blob);
+
+    if (isPmVisibilityIssue) {
+      movedPmConfirmations.push(
+        scrubAskFlexOperationalWording(flag.action || flag.finding, { hasPm })
+      );
+      return false;
+    }
+
     return true;
   });
+
+  let needsConfirmation = asStringArray(base.needsConfirmation, 10);
+  if (!needsConfirmation.length) {
+    needsConfirmation = asStringArray(fb.needsConfirmation, 10);
+  }
 
   let questionsForPm = asStringArray(base.questionsForPm, 10);
   if (!questionsForPm.length) {
     questionsForPm = asStringArray(fb.questionsForPm, 10);
   }
+
+  needsConfirmation = [
+    ...needsConfirmation,
+    ...questionsForPm,
+    ...movedPmConfirmations,
+  ];
+
   if (!hasPm) {
-    const pmQuestion = "No PM is assigned — does this show need one?";
-    questionsForPm = [
-      pmQuestion,
-      ...questionsForPm.filter(
-        (item) => !/no pm is assigned/i.test(item) && !/assign(?: a)? pm/i.test(item)
+    needsConfirmation = [
+      pmNotVisibleQuestion(),
+      ...needsConfirmation.filter(
+        (item) =>
+          !/no pm is (assigned|visible)/i.test(item) &&
+          !/assign(?: a)? pm/i.test(item)
       ),
-    ].slice(0, 10);
+    ];
   }
+
+  needsConfirmation = [
+    ...new Set(
+      needsConfirmation
+        .map((item) => scrubAskFlexOperationalWording(item, { hasPm }))
+        .filter(Boolean)
+    ),
+  ].slice(0, 10);
 
   let recommendedNextActions = asStringArray(base.recommendedNextActions, 10);
   if (!recommendedNextActions.length) {
     recommendedNextActions = asStringArray(fb.recommendedNextActions, 10);
   }
+  recommendedNextActions = recommendedNextActions
+    .map((item) => scrubAskFlexOperationalWording(item, { hasPm }))
+    .filter((item) => !/no pm is assigned/i.test(item))
+    .slice(0, 10);
 
   // Soften blocked / at_risk unless evidence-looking content exists.
   if (readinessStatus === "blocked" && redFlags.every((flag) => flag.severity !== "high")) {
@@ -4428,10 +4556,57 @@ function normalizeAskFlexOperationalAnalysis(raw, fallback) {
     readinessStatus = "review_needed";
   }
 
-  const assessment =
+  const scrubDept = (dept) => {
+    if (!isPlainObject(dept)) return dept;
+    return {
+      ...dept,
+      assessment: scrubAskFlexOperationalWording(dept.assessment, { hasPm }),
+      findings: asStringArray(dept.findings, 8).map((item) =>
+        scrubAskFlexOperationalWording(item, { hasPm })
+      ),
+      actions: asStringArray(dept.actions, 8).map((item) =>
+        scrubAskFlexOperationalWording(item, { hasPm })
+      ),
+    };
+  };
+
+  const assessment = scrubAskFlexOperationalWording(
     String(base.assessment || "").trim() ||
-    String(fb.assessment || "").trim() ||
-    "Operational review is available from FLEX quote data.";
+      String(fb.assessment || "").trim() ||
+      "Operational review is available from FLEX quote data.",
+    { hasPm }
+  );
+
+  labor.assessment = scrubAskFlexOperationalWording(labor.assessment, { hasPm });
+  labor.findings = labor.findings.map((item) =>
+    scrubAskFlexOperationalWording(item, { hasPm })
+  );
+  labor.actions = labor.actions.map((item) =>
+    scrubAskFlexOperationalWording(item, { hasPm })
+  );
+
+  Object.assign(trucking, scrubDept(trucking));
+  Object.assign(equipment, scrubDept(equipment));
+  Object.assign(warehouse, scrubDept(warehouse));
+
+  redFlags = redFlags.map((flag) => ({
+    ...flag,
+    finding: scrubAskFlexOperationalWording(flag.finding, { hasPm }),
+    evidence: scrubAskFlexOperationalWording(flag.evidence, { hasPm }),
+    action: scrubAskFlexOperationalWording(flag.action, { hasPm }),
+  }));
+
+  const financials = fb.financials || base.financials || {};
+  const commercialMeaningful = isMeaningfulCommercialIssue(commercial, financials);
+  commercial = commercialMeaningful
+    ? {
+        assessment: scrubAskFlexOperationalWording(commercial.assessment, { hasPm }),
+        findings: commercial.findings.map((item) =>
+          scrubAskFlexOperationalWording(item, { hasPm })
+        ),
+        meaningful: true,
+      }
+    : null;
 
   return {
     headline: String(base.headline || fb.headline || "Operational Review").trim(),
@@ -4456,12 +4631,15 @@ function normalizeAskFlexOperationalAnalysis(raw, fallback) {
     warehouse,
     commercial,
     redFlags,
-    questionsForPm,
+    needsConfirmation,
+    questionsForPm: needsConfirmation,
     recommendedNextActions,
     confidence,
-    assumptions: asStringArray(base.assumptions, 10).length
-      ? asStringArray(base.assumptions, 10)
-      : asStringArray(fb.assumptions, 10),
+    assumptions: (
+      asStringArray(base.assumptions, 10).length
+        ? asStringArray(base.assumptions, 10)
+        : asStringArray(fb.assumptions, 10)
+    ).map((item) => scrubAskFlexOperationalWording(item, { hasPm })),
     source: isPlainObject(raw) ? "openai" : "local_fallback",
   };
 }
@@ -4479,14 +4657,19 @@ Ask FLEX Operational Analysis operating rules:
 8. Large scope is coordination-heavy, not automatically risky.
 9. Use at_risk only when there is evidence of a genuine concern.
 10. Use blocked only for a confirmed blocker.
-11. Missing PM: ask once "No PM is assigned — does this show need one?" Do not automatically call missing PM a high-risk issue.
+11. If projectManager is blank/null on the FLEX quote, say exactly: "No PM is visible on this FLEX quote." Never say "No PM is assigned" unless FLEX definitively states unassignment. Ask once via needsConfirmation: "No PM is visible on this FLEX quote — does this show need one?"
 12. If a PM is assigned, route coordination to that PM.
-13. Warehouse analysis must be based on the number of departments, item count, equipment families, rigging, cable, power, control, trucking, and schedule.
+13. Warehouse analysis must be based on the number of departments, equipment line-item count, equipment families, rigging, cable, power, control, trucking, and schedule.
 14. Do not claim truck capacity is insufficient unless the payload provides defensible evidence.
-15. Commercial analysis should remain secondary unless pricing or scope data indicates a meaningful operating concern.
-16. For clean shows, clearly say no material red flags were detected.
-17. Include assumptions and confidence.
-18. AI recommends; humans approve.
+15. Do not interpret transportation quantity as a truck count unless the line explicitly supports that. For quantity values, say the quantity may represent vehicles, trips, or billing units and route confirmation to Brian Kee / Trucking Coordinator. Never say "both truck units" unless confirmed.
+16. When referring to detail.counts.inventoryItems / equipment arrays, say "equipment line items" or "quoted equipment rows", never imply physical unit quantity from line-item count.
+17. Red flags are only for actual blockers, conflicts, missing critical data, shortages, or contradictory evidence. Do not put missing/unconfirmed PM ownership in redFlags; put it in needsConfirmation.
+18. Commercial analysis should remain secondary. Set commercial.meaningful=true only when pricing, discounts, totals, balance, or scope create a real operating concern; otherwise omit commercial concern.
+19. Prefer package-specific recommendations tied to actual FLEX signals (for example dual console workflow, RF/wireless prep, cable/power labeling, rigging handoff, warehouse pack sequencing) without inventing shortages.
+20. Keep department findings concise (up to 3) and actions concise (up to 2).
+21. For clean shows, clearly say no material red flags were detected.
+22. Include assumptions and confidence.
+23. AI recommends; humans approve.
 `;
 
 async function buildAskFlexOperationalAnalysis(detail, question) {
@@ -4576,27 +4759,34 @@ async function buildAskFlexOperationalAnalysis(detail, question) {
               commercial: {
                 assessment: "string",
                 findings: ["string"],
+                meaningful:
+                  "boolean — true only when pricing/discounts/totals/balance/scope create a real operating concern",
               },
               redFlags: [
                 {
                   severity: "low | medium | high",
-                  area: "Staffing | Trucking | Warehouse | Equipment | Timing | PM | Data",
+                  area: "Staffing | Trucking | Warehouse | Equipment | Timing | Data",
                   finding: "string",
                   evidence: "string",
                   action: "string",
                 },
               ],
+              needsConfirmation: ["string"],
               questionsForPm: ["string"],
               recommendedNextActions: ["string"],
               confidence: "low | medium | high",
               assumptions: ["string"],
             },
             compact_flex_payload: compactPayload,
+            pm_visibility_note:
+              compactPayload?.show_context?.projectManager
+                ? `PM visible on quote: ${compactPayload.show_context.projectManager}`
+                : "projectManagerId has no data on this FLEX quote header. Say: No PM is visible on this FLEX quote.",
             deterministic_counts: {
               laborHeadcount: fallback.labor?.headcount ?? 0,
               laborPersonDays: fallback.labor?.personDays ?? 0,
               truckingLineCount: fallback.trucking?.lineCount ?? 0,
-              equipmentItemCount: fallback.equipment?.itemCount ?? 0,
+              equipmentLineItemCount: fallback.equipment?.itemCount ?? 0,
               sectionCount: Array.isArray(compactPayload.sections)
                 ? compactPayload.sections.length
                 : 0,
