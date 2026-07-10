@@ -2320,8 +2320,48 @@ function buildFlexContextAnswer(detail, question) {
 }
 
 
+function isFlexOperationalAnalysisQuestion(question) {
+  const text = String(question || "").toLowerCase();
+
+  if (
+    /\boperational analysis\b/.test(text) ||
+    /\boperational review\b/.test(text) ||
+    /\banalyze (?:quote|show|job)\b/.test(text) ||
+    /\boperational risks?\b/.test(text) ||
+    /\bred flags?\b/.test(text) ||
+    /\breadiness review\b/.test(text) ||
+    /\bshow review\b/.test(text) ||
+    /\bfull review\b/.test(text) ||
+    /\bwarehouse needs?\b/.test(text) ||
+    /\bquestions? for the pm\b/.test(text) ||
+    /\bquestions? (?:should|for) (?:the )?pm\b/.test(text) ||
+    /\bconcern(?:ed|s)?\b/.test(text) ||
+    /\blabor(?:\s+and\s+|,)\s*trucking\b/.test(text) ||
+    /\bequipment and labor\b/.test(text) ||
+    /\breview labor[, ].*trucking/.test(text) ||
+    /\blabor[, ].*trucking[, ].*(?:equipment|warehouse)/.test(text)
+  ) {
+    return true;
+  }
+
+  // Plain "operational summary" stays on the existing quick sections path
+  // unless the question also asks for analysis / readiness / risks / multi-dept review.
+  if (/\boperational summary\b/.test(text)) {
+    return /\b(analysis|readiness|risks?|concerns?|red flags?|pm questions?|warehouse|labor|trucking|equipment)\b/.test(
+      text
+    );
+  }
+
+  return false;
+}
+
 function classifyFlexAskIntent(question) {
   const text = String(question || "").toLowerCase();
+
+  // Operational analysis must win before labor / trucking / sections / inventory.
+  if (isFlexOperationalAnalysisQuestion(question)) {
+    return "document_operational_analysis";
+  }
 
   if (/\b(labor|crew|tech|technician|engineer|stagehand|operator|staffing)\b/i.test(text)) {
     return "document_labor";
@@ -3102,6 +3142,37 @@ function buildFlexAskBriefPayload(fullResult) {
     return payload;
   }
 
+  if (fullResult?.intent === "document_operational_analysis") {
+    payload.headline = result.headline || "Operational Review";
+    payload.answer = fullResult?.answer || result.assessment || "";
+    payload.assessment = result.assessment || payload.answer;
+    payload.complexityLevel = result.complexityLevel || null;
+    payload.readinessStatus = result.readinessStatus || null;
+    payload.coordinationRequired = Array.isArray(result.coordinationRequired)
+      ? result.coordinationRequired
+      : [];
+    payload.showSummary = result.showSummary || null;
+    payload.labor = result.labor || null;
+    payload.trucking = result.trucking || null;
+    payload.equipment = result.equipment || null;
+    payload.warehouse = result.warehouse || null;
+    payload.commercial = result.commercial || null;
+    payload.redFlags = Array.isArray(result.redFlags) ? result.redFlags : [];
+    payload.questionsForPm = Array.isArray(result.questionsForPm)
+      ? result.questionsForPm
+      : [];
+    payload.recommendedNextActions = Array.isArray(result.recommendedNextActions)
+      ? result.recommendedNextActions
+      : [];
+    payload.confidence = result.confidence || null;
+    payload.assumptions = Array.isArray(result.assumptions) ? result.assumptions : [];
+    payload.source = result.source || null;
+    payload.lines = (payload.recommendedNextActions || []).slice(0, 8).map((action) => ({
+      text: String(action),
+    }));
+    return payload;
+  }
+
   if (fullResult?.intent === "document_sections") {
     payload.sectionType = result.sectionType || null;
     payload.facts = result.facts || {};
@@ -3854,6 +3925,706 @@ function buildQuoteSearchSelectionResponse(question, intent, searchQuery, search
   };
 }
 
+function compactAskFlexLineItem(item) {
+  if (!item || typeof item !== "object") return null;
+
+  return {
+    id: item.id ?? null,
+    name: item.name ?? null,
+    quantity: item.quantity ?? null,
+    timeQty: item.timeQty ?? null,
+    pricingModel: item.pricingModel ?? null,
+    priceEach: item.priceEach ?? null,
+    priceExtended: item.priceExtended ?? null,
+    note: item.note ?? null,
+    category: item.category ?? null,
+    type: item.type ?? null,
+  };
+}
+
+function buildAskFlexOperationalPayload(detail, question) {
+  const showContext = detail?.showContext || {};
+
+  return {
+    question: String(question || ""),
+    show_context: {
+      elementId: showContext.elementId ?? detail?.elementId ?? null,
+      documentNumber: showContext.documentNumber ?? null,
+      showName: showContext.showName ?? null,
+      client: showContext.client ?? null,
+      venue: showContext.venue ?? null,
+      plannedStartDate: showContext.plannedStartDate ?? null,
+      plannedEndDate: showContext.plannedEndDate ?? null,
+      shipDate: showContext.shipDate ?? null,
+      loadInDate: showContext.loadInDate ?? null,
+      showStartDate: showContext.showStartDate ?? null,
+      loadOutDate: showContext.loadOutDate ?? null,
+      shippingMethod: showContext.shippingMethod ?? null,
+      personResponsible: showContext.personResponsible ?? null,
+      projectManager: showContext.projectManager ?? null,
+      notes: showContext.notes ?? null,
+    },
+    counts: detail?.counts || {},
+    financials: detail?.summary?.financials || {},
+    category_totals: detail?.summary?.totals || {},
+    sections: (Array.isArray(detail?.sections) ? detail.sections : []).map((section) => ({
+      name: section.name ?? null,
+      category: section.category ?? null,
+      total: section.total ?? null,
+      itemCount: section.itemCount ?? null,
+    })),
+    staffing: (Array.isArray(detail?.laborItems) ? detail.laborItems : [])
+      .map(compactAskFlexLineItem)
+      .filter(Boolean),
+    trucking: (Array.isArray(detail?.transportationItems) ? detail.transportationItems : [])
+      .map(compactAskFlexLineItem)
+      .filter(Boolean),
+    equipment: (Array.isArray(detail?.inventoryItems) ? detail.inventoryItems : [])
+      .map(compactAskFlexLineItem)
+      .filter(Boolean),
+  };
+}
+
+function hasAssignedProjectManager(value) {
+  if (value == null) return false;
+  const text = String(value).trim();
+  if (!text) return false;
+  if (text === "—" || /^not assigned$/i.test(text)) return false;
+  return true;
+}
+
+function detectAskFlexEquipmentSignals(items) {
+  const names = (Array.isArray(items) ? items : [])
+    .map((item) => String(item?.name || "").toLowerCase())
+    .filter(Boolean);
+
+  const joined = names.join(" | ");
+
+  return {
+    hasRigging: /\b(rigging|motor|hoist|span\s*set|truss)\b/i.test(joined),
+    hasPower: /\b(power|distro|cam-?lok|feeder|generator|genny)\b/i.test(joined),
+    hasCable: /\b(cable|snake|multicore|fiber|loom)\b/i.test(joined),
+    hasControl: /\b(control|console|processor|matrix|network)\b/i.test(joined),
+    hasVideoLed: /\b(video|led|panel|wall|processor|novastar|brompton)\b/i.test(joined),
+    majorFamilies: [
+      /\bled|video\b/i.test(joined) ? "Video / LED" : null,
+      /\baudio|speaker|pa|console|mic\b/i.test(joined) ? "Audio" : null,
+      /\blight|fixture|lamp\b/i.test(joined) ? "Lighting" : null,
+      /\btruss|rigging|motor|hoist\b/i.test(joined) ? "Rigging / Truss" : null,
+      /\bpower|distro|feeder|generator\b/i.test(joined) ? "Power" : null,
+      /\bcable|snake|fiber\b/i.test(joined) ? "Cable / Infrastructure" : null,
+    ].filter(Boolean),
+  };
+}
+
+function estimateAskFlexOperationalComplexity(payload) {
+  const staffing = Array.isArray(payload?.staffing) ? payload.staffing : [];
+  const trucking = Array.isArray(payload?.trucking) ? payload.trucking : [];
+  const equipment = Array.isArray(payload?.equipment) ? payload.equipment : [];
+  const sections = Array.isArray(payload?.sections) ? payload.sections : [];
+  const signals = detectAskFlexEquipmentSignals(equipment);
+
+  const laborHeadcount = staffing.reduce(
+    (sum, item) => sum + Number(item?.quantity || 0),
+    0
+  );
+  const lineCount =
+    staffing.length + trucking.length + equipment.length + sections.length;
+
+  let score = 0;
+  if (lineCount >= 80 || equipment.length >= 60) score += 2;
+  else if (lineCount >= 35 || equipment.length >= 25) score += 1;
+
+  if (sections.length >= 6) score += 2;
+  else if (sections.length >= 3) score += 1;
+
+  if (trucking.length >= 3) score += 2;
+  else if (trucking.length >= 1) score += 1;
+
+  if (laborHeadcount >= 12) score += 2;
+  else if (laborHeadcount >= 4) score += 1;
+
+  if (signals.hasRigging) score += 1;
+  if (signals.hasPower) score += 1;
+  if (signals.hasCable) score += 1;
+  if (signals.hasVideoLed) score += 1;
+
+  if (score >= 7) return "High";
+  if (score >= 3) return "Medium";
+  return "Low";
+}
+
+function buildAskFlexOperationalFallback(detail, question) {
+  const payload = buildAskFlexOperationalPayload(detail, question);
+  const show = payload.show_context || {};
+  const staffing = payload.staffing || [];
+  const trucking = payload.trucking || [];
+  const equipment = payload.equipment || [];
+  const sections = payload.sections || [];
+  const signals = detectAskFlexEquipmentSignals(equipment);
+
+  const laborHeadcount = staffing.reduce(
+    (sum, item) => sum + Number(item?.quantity || 0),
+    0
+  );
+  const laborPersonDays = staffing.reduce((sum, item) => {
+    const qty = Number(item?.quantity || 0);
+    const timeQty = Number(item?.timeQty || 0);
+    return sum + qty * timeQty;
+  }, 0);
+
+  const hasPm = hasAssignedProjectManager(show.projectManager);
+  const missingDates = [
+    !show.loadInDate ? "load-in" : null,
+    !show.showStartDate && !show.plannedStartDate ? "show start" : null,
+    !show.loadOutDate ? "load-out" : null,
+  ].filter(Boolean);
+
+  const complexityLevel = estimateAskFlexOperationalComplexity(payload);
+  const coordinationRequired = [];
+  if (staffing.length) coordinationRequired.push("Staffing");
+  if (trucking.length) coordinationRequired.push("Trucking");
+  if (equipment.length || sections.length >= 2) coordinationRequired.push("Warehouse");
+  if (hasPm || complexityLevel !== "Low") coordinationRequired.push("PM");
+
+  const roles = staffing.map((item) => ({
+    name: item.name || "Labor line",
+    quantity: Number(item.quantity || 0),
+    timeQty: Number(item.timeQty || 0),
+    note: item.note || null,
+  }));
+
+  const likelyDepartments = sections
+    .map((section) => section.name)
+    .filter(Boolean)
+    .slice(0, 8);
+
+  const assessmentParts = [
+    `${show.documentNumber || "This quote"} has ${laborHeadcount} labor headcount across ${staffing.length} staffing line(s), ${trucking.length} trucking line(s), and ${equipment.length} equipment item(s).`,
+    `Complexity is estimated ${complexityLevel} from FLEX line counts and department scope.`,
+  ];
+
+  if (!hasPm) {
+    assessmentParts.push("No PM is assigned in FLEX.");
+  } else {
+    assessmentParts.push(`PM ownership is listed as ${show.projectManager}.`);
+  }
+
+  const questionsForPm = [];
+  if (!hasPm) {
+    questionsForPm.push("No PM is assigned — does this show need one?");
+  }
+  if (missingDates.length) {
+    questionsForPm.push(
+      `Confirm missing schedule fields in FLEX: ${missingDates.join(", ")}.`
+    );
+  }
+
+  const recommendedNextActions = [];
+  if (staffing.length) {
+    recommendedNextActions.push(
+      "Confirm staffing coverage against the FLEX labor lines."
+    );
+  }
+  if (trucking.length) {
+    recommendedNextActions.push(
+      "Route trucking review to Brian Kee / Trucking Coordinator."
+    );
+  }
+  if (equipment.length) {
+    recommendedNextActions.push(
+      "Review warehouse pull scope against equipment families and department count."
+    );
+  }
+  if (hasPm) {
+    recommendedNextActions.push(
+      `Align staffing, trucking, and warehouse timing with ${show.projectManager}.`
+    );
+  } else if (!questionsForPm.length) {
+    recommendedNextActions.push(
+      "No PM is assigned — does this show need one?"
+    );
+  }
+
+  return {
+    headline: "Operational Review",
+    assessment: assessmentParts.join(" "),
+    complexityLevel,
+    readinessStatus: missingDates.length ? "review_needed" : "clear",
+    coordinationRequired: [...new Set(coordinationRequired)],
+    showSummary: {
+      documentNumber: show.documentNumber || null,
+      showName: show.showName || null,
+      client: show.client || null,
+      venue: show.venue || null,
+      projectManager: show.projectManager || null,
+      shippingMethod: show.shippingMethod || null,
+      loadInDate: show.loadInDate || null,
+      showStartDate: show.showStartDate || null,
+      loadOutDate: show.loadOutDate || null,
+    },
+    labor: {
+      assessment: staffing.length
+        ? `FLEX lists ${laborHeadcount} headcount and about ${Math.round(laborPersonDays * 100) / 100} person-days across ${staffing.length} labor line(s).`
+        : "No labor lines were found on this FLEX quote.",
+      headcount: laborHeadcount,
+      personDays: Math.round(laborPersonDays * 100) / 100,
+      roles,
+      findings: staffing.length
+        ? [
+            `Labor headcount from FLEX quantity fields: ${laborHeadcount}.`,
+            `Person-days from quantity × timeQty: ${Math.round(laborPersonDays * 100) / 100}.`,
+          ]
+        : ["No staffing lines present in FLEX."],
+      actions: staffing.length
+        ? ["Confirm role coverage and call times against FLEX labor lines."]
+        : [],
+    },
+    trucking: {
+      assessment: trucking.length
+        ? `FLEX lists ${trucking.length} transportation line(s). Route review to Brian Kee / Trucking Coordinator.`
+        : "No transportation lines were found on this FLEX quote.",
+      lineCount: trucking.length,
+      findings: trucking.length
+        ? [`Transportation line count from FLEX: ${trucking.length}.`]
+        : ["No trucking lines present in FLEX."],
+      actions: trucking.length
+        ? ["Route truck timing and dispatch planning to Brian Kee / Trucking Coordinator."]
+        : [],
+    },
+    equipment: {
+      assessment: equipment.length
+        ? `FLEX lists ${equipment.length} equipment item(s) across ${sections.length} section(s).`
+        : "No equipment/inventory lines were found on this FLEX quote.",
+      itemCount: equipment.length,
+      majorFamilies: signals.majorFamilies,
+      findings: equipment.length
+        ? [
+            `Equipment item count from FLEX: ${equipment.length}.`,
+            signals.majorFamilies.length
+              ? `Detected equipment families from names: ${signals.majorFamilies.join(", ")}.`
+              : "No major equipment family keywords were detected from item names.",
+          ]
+        : ["No equipment lines present in FLEX."],
+      actions: equipment.length
+        ? ["Validate warehouse pull lists against FLEX equipment lines."]
+        : [],
+    },
+    warehouse: {
+      assessment: `Warehouse complexity estimated ${complexityLevel} from ${sections.length} department/section(s), ${equipment.length} item(s), and schedule/trucking signals in FLEX.`,
+      complexity: complexityLevel,
+      likelyDepartments,
+      findings: [
+        `Department/section count: ${sections.length}.`,
+        `Equipment item count: ${equipment.length}.`,
+      ],
+      actions: sections.length
+        ? ["Confirm warehouse department ownership for the listed FLEX sections."]
+        : [],
+    },
+    commercial: {
+      assessment:
+        "Commercial review is secondary unless pricing or scope data indicates a meaningful operating concern.",
+      findings: [],
+    },
+    redFlags: [],
+    questionsForPm,
+    recommendedNextActions,
+    confidence: "medium",
+    assumptions: [
+      "Fallback used FLEX line counts and header fields only.",
+      "No AI interpretation was applied; no red flags were invented.",
+      "Quantity is treated as labor headcount; quantity × timeQty is person-days only.",
+    ],
+    source: "local_fallback",
+  };
+}
+
+function asStringArray(value, max = 12) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeAskFlexOperationalAnalysis(raw, fallback) {
+  const base = isPlainObject(raw) ? raw : {};
+  const fb = isPlainObject(fallback) ? fallback : {};
+
+  const complexityCandidates = ["Low", "Medium", "High"];
+  let complexityLevel = String(base.complexityLevel || "").trim();
+  if (!complexityCandidates.includes(complexityLevel)) {
+    complexityLevel = fb.complexityLevel || "Medium";
+  }
+
+  const readinessCandidates = ["clear", "review_needed", "at_risk", "blocked"];
+  let readinessStatus = String(base.readinessStatus || "").trim().toLowerCase();
+  if (!readinessCandidates.includes(readinessStatus)) {
+    readinessStatus = fb.readinessStatus || "review_needed";
+  }
+
+  const confidenceCandidates = ["low", "medium", "high"];
+  let confidence = String(base.confidence || "").trim().toLowerCase();
+  if (!confidenceCandidates.includes(confidence)) {
+    confidence = fb.confidence || "medium";
+  }
+
+  const coordinationAllowed = new Set(["Staffing", "Trucking", "Warehouse", "PM"]);
+  let coordinationRequired = Array.isArray(base.coordinationRequired)
+    ? base.coordinationRequired
+        .map((item) => String(item || "").trim())
+        .filter((item) => coordinationAllowed.has(item))
+    : [];
+  if (!coordinationRequired.length) {
+    coordinationRequired = Array.isArray(fb.coordinationRequired)
+      ? fb.coordinationRequired
+      : [];
+  }
+
+  // FLEX header facts always win over model-invented show context.
+  const showSummary = {
+    ...(isPlainObject(fb.showSummary) ? fb.showSummary : {}),
+  };
+
+  const modelLabor = isPlainObject(base.labor) ? base.labor : {};
+  const labor = {
+    ...(isPlainObject(fb.labor) ? fb.labor : {}),
+    assessment: String(modelLabor.assessment || fb.labor?.assessment || "").trim(),
+    findings: asStringArray(modelLabor.findings, 8),
+    actions: asStringArray(modelLabor.actions, 8),
+    // Lock FLEX-derived counts/roles so the model cannot invent headcount or roles.
+    headcount: Number(fb.labor?.headcount || 0) || 0,
+    personDays: Number(fb.labor?.personDays || 0) || 0,
+    roles: Array.isArray(fb.labor?.roles) ? fb.labor.roles : [],
+  };
+
+  const modelTrucking = isPlainObject(base.trucking) ? base.trucking : {};
+  const trucking = {
+    ...(isPlainObject(fb.trucking) ? fb.trucking : {}),
+    assessment: String(modelTrucking.assessment || fb.trucking?.assessment || "").trim(),
+    findings: asStringArray(modelTrucking.findings, 8),
+    actions: asStringArray(modelTrucking.actions, 8),
+    lineCount: Number(fb.trucking?.lineCount || 0) || 0,
+  };
+
+  const modelEquipment = isPlainObject(base.equipment) ? base.equipment : {};
+  const equipment = {
+    ...(isPlainObject(fb.equipment) ? fb.equipment : {}),
+    assessment: String(
+      modelEquipment.assessment || fb.equipment?.assessment || ""
+    ).trim(),
+    findings: asStringArray(modelEquipment.findings, 8),
+    actions: asStringArray(modelEquipment.actions, 8),
+    majorFamilies: asStringArray(
+      modelEquipment.majorFamilies?.length
+        ? modelEquipment.majorFamilies
+        : fb.equipment?.majorFamilies,
+      10
+    ),
+    // Line-item count from FLEX, never summed quantity.
+    itemCount: Number(fb.equipment?.itemCount || 0) || 0,
+  };
+
+  const modelWarehouse = isPlainObject(base.warehouse) ? base.warehouse : {};
+  const warehouse = {
+    ...(isPlainObject(fb.warehouse) ? fb.warehouse : {}),
+    assessment: String(
+      modelWarehouse.assessment || fb.warehouse?.assessment || ""
+    ).trim(),
+    findings: asStringArray(modelWarehouse.findings, 8),
+    actions: asStringArray(modelWarehouse.actions, 8),
+    likelyDepartments: asStringArray(
+      modelWarehouse.likelyDepartments?.length
+        ? modelWarehouse.likelyDepartments
+        : fb.warehouse?.likelyDepartments,
+      12
+    ),
+  };
+  let warehouseComplexity = String(modelWarehouse.complexity || "").trim();
+  if (!complexityCandidates.includes(warehouseComplexity)) {
+    warehouseComplexity = fb.warehouse?.complexity || complexityLevel;
+  }
+  warehouse.complexity = warehouseComplexity;
+
+  const modelCommercial = isPlainObject(base.commercial) ? base.commercial : {};
+  const commercial = {
+    assessment: String(
+      modelCommercial.assessment || fb.commercial?.assessment || ""
+    ).trim(),
+    findings: asStringArray(modelCommercial.findings, 8),
+  };
+
+  const areaAllowed = new Set([
+    "Staffing",
+    "Trucking",
+    "Warehouse",
+    "Equipment",
+    "Timing",
+    "PM",
+    "Data",
+  ]);
+  const severityAllowed = new Set(["low", "medium", "high"]);
+
+  let redFlags = Array.isArray(base.redFlags)
+    ? base.redFlags
+        .map((flag) => {
+          if (!isPlainObject(flag)) return null;
+          const severity = String(flag.severity || "").toLowerCase();
+          const area = String(flag.area || "").trim();
+          const finding = String(flag.finding || "").trim();
+          if (!severityAllowed.has(severity) || !areaAllowed.has(area) || !finding) {
+            return null;
+          }
+          return {
+            severity,
+            area,
+            finding,
+            evidence: String(flag.evidence || "").trim() || "FLEX payload evidence not specified.",
+            action: String(flag.action || "").trim() || "Review with the owning coordinator.",
+          };
+        })
+        .filter(Boolean)
+    : [];
+
+  // Never invent red flags in post-processing; keep model flags only when present.
+  // Enforce PM rule: missing PM is not automatically high-risk.
+  const hasPm = hasAssignedProjectManager(showSummary.projectManager);
+  redFlags = redFlags.filter((flag) => {
+    if (flag.area !== "PM") return true;
+    if (hasPm) return true;
+    if (flag.severity === "high") return false;
+    return true;
+  });
+
+  let questionsForPm = asStringArray(base.questionsForPm, 10);
+  if (!questionsForPm.length) {
+    questionsForPm = asStringArray(fb.questionsForPm, 10);
+  }
+  if (!hasPm) {
+    const pmQuestion = "No PM is assigned — does this show need one?";
+    questionsForPm = [
+      pmQuestion,
+      ...questionsForPm.filter(
+        (item) => !/no pm is assigned/i.test(item) && !/assign(?: a)? pm/i.test(item)
+      ),
+    ].slice(0, 10);
+  }
+
+  let recommendedNextActions = asStringArray(base.recommendedNextActions, 10);
+  if (!recommendedNextActions.length) {
+    recommendedNextActions = asStringArray(fb.recommendedNextActions, 10);
+  }
+
+  // Soften blocked / at_risk unless evidence-looking content exists.
+  if (readinessStatus === "blocked" && redFlags.every((flag) => flag.severity !== "high")) {
+    readinessStatus = "at_risk";
+  }
+  if (readinessStatus === "at_risk" && redFlags.length === 0) {
+    readinessStatus = "review_needed";
+  }
+
+  const assessment =
+    String(base.assessment || "").trim() ||
+    String(fb.assessment || "").trim() ||
+    "Operational review is available from FLEX quote data.";
+
+  return {
+    headline: String(base.headline || fb.headline || "Operational Review").trim(),
+    assessment,
+    complexityLevel,
+    readinessStatus,
+    coordinationRequired,
+    showSummary: {
+      documentNumber: showSummary.documentNumber || null,
+      showName: showSummary.showName || null,
+      client: showSummary.client || null,
+      venue: showSummary.venue || null,
+      projectManager: showSummary.projectManager || null,
+      shippingMethod: showSummary.shippingMethod || null,
+      loadInDate: showSummary.loadInDate || null,
+      showStartDate: showSummary.showStartDate || null,
+      loadOutDate: showSummary.loadOutDate || null,
+    },
+    labor,
+    trucking,
+    equipment,
+    warehouse,
+    commercial,
+    redFlags,
+    questionsForPm,
+    recommendedNextActions,
+    confidence,
+    assumptions: asStringArray(base.assumptions, 10).length
+      ? asStringArray(base.assumptions, 10)
+      : asStringArray(fb.assumptions, 10),
+    source: isPlainObject(raw) ? "openai" : "local_fallback",
+  };
+}
+
+const ASK_FLEX_OPERATIONAL_ANALYSIS_RULES = `
+Ask FLEX Operational Analysis operating rules:
+
+1. FLEX facts and AI interpretation must remain distinguishable.
+2. Never invent quantities, dates, equipment, trucks, employees, or conflicts.
+3. Quantity is headcount for labor.
+4. Quantity multiplied by timeQty may be described only as person-days or billing units, never headcount.
+5. Transportation belongs to Brian Kee / Trucking Coordinator.
+6. Do not claim separate driver labor is missing merely because no driver line appears.
+7. Only discuss a driver when an explicit FLEX line names a driver.
+8. Large scope is coordination-heavy, not automatically risky.
+9. Use at_risk only when there is evidence of a genuine concern.
+10. Use blocked only for a confirmed blocker.
+11. Missing PM: ask once "No PM is assigned — does this show need one?" Do not automatically call missing PM a high-risk issue.
+12. If a PM is assigned, route coordination to that PM.
+13. Warehouse analysis must be based on the number of departments, item count, equipment families, rigging, cable, power, control, trucking, and schedule.
+14. Do not claim truck capacity is insufficient unless the payload provides defensible evidence.
+15. Commercial analysis should remain secondary unless pricing or scope data indicates a meaningful operating concern.
+16. For clean shows, clearly say no material red flags were detected.
+17. Include assumptions and confidence.
+18. AI recommends; humans approve.
+`;
+
+async function buildAskFlexOperationalAnalysis(detail, question) {
+  const compactPayload = buildAskFlexOperationalPayload(detail, question);
+  const fallback = buildAskFlexOperationalFallback(detail, question);
+
+  if (!process.env.OPENAI_API_KEY) {
+    return fallback;
+  }
+
+  try {
+    const modelConfig = selectCueModel({}, compactPayload);
+    console.log("[CUE ASK FLEX OPS ANALYSIS MODEL SELECT]", {
+      requestedAiMode: modelConfig.requestedAiMode,
+      currentModel: modelConfig.currentModel,
+      advancedModel: modelConfig.advancedModel,
+      selectedModel: modelConfig.model,
+    });
+
+    const response = await openai.responses.create({
+      model: modelConfig.model,
+      input: [
+        {
+          role: "system",
+          content:
+            "You are CUE Ask FLEX Operational Analysis for Music Matters. Return only valid JSON. Do not include markdown. Distinguish FLEX facts from interpretation. Never invent quantities, dates, equipment, trucks, employees, or conflicts. AI recommends; humans approve.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            task: "Produce an Ask FLEX operational analysis for this quote.",
+            output_requirement:
+              "Return only valid JSON matching required_schema. The response must be JSON.",
+            operating_rules: ASK_FLEX_OPERATIONAL_ANALYSIS_RULES,
+            required_schema: {
+              headline: "Operational Review",
+              assessment: "Two or three concise sentences.",
+              complexityLevel: "Low | Medium | High",
+              readinessStatus: "clear | review_needed | at_risk | blocked",
+              coordinationRequired: ["Staffing", "Trucking", "Warehouse", "PM"],
+              showSummary: {
+                documentNumber: "string",
+                showName: "string",
+                client: "string | null",
+                venue: "string | null",
+                projectManager: "string | null",
+                shippingMethod: "string | null",
+                loadInDate: "string | null",
+                showStartDate: "string | null",
+                loadOutDate: "string | null",
+              },
+              labor: {
+                assessment: "string",
+                headcount: "number",
+                personDays: "number",
+                roles: [
+                  {
+                    name: "string",
+                    quantity: "number",
+                    timeQty: "number",
+                    note: "string | null",
+                  },
+                ],
+                findings: ["string"],
+                actions: ["string"],
+              },
+              trucking: {
+                assessment: "string",
+                lineCount: "number",
+                findings: ["string"],
+                actions: ["string"],
+              },
+              equipment: {
+                assessment: "string",
+                itemCount: "number",
+                majorFamilies: ["string"],
+                findings: ["string"],
+                actions: ["string"],
+              },
+              warehouse: {
+                assessment: "string",
+                complexity: "Low | Medium | High",
+                likelyDepartments: ["string"],
+                findings: ["string"],
+                actions: ["string"],
+              },
+              commercial: {
+                assessment: "string",
+                findings: ["string"],
+              },
+              redFlags: [
+                {
+                  severity: "low | medium | high",
+                  area: "Staffing | Trucking | Warehouse | Equipment | Timing | PM | Data",
+                  finding: "string",
+                  evidence: "string",
+                  action: "string",
+                },
+              ],
+              questionsForPm: ["string"],
+              recommendedNextActions: ["string"],
+              confidence: "low | medium | high",
+              assumptions: ["string"],
+            },
+            compact_flex_payload: compactPayload,
+            deterministic_counts: {
+              laborHeadcount: fallback.labor?.headcount ?? 0,
+              laborPersonDays: fallback.labor?.personDays ?? 0,
+              truckingLineCount: fallback.trucking?.lineCount ?? 0,
+              equipmentItemCount: fallback.equipment?.itemCount ?? 0,
+              sectionCount: Array.isArray(compactPayload.sections)
+                ? compactPayload.sections.length
+                : 0,
+              complexityEstimate: fallback.complexityLevel,
+            },
+          }),
+        },
+      ],
+      text: {
+        format: {
+          type: "json_object",
+        },
+      },
+    });
+
+    const raw = safeParseModelJson(response.output_text);
+    // If safeParse fell back to the analyze-flex-intake shape, treat as failure.
+    if (raw?.cue_review_cards && !raw?.assessment && !raw?.labor) {
+      return fallback;
+    }
+
+    return normalizeAskFlexOperationalAnalysis(raw, fallback);
+  } catch (error) {
+    console.error("[CUE ASK FLEX OPS ANALYSIS] OpenAI failed; using local fallback.", error);
+    return fallback;
+  }
+}
+
 async function answerFlexAskQuestion(question) {
   const documentNumbers = extractDocumentNumbersFromQuestion(question);
   const documentNumber = documentNumbers[0] || null;
@@ -3982,6 +4753,31 @@ async function answerFlexAskQuestion(question) {
 
   const intake = await fetchFlexShowIntake(quoteLookup.elementId);
   const detail = buildFlexDocumentDetail(intake);
+
+  if (intent === "document_operational_analysis") {
+    const result = await buildAskFlexOperationalAnalysis(detail, question);
+
+    return {
+      question,
+      intent,
+      documentNumber:
+        detail.showContext?.documentNumber ||
+        documentNumber ||
+        quoteLookup.documentNumber ||
+        null,
+      found: true,
+      elementId: quoteLookup.elementId,
+      showContext: detail.showContext,
+      answer: result.assessment,
+      result,
+      supportingData: {
+        summary: detail.summary,
+        counts: detail.counts,
+      },
+      lookup: quoteLookup,
+    };
+  }
+
   const result = buildFlexAskAnswer(intent, detail, question);
 
   return {
