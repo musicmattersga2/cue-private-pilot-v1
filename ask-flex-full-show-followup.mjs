@@ -1,14 +1,22 @@
 /**
  * ASK-FLEX-003 — Conversational Follow-Up for Full Show Reviews
+ * ASK-FLEX-004 — Persistent snapshot change / history follow-ups
  *
  * Answers focused natural-language questions against the latest structured
- * full-show review in the current browser/session context.
+ * full-show review in the current browser/session context, and against
+ * persisted review snapshots when available.
  */
+
+import {
+  buildShowKey,
+  compareFullShowSnapshots,
+  formatChangeComparisonItems,
+} from "./ask-flex-review-change-detection.mjs";
 
 const QUOTE_NUMBER_RE = /\b\d{2}-\d{3,6}\b/;
 
 const FOLLOWUP_LANGUAGE_RE =
-  /\b(biggest issue|top\s+(?:three|3|things?)|brian|trucking coordinator|what should (?:the )?pm|show (?:me )?only|summarize|summary|confirmed|needs? confirmation|coverage gaps?|trucking items?|staffing items?|warehouse view|flex versus trucking|flex vs\.? trucking|source driving|preventing (?:the show from being )?clear|next actions?|what changed|executive summary|for chelsea|pm (?:do )?first|owner)\b/i;
+  /\b(biggest issue|top\s+(?:three|3|things?)|brian|trucking coordinator|what should (?:the )?pm|show (?:me )?only|summarize|summary|confirmed|needs? confirmation|coverage gaps?|trucking items?|staffing items?|warehouse view|flex versus trucking|flex vs\.? trucking|source driving|preventing (?:the show from being )?clear|next actions?|what changed|what improved|got worse|worsened|review history|what is new|what was resolved|compare the last|executive summary|for chelsea|pm (?:do )?first|owner)\b/i;
 
 const REFRESH_RE =
   /\b(refresh|recheck|pull again|rerun)\b/i;
@@ -100,8 +108,27 @@ export function isShowOperationalFollowupQuestion(question, context = null) {
 export function classifyFullShowFollowupType(question) {
   const text = String(question || "").toLowerCase();
 
-  if (/\bwhat changed|since the last|diff(?:erence)?\b/.test(text)) {
-    return "change_since_last";
+  if (/\breview history|saved reviews|snapshot history\b/.test(text)) {
+    return "review_history";
+  }
+  if (/\bwhat improved|improvements?\b/.test(text)) {
+    return "improvements_only";
+  }
+  if (/\bwhat got worse|worsened|got worse\b/.test(text)) {
+    return "worsened_only";
+  }
+  if (/\bwhat is new|new issues?\b/.test(text)) {
+    return "new_issues_only";
+  }
+  if (/\bwhat was resolved|resolved issues?\b/.test(text)) {
+    return "resolved_issues_only";
+  }
+  if (
+    /\bwhat changed|since the last|compare (?:the )?last two|diff(?:erence)?\b/.test(
+      text
+    )
+  ) {
+    return "persistent_change_since_last";
   }
   if (/\bbiggest issue|preventing .+ clear|why .+ (?:not )?clear|driving .+ status|source driving\b/.test(text)) {
     if (/\bsource driving|driving .+ status|why .+ status\b/.test(text)) {
@@ -893,6 +920,178 @@ function buildChangeSinceLast(context) {
   };
 }
 
+function resolveShowKeyFromContext(context) {
+  const showName = context.showName || context.result?.showName || context.result?.showSummary?.showName;
+  const quotes =
+    context.result?.showSummary?.relatedQuotes ||
+    context.result?.flexScope?.relatedQuotes ||
+    context.relatedQuotes ||
+    [];
+  return buildShowKey(showName, { relatedQuotes: quotes });
+}
+
+function formatTimestamp(value) {
+  if (!value) return null;
+  try {
+    return new Date(value).toISOString();
+  } catch {
+    return String(value);
+  }
+}
+
+function buildPersistentChangeAnswer(comparison, filter = "all") {
+  if (!comparison) {
+    return {
+      answer: "Snapshot comparison is temporarily unavailable.",
+      items: [],
+      changeComparison: null,
+      reviewHistory: null,
+    };
+  }
+
+  if (comparison.insufficientHistory) {
+    return {
+      answer: comparison.summary,
+      items: [],
+      changeComparison: comparison,
+      reviewHistory: null,
+    };
+  }
+
+  const filterMap = {
+    all: "all",
+    improvements_only: "improved",
+    worsened_only: "worsened",
+    new_issues_only: "new",
+    resolved_issues_only: "resolved",
+  };
+  const itemFilter = filterMap[filter] || "all";
+  const items = formatChangeComparisonItems(comparison, itemFilter);
+
+  let answer = comparison.summary;
+  if (filter === "improvements_only") {
+    answer = comparison.improved?.length
+      ? `Improved since the prior saved review: ${comparison.improved.map((i) => i.label).join("; ")}.`
+      : "No improvements were detected between the two latest distinct saved reviews.";
+  } else if (filter === "worsened_only") {
+    answer = comparison.worsened?.length
+      ? `Worsened since the prior saved review: ${comparison.worsened.map((i) => i.label).join("; ")}.`
+      : "No worsened items were detected between the two latest distinct saved reviews.";
+  } else if (filter === "new_issues_only") {
+    answer = comparison.newIssues?.length
+      ? `New issues since the prior saved review: ${comparison.newIssues.map((i) => i.label).join("; ")}.`
+      : "No new issues were detected between the two latest distinct saved reviews.";
+  } else if (filter === "resolved_issues_only") {
+    answer = comparison.resolvedIssues?.length
+      ? `Resolved since the prior saved review: ${comparison.resolvedIssues.map((i) => i.label).join("; ")}.`
+      : "No resolved issues were detected between the two latest distinct saved reviews.";
+  }
+
+  const previousAt = formatTimestamp(comparison.previousReviewedAt);
+  const currentAt = formatTimestamp(comparison.currentReviewedAt);
+  if (previousAt && currentAt && !comparison.insufficientHistory) {
+    answer = `${answer} Compared ${previousAt} → ${currentAt}.`;
+  }
+
+  return {
+    answer,
+    items,
+    changeComparison: comparison,
+    reviewHistory: null,
+  };
+}
+
+async function buildPersistentChangeFollowup(context, followupType, deps = {}) {
+  const store =
+    deps.reviewSnapshotStore ||
+    (typeof deps.getReviewSnapshotStore === "function"
+      ? deps.getReviewSnapshotStore()
+      : null);
+
+  if (!store?.compareLatest) {
+    // Fall back to same-session comparison when persistence is unavailable.
+    if (followupType === "persistent_change_since_last") {
+      return buildChangeSinceLast(context);
+    }
+    return {
+      answer: "Persisted review snapshots are unavailable right now.",
+      items: [],
+    };
+  }
+
+  const showKey = resolveShowKeyFromContext(context);
+  const comparison = await store.compareLatest(showKey);
+  const filter =
+    followupType === "persistent_change_since_last" ? "all" : followupType;
+  return buildPersistentChangeAnswer(comparison, filter);
+}
+
+async function buildReviewHistoryFollowup(context, deps = {}) {
+  const store =
+    deps.reviewSnapshotStore ||
+    (typeof deps.getReviewSnapshotStore === "function"
+      ? deps.getReviewSnapshotStore()
+      : null);
+  const showKey = resolveShowKeyFromContext(context);
+  const showName = context.showName || context.result?.showName || showKey;
+
+  if (!store?.listSnapshots || !store?.getLatestSnapshots) {
+    return {
+      answer: "Persisted review history is unavailable right now.",
+      items: [],
+      reviewHistory: [],
+    };
+  }
+
+  const distinct = await store.getLatestSnapshots(showKey, 5);
+  if (!distinct.length) {
+    return {
+      answer: `No saved reviews exist yet for ${showName}.`,
+      items: [],
+      reviewHistory: [],
+    };
+  }
+
+  const history = [];
+  for (let i = 0; i < distinct.length; i += 1) {
+    const current = distinct[i];
+    const previous = distinct[i + 1] || null;
+    let changeCount = null;
+    if (previous) {
+      changeCount = compareFullShowSnapshots(previous, current).changeCount;
+    }
+    history.push({
+      id: current.id,
+      showKey: current.showKey,
+      reviewedAt: current.reviewedAt,
+      overallStatus: current.overallStatus,
+      complexityLevel: current.complexityLevel,
+      changeCountFromPrior: changeCount,
+    });
+  }
+
+  const items = history.map((row, index) =>
+    makeItemFromText({
+      priority: index + 1,
+      area: "History",
+      finding: `${row.reviewedAt || "—"} · ${row.overallStatus || "—"} · ${
+        row.complexityLevel || "—"
+      }${
+        row.changeCountFromPrior != null
+          ? ` · ${row.changeCountFromPrior} change(s) from prior`
+          : " · baseline"
+      }`,
+      evidence: row.id,
+    })
+  );
+
+  return {
+    answer: `Latest ${history.length} distinct saved review(s) for ${showName}.`,
+    items,
+    reviewHistory: history,
+  };
+}
+
 function buildGeneralFollowup(result, question) {
   if (/\bbrian\b/i.test(question)) return buildOwnerActions(result, "brian", "Brian Kee / Trucking Coordinator");
   if (/\bpm\b|project manager/i.test(question)) return buildOwnerActions(result, "pm", "PM");
@@ -903,7 +1102,7 @@ function buildGeneralFollowup(result, question) {
   return buildExecutiveSummary(result);
 }
 
-function buildDeterministicFollowup(question, context, followupType) {
+async function buildDeterministicFollowup(question, context, followupType, deps = {}) {
   const result = context.result;
   switch (followupType) {
     case "biggest_issue":
@@ -932,6 +1131,14 @@ function buildDeterministicFollowup(question, context, followupType) {
       return buildExecutiveSummary(result);
     case "change_since_last":
       return buildChangeSinceLast(context);
+    case "persistent_change_since_last":
+    case "improvements_only":
+    case "worsened_only":
+    case "new_issues_only":
+    case "resolved_issues_only":
+      return buildPersistentChangeFollowup(context, followupType, deps);
+    case "review_history":
+      return buildReviewHistoryFollowup(context, deps);
     default:
       return buildGeneralFollowup(result, question);
   }
@@ -953,6 +1160,12 @@ function headlineForType(followupType, showName) {
     source_comparison: `FLEX vs Trucking · ${show}`,
     executive_summary: `Executive summary · ${show}`,
     change_since_last: `Changes since last review · ${show}`,
+    persistent_change_since_last: `Changes since last saved review · ${show}`,
+    improvements_only: `What improved · ${show}`,
+    worsened_only: `What got worse · ${show}`,
+    new_issues_only: `What is new · ${show}`,
+    resolved_issues_only: `What was resolved · ${show}`,
+    review_history: `Review history · ${show}`,
     general_followup: `Follow-up · ${show}`,
   };
   return map[followupType] || `Follow-up · ${show}`;
@@ -1030,9 +1243,9 @@ export async function answerFullShowFollowup(question, rawContext, deps = {}) {
   }
 
   const followupType = classifyFullShowFollowupType(question);
-  const built = buildDeterministicFollowup(question, context, followupType);
+  const built = await buildDeterministicFollowup(question, context, followupType, deps);
   const items = asArray(built.items)
-    .slice(0, followupType === "owner_actions" || followupType === "pm_actions" ? 3 : 5)
+    .slice(0, followupType === "owner_actions" || followupType === "pm_actions" ? 3 : 8)
     .map((item, index) => ({
       priority: item.priority || index + 1,
       area: item.area || null,
@@ -1053,9 +1266,15 @@ export async function answerFullShowFollowup(question, rawContext, deps = {}) {
     headline: headlineForType(followupType, context.showName || context.result.showName),
     sourceReviewTimestamp: context.reviewedAt || null,
     usedStoredReview: true,
+    usedPersistedSnapshots: Boolean(
+      built.changeComparison || built.reviewHistory || deps.usedPersistedSnapshots
+    ),
     refreshRequired: false,
     refreshed: Boolean(deps.refreshed),
     items,
+    changeComparison: built.changeComparison || null,
+    reviewHistory: built.reviewHistory || null,
+    snapshot: deps.snapshotMeta || null,
     supportingData: {
       overallStatus: context.result.overallStatus || null,
       complexityLevel: context.result.complexityLevel || null,

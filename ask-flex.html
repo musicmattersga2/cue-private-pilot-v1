@@ -1012,6 +1012,10 @@
     const FOLLOWUP_CHIPS = [
       { label: "Biggest issue", q: "What is the biggest issue?" },
       { label: "Brian’s top 3", q: "What are the top three things Brian needs to resolve?" },
+      { label: "What changed?", q: "What changed since the last review?" },
+      { label: "What improved?", q: "What improved?" },
+      { label: "What got worse?", q: "What got worse?" },
+      { label: "Review history", q: "Show review history." },
       { label: "Trucking only", q: "Show me only the trucking items." },
       { label: "Confirmed issues", q: "Which findings are confirmed?" },
       { label: "Needs confirmation", q: "What still needs confirmation?" },
@@ -1106,14 +1110,99 @@
       if (followupContextEl) followupContextEl.textContent = "";
     }
 
+    function formatSnapshotStatus(snapshot) {
+      if (!snapshot) return "Snapshot unavailable";
+      if (snapshot.saved === false) {
+        return snapshot.warning || "Snapshot unavailable";
+      }
+      if (snapshot.duplicate) return "No operational change";
+      if (snapshot.hasChanges && Number(snapshot.changeCount) > 0) {
+        const n = Number(snapshot.changeCount);
+        return `${n} change${n === 1 ? "" : "s"} since prior review`;
+      }
+      if (snapshot.saved) return "Saved just now";
+      return "Snapshot unavailable";
+    }
+
+    function renderChangeComparisonBlock(comparison) {
+      if (!comparison) return "";
+      const section = (title, list) => {
+        const rows = Array.isArray(list) ? list : [];
+        if (!rows.length) return "";
+        return `
+          <div class="section" style="margin-top:8px">
+            <h3>${escapeHtml(title)}</h3>
+            <ul>${rows
+              .slice(0, 8)
+              .map((item) => `<li>${escapeHtml(item.label || item.finding || "")}</li>`)
+              .join("")}</ul>
+          </div>
+        `;
+      };
+      const previousAt = comparison.previousReviewedAt
+        ? formatReviewTime(comparison.previousReviewedAt)
+        : null;
+      const currentAt = comparison.currentReviewedAt
+        ? formatReviewTime(comparison.currentReviewedAt)
+        : null;
+      return `
+        <div class="section" style="margin-top:10px">
+          <h3>Change summary</h3>
+          <div>${escapeHtml(comparison.summary || "No operational changes detected.")}</div>
+          ${
+            previousAt && currentAt
+              ? `<div class="hint">Compared ${escapeHtml(previousAt)} → ${escapeHtml(currentAt)}</div>`
+              : ""
+          }
+        </div>
+        ${section("Improved", comparison.improved)}
+        ${section("Worsened", comparison.worsened)}
+        ${section("New", comparison.newIssues)}
+        ${section("Resolved", comparison.resolvedIssues)}
+        ${section("Other changes", comparison.changed)}
+      `;
+    }
+
+    function renderReviewHistoryBlock(history) {
+      const rows = Array.isArray(history) ? history.slice(0, 5) : [];
+      if (!rows.length) return "";
+      return `
+        <div class="section" style="margin-top:10px">
+          <h3>Review history</h3>
+          <ul>
+            ${rows
+              .map((row) => {
+                const changeText =
+                  row.changeCountFromPrior == null
+                    ? "baseline"
+                    : `${row.changeCountFromPrior} change(s) from prior`;
+                return `<li>${escapeHtml(formatReviewTime(row.reviewedAt))} · ${escapeHtml(
+                  row.overallStatus || "—"
+                )} · ${escapeHtml(row.complexityLevel || "—")} · ${escapeHtml(changeText)}</li>`;
+              })
+              .join("")}
+          </ul>
+        </div>
+      `;
+    }
+
     function renderShowOperationalFollowup(data) {
-      const items = Array.isArray(data.items) ? data.items.slice(0, 5) : [];
+      const items = Array.isArray(data.items) ? data.items.slice(0, 8) : [];
       const reviewedAt = data.sourceReviewTimestamp
         ? formatReviewTime(data.sourceReviewTimestamp)
         : latestFullShowReview
           ? formatReviewTime(latestFullShowReview.timestamp)
           : null;
       const showName = data.showName || latestFullShowReview?.showName || "this show";
+      const isChangeFollowup = [
+        "persistent_change_since_last",
+        "improvements_only",
+        "worsened_only",
+        "new_issues_only",
+        "resolved_issues_only",
+        "change_since_last",
+      ].includes(data.followupType);
+      const isHistory = data.followupType === "review_history";
       const itemsHtml = items.length
         ? items
             .map((item) => {
@@ -1137,11 +1226,23 @@
         <div class="hint" style="margin-top:6px">Focused follow-up · ${escapeHtml(data.followupType || "general_followup")}</div>
         ${reviewedAt ? `<div class="hint">Using ${escapeHtml(showName)} review from ${escapeHtml(reviewedAt)}</div>` : ""}
         ${data.refreshed || data.refreshNote ? `<div class="hint">${escapeHtml(data.refreshNote || "Refreshed from live connected sources")}</div>` : ""}
-        ${data.usedStoredReview && !data.refreshed ? `<div class="hint">Answered from the stored full-show review (no silent refresh).</div>` : ""}
-        <div class="section" style="margin-top:10px">
+        ${data.snapshot ? `<div class="hint">Snapshot: ${escapeHtml(formatSnapshotStatus(data.snapshot))}</div>` : ""}
+        ${data.usedPersistedSnapshots ? `<div class="hint">Using persisted review snapshots.</div>` : ""}
+        ${data.usedStoredReview && !data.refreshed && !data.usedPersistedSnapshots ? `<div class="hint">Answered from the stored full-show review (no silent refresh).</div>` : ""}
+        ${isChangeFollowup ? renderChangeComparisonBlock(data.changeComparison) : ""}
+        ${isHistory ? renderReviewHistoryBlock(data.reviewHistory) : ""}
+        ${
+          !isChangeFollowup && !isHistory
+            ? `<div class="section" style="margin-top:10px">
           <h3>Supporting items</h3>
           ${itemsHtml}
-        </div>
+        </div>`
+            : isChangeFollowup && !data.changeComparison
+              ? `<div class="section" style="margin-top:10px"><h3>Supporting items</h3>${itemsHtml}</div>`
+              : isHistory && !data.reviewHistory?.length
+                ? `<div class="section" style="margin-top:10px"><h3>Supporting items</h3>${itemsHtml}</div>`
+                : ""
+        }
         <div class="followup-chips" style="margin-top:12px">
           <div class="chip" id="refreshFullReviewChip" data-q="Refresh this review and tell me what changed.">Refresh full review</div>
         </div>
@@ -2202,6 +2303,7 @@
         <div class="hint" style="margin-top:6px">${escapeHtml(data.scopeLabel || "CUE Full Show Review")}</div>
         <div class="hint">Combined view of FLEX, Trucking, and Active Shows data.</div>
         ${showBits.length ? `<div class="meta" style="margin-top:8px">${showBits.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>` : ""}
+        <div class="hint" style="margin-top:8px">Snapshot: ${escapeHtml(formatSnapshotStatus(data.snapshot))}</div>
         <div class="ops-pill-row">
           <span class="ops-pill ready-${escapeHtml(overall)}"><strong>Overall</strong> ${escapeHtml(formatOverallStatusLabel(overall))}</span>
           <span class="ops-pill"><strong>Complexity</strong> ${escapeHtml(data.complexityLevel || "—")}</span>

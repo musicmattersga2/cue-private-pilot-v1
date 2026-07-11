@@ -16,6 +16,8 @@ import {
   sanitizeFullShowFollowupContext,
   classifyFullShowFollowupType,
 } from "./ask-flex-full-show-followup.mjs";
+import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs";
+import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -3249,6 +3251,12 @@ function buildFlexAskBriefPayload(fullResult) {
       : [];
     payload.needsClarification = Boolean(fullResult.needsClarification);
     payload.refreshedReview = fullResult.refreshedReview || null;
+    payload.changeComparison = fullResult.changeComparison || null;
+    payload.reviewHistory = Array.isArray(fullResult.reviewHistory)
+      ? fullResult.reviewHistory
+      : null;
+    payload.snapshot = fullResult.snapshot || null;
+    payload.usedPersistedSnapshots = Boolean(fullResult.usedPersistedSnapshots);
     payload.lines = (payload.items || []).slice(0, 5).map((item) => ({
       text: [item.finding, item.action].filter(Boolean).join(" — "),
       area: item.area || null,
@@ -3300,6 +3308,7 @@ function buildFlexAskBriefPayload(fullResult) {
     payload.assumptions = Array.isArray(result.assumptions) ? result.assumptions : [];
     payload.source = result.source || null;
     payload.supportingData = fullResult?.supportingData || null;
+    payload.snapshot = fullResult?.snapshot || null;
     payload.lines = (payload.recommendedNextActions || []).slice(0, 5).map((action) => ({
       text: String(action),
     }));
@@ -4975,7 +4984,46 @@ function buildAskFlexFullShowDeps() {
     safeParseModelJson,
     openai,
     parseCsvRows,
+    reviewSnapshotStore: defaultReviewSnapshotStore,
+    buildLabel: CUE_BUILD_LABEL,
   };
+}
+
+function sanitizeSnapshotForApi(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  return {
+    id: snapshot.id || null,
+    showKey: snapshot.showKey || null,
+    showName: snapshot.showName || null,
+    createdAt: snapshot.createdAt || null,
+    reviewedAt: snapshot.reviewedAt || null,
+    buildLabel: snapshot.buildLabel || null,
+    source: snapshot.source || null,
+    overallStatus: snapshot.overallStatus || null,
+    complexityLevel: snapshot.complexityLevel || null,
+    confidence: snapshot.confidence || null,
+    relatedQuotes: Array.isArray(snapshot.relatedQuotes) ? snapshot.relatedQuotes : [],
+    sourceCoverage: Array.isArray(snapshot.sourceCoverage) ? snapshot.sourceCoverage : [],
+    flex: snapshot.flex || null,
+    trucking: snapshot.trucking || null,
+    activeShows: snapshot.activeShows || null,
+    findingCategories: Array.isArray(snapshot.findingCategories)
+      ? snapshot.findingCategories
+      : [],
+    confirmedIssues: Array.isArray(snapshot.confirmedIssues) ? snapshot.confirmedIssues : [],
+    needsConfirmation: Array.isArray(snapshot.needsConfirmation)
+      ? snapshot.needsConfirmation
+      : [],
+    coverageGaps: Array.isArray(snapshot.coverageGaps) ? snapshot.coverageGaps : [],
+    recommendedNextActions: Array.isArray(snapshot.recommendedNextActions)
+      ? snapshot.recommendedNextActions
+      : [],
+    contentHash: snapshot.contentHash || null,
+  };
+}
+
+function isValidShowKeyParam(showKey) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+){0,12}-\d{4}$/i.test(String(showKey || "").trim());
 }
 
 async function answerFlexAskQuestion(question, options = {}) {
@@ -4983,11 +5031,13 @@ async function answerFlexAskQuestion(question, options = {}) {
   const documentNumber = documentNumbers[0] || null;
   const followupContext = sanitizeFullShowFollowupContext(options.context);
 
-  // Session follow-up against a stored full-show review (ASK-FLEX-003).
+  // Session follow-up against a stored full-show review (ASK-FLEX-003/004).
   if (isShowOperationalFollowupQuestion(question, followupContext)) {
     const wantsRefresh = isRefreshFollowupQuestion(question);
     let contextForAnswer = followupContext;
     let refreshed = false;
+    let snapshotMeta = null;
+    let refreshComparison = null;
 
     if (wantsRefresh && followupContext?.showName) {
       const refreshQuestion = `Give me a full operational review of ${followupContext.showName}`;
@@ -4996,12 +5046,14 @@ async function answerFlexAskQuestion(question, options = {}) {
         buildAskFlexFullShowDeps()
       );
       if (fresh?.found && fresh?.result) {
+        snapshotMeta = fresh.snapshot || null;
         const briefLike = {
           ...fresh.result,
           showName: fresh.showName || fresh.result.showSummary?.showName || followupContext.showName,
           answer: fresh.answer || fresh.result.assessment,
           supportingData: fresh.supportingData || null,
           sourceCoverage: fresh.sourceCoverage || fresh.result.sourceCoverage || [],
+          snapshot: snapshotMeta,
         };
         contextForAnswer = sanitizeFullShowFollowupContext({
           type: "full_show_review",
@@ -5013,31 +5065,71 @@ async function answerFlexAskQuestion(question, options = {}) {
           cueBuildLabel: CUE_BUILD_LABEL,
         });
         refreshed = true;
+
+        // Prefer persisted prior-vs-current comparison; never compare a duplicate to itself.
+        if (snapshotMeta?.showKey && !snapshotMeta.duplicate) {
+          refreshComparison = await defaultReviewSnapshotStore.compareLatest(
+            snapshotMeta.showKey
+          );
+        } else if (snapshotMeta?.duplicate) {
+          refreshComparison = {
+            hasChanges: false,
+            changeCount: 0,
+            improved: [],
+            worsened: [],
+            newIssues: [],
+            resolvedIssues: [],
+            changed: [],
+            summary:
+              "No operational changes were detected between the two latest distinct saved reviews.",
+            insufficientHistory: false,
+          };
+        }
       }
     }
 
-    const followup = await answerFullShowFollowup(question, contextForAnswer, {
+    const followupDeps = {
       openai,
       selectCueModel,
       safeParseModelJson,
       refreshed,
-    });
+      reviewSnapshotStore: defaultReviewSnapshotStore,
+      snapshotMeta,
+      usedPersistedSnapshots: true,
+    };
+
+    const followup = await answerFullShowFollowup(question, contextForAnswer, followupDeps);
 
     if (refreshed) {
       followup.refreshed = true;
       followup.refreshNote = "Refreshed from live connected sources";
       followup.refreshedReview = contextForAnswer?.result || null;
       followup.previousReview = followupContext?.result || null;
-      if (classifyFullShowFollowupType(question) === "change_since_last" || /\bwhat changed\b/i.test(question)) {
-        const changed = await answerFullShowFollowup(
-          "What changed since the last review?",
-          contextForAnswer,
-          { openai, selectCueModel, safeParseModelJson, refreshed: true }
-        );
-        followup.answer = `${followup.refreshNote}. ${changed.answer}`;
-        followup.items = changed.items;
-        followup.followupType = "change_since_last";
-        followup.headline = changed.headline;
+      followup.snapshot = snapshotMeta;
+      const wantsChangeSummary =
+        classifyFullShowFollowupType(question) === "persistent_change_since_last" ||
+        /\bwhat changed\b/i.test(question);
+      if (wantsChangeSummary) {
+        if (refreshComparison) {
+          followup.changeComparison = refreshComparison;
+          followup.answer = `${followup.refreshNote}. ${refreshComparison.summary}`;
+          followup.items = formatChangeComparisonItems(refreshComparison, "all");
+          followup.followupType = "persistent_change_since_last";
+          followup.headline = `Changes since last saved review · ${
+            followup.showName || followupContext.showName || "this show"
+          }`;
+        } else {
+          const changed = await answerFullShowFollowup(
+            "What changed since the last review?",
+            contextForAnswer,
+            { ...followupDeps, refreshed: true }
+          );
+          followup.answer = `${followup.refreshNote}. ${changed.answer}`;
+          followup.items = changed.items;
+          followup.followupType = changed.followupType || "persistent_change_since_last";
+          followup.headline = changed.headline;
+          followup.changeComparison = changed.changeComparison || null;
+        }
       } else {
         followup.answer = `${followup.refreshNote}. ${followup.answer}`;
       }
@@ -5605,6 +5697,9 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/search-quotes",
     "/api/flex/ask",
     "/api/flex/ask-brief",
+    "/api/flex/review-snapshots",
+    "/api/flex/review-snapshots/latest",
+    "/api/flex/review-snapshots/compare",
   ].includes(pathname);
 }
 
@@ -7447,6 +7542,50 @@ const server = http.createServer(async (req, res) => {
       }
 
       sendJson(res, 200, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/review-snapshots") {
+      const showKey = String(url.searchParams.get("showKey") || "").trim();
+      const limit = Math.min(Number(url.searchParams.get("limit") || 20), 50);
+      if (!showKey || !isValidShowKeyParam(showKey)) {
+        sendJson(res, 400, { error: "Valid showKey query parameter is required." });
+        return;
+      }
+      const snapshots = await defaultReviewSnapshotStore.listSnapshots({ showKey, limit });
+      sendJson(res, 200, {
+        showKey,
+        count: snapshots.length,
+        snapshots: snapshots.map(sanitizeSnapshotForApi),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/review-snapshots/latest") {
+      const showKey = String(url.searchParams.get("showKey") || "").trim();
+      if (!showKey || !isValidShowKeyParam(showKey)) {
+        sendJson(res, 400, { error: "Valid showKey query parameter is required." });
+        return;
+      }
+      const latest = await defaultReviewSnapshotStore.getLatest(showKey);
+      sendJson(res, 200, {
+        showKey,
+        snapshot: sanitizeSnapshotForApi(latest),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/review-snapshots/compare") {
+      const showKey = String(url.searchParams.get("showKey") || "").trim();
+      if (!showKey || !isValidShowKeyParam(showKey)) {
+        sendJson(res, 400, { error: "Valid showKey query parameter is required." });
+        return;
+      }
+      const comparison = await defaultReviewSnapshotStore.compareLatest(showKey);
+      sendJson(res, 200, {
+        showKey,
+        comparison,
+      });
       return;
     }
 

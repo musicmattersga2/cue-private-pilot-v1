@@ -2490,6 +2490,9 @@ function buildSafeSupportingData(payload) {
       lpoSentFalse: payload.trucking?.summary?.lpoSentFalse ?? 0,
       tbdRows: payload.trucking?.summary?.tbdRows ?? 0,
       status: payload.trucking?.summary?.status || null,
+      quoteNumbersMatched: Array.isArray(payload.trucking?.summary?.quoteNumbersMatched)
+        ? payload.trucking.summary.quoteNumbersMatched.slice(0, 20)
+        : [],
     },
   };
 }
@@ -2543,6 +2546,60 @@ export async function answerShowOperationalAnalysis(question, deps = {}) {
 
   const result = await buildFullShowOperationalAnalysis(payload, deps);
 
+  let snapshotMeta = null;
+  try {
+    const store =
+      deps.reviewSnapshotStore ||
+      (typeof deps.getReviewSnapshotStore === "function"
+        ? deps.getReviewSnapshotStore()
+        : null);
+    if (store?.saveFromReview) {
+      const saveResult = await store.saveFromReview(result, {
+        showName: payload.show?.name || resolved.resolvedShow?.name || null,
+        supportingData: buildSafeSupportingData(payload),
+        buildLabel: deps.buildLabel || null,
+        activeShows: {
+          readinessStatus: payload.activeShows?.readinessStatus || null,
+          priority: payload.activeShows?.matchedShow?.priority || null,
+          topIssue: payload.activeShows?.topIssue || null,
+          nextAction: payload.activeShows?.nextAction || null,
+        },
+        reviewedAt: new Date().toISOString(),
+      });
+      snapshotMeta = {
+        id: saveResult.snapshot?.id || null,
+        showKey: saveResult.snapshot?.showKey || null,
+        saved: Boolean(saveResult.saved),
+        duplicate: Boolean(saveResult.duplicate),
+        previousSnapshotId: saveResult.previousSnapshotId || null,
+        changeCount: Number(saveResult.changeCount || 0),
+        hasChanges: Boolean(saveResult.hasChanges),
+        warning: saveResult.warning || null,
+      };
+      if (saveResult.warning) {
+        result.warnings = [
+          ...(Array.isArray(result.warnings) ? result.warnings : []),
+          saveResult.warning,
+        ];
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[CUE ASK FLEX SNAPSHOTS] Snapshot attach failed; continuing without persistence.",
+      error?.message || error
+    );
+    snapshotMeta = {
+      id: null,
+      showKey: null,
+      saved: false,
+      duplicate: false,
+      previousSnapshotId: null,
+      changeCount: 0,
+      hasChanges: false,
+      warning: "Snapshot persistence unavailable for this review.",
+    };
+  }
+
   return {
     question,
     intent: "show_operational_analysis",
@@ -2552,5 +2609,6 @@ export async function answerShowOperationalAnalysis(question, deps = {}) {
     result,
     supportingData: buildSafeSupportingData(payload),
     sourceCoverage: result.sourceCoverage,
+    snapshot: snapshotMeta,
   };
 }

@@ -9,3 +9,10 @@ cue-flex-import-demo.mjs
 
 _archive-old-cue-files/
 
+# ASK-FLEX-004 runtime snapshot store (never commit real snapshot data)
+data/ask-flex-review-snapshots.json
+data/ask-flex-review-snapshots.acceptance.json
+data/*.tmp
+data/*.corrupt-*
+data/*.accept-backup-*
+
