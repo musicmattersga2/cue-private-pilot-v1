@@ -428,6 +428,11 @@
       color: #8dffae;
     }
 
+    .severity-cyan {
+      background: #12343a;
+      color: #75eaff;
+    }
+
     .comparison-panel {
       margin-top: 14px;
       padding: 12px;
@@ -1162,9 +1167,7 @@
         `;
       }
 
-      const hints = getFlexHints(show);
-      const pulledCount = getPulledFlexData(show).length;
-      const flexProgress = hints.length ? `${pulledCount} of ${hints.length}` : "No FLEX hints";
+      const flexProgress = formatFlexHeaderLabel(show);
 
       return `
         <div class="modal-meta-grid">
@@ -1221,6 +1224,80 @@
         show?.flex?.matchType === "event_folder" ||
         show?.flex?.status === "Event Folder"
       );
+    }
+
+    function isEventFolderLinked(show) {
+      return (
+        isEventFolderFlex(show) ||
+        show?.flex?.matchType === "event_folder_error" ||
+        Boolean(show?.eventFolderHintInjected) ||
+        Boolean(show?.flex?.eventFolder?.elementId)
+      );
+    }
+
+    function formatFlexHeaderLabel(show) {
+      if (isEventFolderFlex(show)) {
+        const count =
+          show.flex?.rollup?.quoteCount ??
+          getEventFolderChildQuotes(show).length ??
+          show.flex?.verifiedDocumentCount ??
+          0;
+        return count
+          ? `FLEX Event Folder · ${count} quotes`
+          : "FLEX Event Folder";
+      }
+      if (show?.flex?.matchType === "event_folder_error") {
+        return "FLEX Event Folder (refresh needed)";
+      }
+      const hints = getFlexHints(show);
+      const pulledCount = getPulledFlexData(show).length;
+      if (hints.length) return `${pulledCount} of ${hints.length}`;
+      return "FLEX source not linked yet";
+    }
+
+    function formatFlexCardProgress(show, fallbackProgress) {
+      if (isEventFolderFlex(show)) {
+        const count =
+          show.flex?.rollup?.quoteCount ??
+          getEventFolderChildQuotes(show).length ??
+          show.flex?.verifiedDocumentCount ??
+          0;
+        return `Event Folder · ${count} quotes`;
+      }
+      if (show?.flex?.matchType === "event_folder_error") {
+        return "Event Folder · refresh needed";
+      }
+      if (!getFlexHints(show).length) return "FLEX source not linked yet";
+      return fallbackProgress;
+    }
+
+    function showHasMmTruckingScope(show) {
+      return getEventFolderChildQuotes(show).some(
+        (child) => child?.musicMattersTruckingRequired === true
+      );
+    }
+
+    function isShowWithin30Days(show) {
+      const daysOutRaw =
+        show?.activeShowsIndex?.daysOut ??
+        show?.daysOut ??
+        null;
+      const daysOut = Number(String(daysOutRaw || "").replace(/[^\d.-]/g, ""));
+      if (Number.isFinite(daysOut) && daysOut >= 0) return daysOut <= 30;
+
+      const timing = String(show?.timing || "");
+      const timingMatch = timing.match(/(\d+)\s*days?\s*out/i);
+      if (timingMatch) {
+        const n = Number(timingMatch[1]);
+        if (Number.isFinite(n)) return n <= 30;
+      }
+
+      if (/live|active today|today/i.test(timing)) return true;
+
+      // TBD / Event Folder placeholder timing is not treated as within 30 days.
+      if (/tbd|event folder|multi-workstream/i.test(timing)) return false;
+
+      return false;
     }
 
     function getEventFolderChildQuotes(show) {
@@ -1285,23 +1362,28 @@
     }
 
     function renderEventFolderDetailSection(show) {
-      if (!isEventFolderFlex(show)) return "";
+      if (!isEventFolderLinked(show)) return "";
 
-      const folder = show.flex.eventFolder || show.flex.primary || {};
-      const rollup = show.flex.rollup || {};
+      const folder = show.flex?.eventFolder || show.flex?.primary || {};
+      const rollup = show.flex?.rollup || {};
       const children = getEventFolderChildQuotes(show);
       const departments =
         (Array.isArray(rollup.departments) && rollup.departments.length
           ? rollup.departments
-          : show.flex.soldDepartments) || [];
+          : show.flex?.soldDepartments) || [];
       const parentLabel = [
-        folder.documentNumber || show.flex.documentNumber || "",
-        folder.name || show.flex.showName || show.name || "",
+        folder.documentNumber || show.flex?.documentNumber || "",
+        folder.name || show.flex?.showName || show.name || "",
       ]
         .filter(Boolean)
         .join(" ");
-      const elementId = folder.elementId || show.flex.elementId || "";
+      const elementId = folder.elementId || show.flex?.elementId || "";
       const loading = Boolean(show.eventFolderDetailsLoading);
+      const refreshError =
+        show.flex?.eventFolderError ||
+        (show.flex?.matchType === "event_folder_error"
+          ? show.flex?.message || "Could not refresh FLEX Event Folder."
+          : null);
 
       const rows = children
         .map((child) => {
@@ -1336,6 +1418,18 @@
       return `
         <div class="detail-panel" style="margin-top:14px">
           <h3>FLEX Event Folder</h3>
+          ${
+            isEventFolderFlex(show)
+              ? `<div class="value"><span class="pill cyan">FLEX Event Folder</span> verified</div>`
+              : `<div class="value" style="color:var(--yellow)">Could not refresh FLEX Event Folder.</div>`
+          }
+          ${
+            refreshError
+              ? `<div class="value muted" style="margin-top:6px">${escapeHtml(
+                  refreshError
+                )}</div>`
+              : ""
+          }
           <div class="label">Parent</div>
           <div class="value">${escapeHtml(parentLabel || "—")}</div>
           <div class="label">Parent Element ID</div>
@@ -1361,7 +1455,11 @@
                   </thead>
                   <tbody>${rows}</tbody>
                 </table>`
-              : `<div class="value muted">No child quotes attached yet.</div>`
+              : `<div class="value muted">${
+                  refreshError
+                    ? "Child quotes unavailable until Event Folder refresh succeeds."
+                    : "No child quotes attached yet."
+                }</div>`
           }
 
           <div style="margin-top:12px">
@@ -1864,7 +1962,10 @@
       const hints = getFlexHints(show);
 
       if (!hints.length) {
-        return `<button class="small secondary" disabled>No FLEX Hint Yet</button>`;
+        if (isEventFolderLinked(show)) {
+          return `<button class="small secondary" disabled>FLEX Event Folder linked</button>`;
+        }
+        return `<button class="small secondary" disabled>FLEX source not linked yet</button>`;
       }
 
       return hints
@@ -2138,7 +2239,9 @@
         const score = getShowScore(show);
         const hints = getFlexHints(show);
         const pulledCount = getPulledFlexData(show).length;
-        const flexProgress = hints.length ? `${pulledCount}/${hints.length} FLEX` : "No FLEX hints";
+        const flexProgress = hints.length
+          ? `${pulledCount}/${hints.length} FLEX`
+          : "FLEX source not linked yet";
         const truckingLine = renderTruckingHomeLine(show);
         const scoreHtml = score != null ? renderReadinessScore({ score }) : "";
 
@@ -2167,13 +2270,7 @@
 
           <div class="card-footer">
             <span class="progress">${escapeHtml(
-              isEventFolderFlex(show)
-                ? `Event Folder · ${
-                    show.flex?.rollup?.quoteCount ??
-                    getEventFolderChildQuotes(show).length ??
-                    hints.length
-                  } quotes`
-                : flexProgress
+              formatFlexCardProgress(show, flexProgress)
             )}</span>
             <span>
               <button class="small ${isShowAskingFlex(show) ? "querying" : ""}" data-query-flex="${escapeHtml(show.id)}">${isShowAskingFlex(show) ? "Asking FLEX…" : "Query FLEX"}</button>
@@ -2210,7 +2307,10 @@
       const dateComparison = buildDateComparison(show);
 
       if (!runs) {
-        return "Trucking: no runs found yet";
+        if (isEventFolderLinked(show)) {
+          return "Trucking not evaluated / no Weekly Runs rows found";
+        }
+        return "Trucking: no Music Matters action found yet";
       }
 
       const parts = [`${runs} run${runs === 1 ? "" : "s"}`];
@@ -2592,13 +2692,40 @@
       }
 
       if (!rowsFound) {
-        actions.push({
-          severity: "red",
-          title: "No trucking runs found",
-          owner: "Brian Kee / PM",
-          action: "Confirm whether Weekly Runs needs trucking rows for this show or whether transportation is intentionally not required.",
-          why: "FLEX or show planning may indicate movement, but no execution rows are currently mapped."
-        });
+        const within30 = isShowWithin30Days(show);
+        const mmRequired = showHasMmTruckingScope(show);
+        const eventFolderLinked = isEventFolderLinked(show);
+
+        if (eventFolderLinked && !within30 && !mmRequired) {
+          actions.push({
+            severity: "cyan",
+            title: "Trucking not evaluated / no Weekly Runs rows found",
+            owner: "Brian Kee / PM",
+            action:
+              "No urgent trucking action. Re-check Weekly Runs closer to load-in if Music Matters transportation becomes required.",
+            why: "Event Folder scope is linked, but dates are TBD / not within 30 days and child quotes do not currently require Music Matters trucking.",
+          });
+        } else if (!within30 && !mmRequired) {
+          actions.push({
+            severity: "yellow",
+            title: "No Music Matters trucking action found",
+            owner: "Brian Kee / PM",
+            action:
+              "Confirm whether transportation should exist in Weekly Runs, or whether it is intentionally not required yet.",
+            why: "Zero Weekly Runs rows can be normal for TBD / far-out shows or vendor-managed transport.",
+          });
+        } else {
+          actions.push({
+            severity: "red",
+            title: "No Music Matters trucking action found",
+            owner: "Brian Kee / PM",
+            action:
+              "Confirm whether Weekly Runs needs trucking rows for this show or whether transportation is intentionally not required.",
+            why: within30
+              ? "Show is within 30 days and no Weekly Runs execution rows are currently mapped."
+              : "FLEX child scope indicates Music Matters transportation may be required, but no Weekly Runs rows are mapped.",
+          });
+        }
       }
 
       if (needDriverRows > 0) {
@@ -2915,7 +3042,13 @@
 
     function renderShowDetail(show) {
       const hints = getFlexHints(show);
-      const hintText = hints.length ? hints.join("; ") : "No FLEX hint yet";
+      const hintText = isEventFolderFlex(show)
+        ? `Event Folder child quotes: ${hints.join("; ") || "linked"}`
+        : hints.length
+          ? hints.join("; ")
+          : isEventFolderLinked(show)
+            ? "FLEX Event Folder linked"
+            : "FLEX source not linked yet";
       const score = getShowScore(show);
       const scoreHtml = score != null ? renderReadinessScore({ score }) : "";
       const firstPulled = getFirstPulledFindingData(show);
@@ -3078,7 +3211,11 @@
 
       const hints = getFlexHints(show);
       if (!hints.length) {
-        statusEl.textContent = `No FLEX hints available for ${show.name}.`;
+        if (isEventFolderFlex(show)) {
+          statusEl.textContent = `FLEX Event Folder is linked for ${show.name}. Use Pull Child Quote Details or individual child pulls as needed.`;
+          return;
+        }
+        statusEl.textContent = `FLEX source not linked yet for ${show.name}.`;
         return;
       }
 

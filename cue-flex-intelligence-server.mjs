@@ -1109,7 +1109,24 @@ function mapEventFolderChildToActiveShowDocument(child) {
 }
 
 async function enrichActiveShowWithEventFolder(show, eventFolderHint, lastPullAt) {
-  const treeResult = await fetchFlexElementTree(eventFolderHint.elementId);
+  let treeResult;
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      treeResult = await fetchFlexElementTree(eventFolderHint.elementId);
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+    }
+  }
+  if (!treeResult) {
+    throw lastError || new Error("Could not refresh FLEX Event Folder.");
+  }
+
   const folder = await buildFlexEventFolderRollup(treeResult, {
     elementId: eventFolderHint.elementId,
     includeChildDetails: false,
@@ -1169,8 +1186,11 @@ async function enrichActiveShowWithEventFolder(show, eventFolderHint, lastPullAt
         documentNumbers,
       },
       primary: eventFolder,
+      verifiedDocumentCount: childQuotes.length,
+      unresolvedDocumentCount: 0,
       lastPullAt,
       message: null,
+      eventFolderError: null,
       hintMatchedOn: eventFolderHint.matchedOn || null,
     },
     flexSignal,
@@ -7210,9 +7230,13 @@ function summarizeTruckingRows(rows, quoteNumbers = []) {
   const actions = [];
 
   if (summary.rowsFound === 0) {
-    status = "RED - No trucking rows found";
-    findings.push("No trucking rows were found for the requested FLEX quote numbers or show name.");
-    actions.push("Brian Kee / PM to confirm whether transportation should exist in Weekly Runs.");
+    status = "MAGENTA - No Music Matters trucking action found";
+    findings.push(
+      "No Music Matters trucking action found in Weekly Runs for the requested quote numbers or show name. This may be normal if transportation is not required yet, is TBD, or is vendor-managed."
+    );
+    actions.push(
+      "Confirm whether Music Matters trucking should exist in Weekly Runs, or whether transportation is intentionally not required yet."
+    );
   } else {
     findings.push(`${summary.rowsFound} trucking row${summary.rowsFound === 1 ? "" : "s"} found.`);
     findings.push(`${summary.quoteNumbersMatched.length} quote number${summary.quoteNumbersMatched.length === 1 ? "" : "s"} matched in trucking.`);
@@ -7671,6 +7695,8 @@ const server = http.createServer(async (req, res) => {
             lastPullAt
           );
         } catch (error) {
+          const errorMessage =
+            error?.message || "Could not refresh FLEX Event Folder.";
           return {
             ...show,
             flex: {
@@ -7692,18 +7718,27 @@ const server = http.createServer(async (req, res) => {
               financials: null,
               counts: null,
               documents: [],
-              eventFolder: null,
+              eventFolder: {
+                documentNumber: eventFolderHint.documentNumber || null,
+                elementId: eventFolderHint.elementId || null,
+                name: eventFolderHint.showName || show.name || null,
+              },
               childQuotes: [],
               rollup: null,
-              primary: null,
+              primary: {
+                documentNumber: eventFolderHint.documentNumber || null,
+                elementId: eventFolderHint.elementId || null,
+                name: eventFolderHint.showName || show.name || null,
+              },
+              verifiedDocumentCount: 0,
+              unresolvedDocumentCount: 0,
               lastPullAt,
-              message:
-                error?.message ||
-                "Event Folder hint found but FLEX tree enrichment failed.",
+              eventFolderError: errorMessage,
+              message: errorMessage,
             },
-            flexSignal: `FLEX Event Folder hint found for ${
-              eventFolderHint.documentNumber || "folder"
-            }, but live tree enrichment failed. Treat trucking / Drive evidence as hints only.`,
+            flexSignal: `Could not refresh FLEX Event Folder for ${
+              eventFolderHint.documentNumber || "this show"
+            }. ${errorMessage}`,
           };
         }
       }
