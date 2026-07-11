@@ -528,6 +528,142 @@ console.log("\nservice sync fixtures (no live Slack)");
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+console.log("\nservice: material edit rematches rejected signals");
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-signals-rematch-"));
+  const filePath = path.join(dir, "store.json");
+  const service = createSlackOperationalSignalsService({
+    token: "xoxb-test",
+    channelIds: ["C_OPS"],
+    filePath,
+    fetchImpl: async () => ({
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ ok: true, messages: [] }),
+    }),
+  });
+
+  const rejected = normalizeSlackMessage(
+    { ts: "1710000200.000100", text: "Need another truck next week", user: "U9" },
+    { channelId: "C_OPS", channelName: "ops", authorName: "Pat" }
+  );
+  rejected.matches = [
+    {
+      showKey: "sound-haven-2026",
+      showName: "Sound Haven",
+      confidenceBand: "low",
+      score: 10,
+      reasons: [],
+      evidence: {},
+      matchedEntities: {},
+      matchState: "manually_rejected",
+    },
+  ];
+  rejected.matchState = "manually_rejected";
+  rejected.manualDecision = { action: "reject", reason: "too vague", at: new Date().toISOString() };
+  await service.store.upsertMessages([rejected]);
+
+  // Simulate sync path material edit: same messageKey, new contentHash with strong quote evidence.
+  const edited = normalizeSlackMessage(
+    {
+      ts: "1710000200.000100",
+      text: "26-1421 Sound Haven Maybe Truck resolved — not needed",
+      user: "U9",
+      edited: { ts: "1710000201.000000" },
+    },
+    { channelId: "C_OPS", channelName: "ops", authorName: "Pat" }
+  );
+  assert(edited.contentHash !== rejected.contentHash, "material edit changes contentHash");
+
+  const existing = (await service.store.read()).messages[edited.messageKey];
+  let rematched;
+  if (
+    existing?.manualDecision &&
+    existing.contentHash === edited.contentHash
+  ) {
+    rematched = { ...edited, manualDecision: existing.manualDecision, matchState: existing.matchState };
+  } else {
+    const matches = matchSlackMessageToShows(edited, CANDIDATES);
+    rematched = {
+      ...edited,
+      matches,
+      matchState: matches[0]?.matchState || "general_queue",
+      manualDecision: null,
+    };
+  }
+  await service.store.upsertMessages([rematched]);
+  const after = await service.store.getMessage(edited.messageKey);
+  assert(after.manualDecision == null, "material edit clears manual reject");
+  assert(after.matchState !== "manually_rejected", "material edit does not keep silent reject");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log("\nservice: fixture cache ignored when fixture mode off");
+{
+  const prev = process.env.SLACK_OPERATIONAL_FIXTURE_MODE;
+  delete process.env.SLACK_OPERATIONAL_FIXTURE_MODE;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-signals-fixture-"));
+  const filePath = path.join(dir, "store.json");
+  const service = createSlackOperationalSignalsService({
+    filePath,
+    channelIds: [],
+    token: "",
+  });
+  const fixtureMsg = normalizeSlackMessage(
+    { ts: "1710000300.000100", text: "26-1421 fixture Maybe Truck", user: "U_FIX" },
+    { channelId: "C_FIXTURE", channelName: "fixture-ops", authorName: "Fixture Alex" }
+  );
+  fixtureMsg.fixture = true;
+  fixtureMsg.sourceLabel = "fixture/test data";
+  fixtureMsg.matches = [
+    {
+      showKey: "sound-haven-2026",
+      showName: "Sound Haven",
+      documentNumbers: ["26-1421"],
+      confidenceBand: "high",
+      score: 100,
+      reasons: ["quote"],
+      evidence: {},
+      matchedEntities: {},
+      matchState: "auto_attached",
+    },
+  ];
+  fixtureMsg.matchState = "auto_attached";
+  await service.store.replaceAllForTests({
+    version: 1,
+    channels: {},
+    users: {},
+    messages: { [fixtureMsg.messageKey]: fixtureMsg },
+    reviewQueue: [],
+    generalQueue: [],
+    sync: {
+      lastSyncAt: new Date().toISOString(),
+      lastSuccessfulSyncAt: new Date().toISOString(),
+      syncInProgress: false,
+      fixtureMode: true,
+      sourceLabel: "fixture/test data",
+      lastError: null,
+      lastTelemetry: null,
+    },
+  });
+
+  const status = await service.getSlackSignalSyncStatus();
+  assert(status.fixtureMode === false, "fixture mode off when env unset");
+  assert(status.fixtureCacheIgnored === true, "leftover fixture cache flagged");
+  assert(status.status === "unavailable", "leftover fixture cache is not live-connected");
+
+  const payload = await service.getSlackSignalsForShow(
+    { showKey: "sound-haven-2026", showName: "Sound Haven", documentNumbers: ["26-1421"] },
+    { allowStaleRefresh: false }
+  );
+  assert((payload.signals || []).length === 0, "fixture messages not served when fixture mode off");
+
+  if (prev == null) delete process.env.SLACK_OPERATIONAL_FIXTURE_MODE;
+  else process.env.SLACK_OPERATIONAL_FIXTURE_MODE = prev;
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
 if (Object.keys(notes).length) {
   console.log("\nNotes:");

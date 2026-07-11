@@ -19,7 +19,6 @@ import {
 import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs";
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
-import { seedSlackOperationalFixtures } from "./slack-operational-signals-fixtures.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -7348,8 +7347,13 @@ const server = http.createServer(async (req, res) => {
                 resolvedCount: slack.resolvedCount || 0,
                 categories: slack.categories || {},
                 signals: (slack.signals || []).slice(0, 5),
-                fixtureMode: Boolean(SLACK_FIXTURE_MODE),
-                sourceLabel: SLACK_FIXTURE_MODE ? "fixture/test data" : null,
+                stale: Boolean(slack.stale || slackStatus?.stale),
+                fixtureMode: Boolean(SLACK_FIXTURE_MODE || slack.fixtureMode),
+                sourceLabel:
+                  SLACK_FIXTURE_MODE || slack.fixtureMode
+                    ? "fixture/test data"
+                    : slack.sourceLabel || null,
+                warning: slack.warning || slackStatus?.warning || null,
               },
             };
           } catch {
@@ -8280,6 +8284,10 @@ server.listen(PORT, async () => {
 
   if (SLACK_FIXTURE_MODE) {
     try {
+      // Fixture module is loaded only when fixture mode is explicitly enabled.
+      const { seedSlackOperationalFixtures } = await import(
+        "./slack-operational-signals-fixtures.mjs"
+      );
       const seeded = await seedSlackOperationalFixtures(slackOperationalSignalsService);
       console.log(
         `[CUE SLACK SIGNALS] Fixture mode enabled — seeded ${seeded.seeded} synthetic messages (${seeded.sourceLabel}).`

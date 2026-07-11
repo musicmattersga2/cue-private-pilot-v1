@@ -1145,16 +1145,25 @@
           : [];
       const meta = [
         `Status: ${slack.sourceStatus || "unavailable"}`,
+        slack.fixtureMode || slack.sourceLabel
+          ? `Source: ${slack.sourceLabel || "fixture/test data"}`
+          : null,
+        slack.stale || slack.cache?.stale ? "Cache: stale" : null,
         slack.lastSyncAt ? `Last sync: ${formatReviewTime(slack.lastSyncAt)}` : null,
         `Unresolved: ${slack.unresolvedCount ?? 0}`,
         `Needs review: ${slack.needsReviewCount ?? 0}`,
       ]
         .filter(Boolean)
         .join(" · ");
+      const fixtureBanner =
+        slack.fixtureMode || slack.sourceLabel
+          ? `<div class="warning">Fixture/test Slack data — not live Slack.</div>`
+          : "";
       if (!signals.length) {
         return `
           <div class="section" style="margin-top:10px">
             <h3>Slack Operational Signals</h3>
+            ${fixtureBanner}
             <div class="hint">${escapeHtml(meta)}</div>
             <div class="hint">No high-confidence Slack signals matched this show.</div>
           </div>
@@ -1163,11 +1172,15 @@
       return `
         <div class="section" style="margin-top:10px">
           <h3>Slack Operational Signals</h3>
+          ${fixtureBanner}
           <div class="hint">${escapeHtml(meta)}</div>
           ${signals
             .map((signal) => {
+              const isResolved =
+                String(signal.status || "").toLowerCase() === "resolved" ||
+                String(signal.status || "").toLowerCase() === "clear";
               return `
-                <div class="followup-item">
+                <div class="followup-item"${isResolved ? ' style="opacity:0.72;border-left:3px solid #3d8b6e"' : ""}>
                   <div class="followup-item-top">
                     <span>${escapeHtml(signal.status || "info")}</span>
                     <span>${escapeHtml((signal.categories || []).join(", ") || "operations")}</span>

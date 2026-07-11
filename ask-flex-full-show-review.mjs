@@ -1584,6 +1584,9 @@ export function buildFullShowOperationalPayload({
       resolvedCount: Number(slackSignals?.resolvedCount || 0),
       needsReviewCount: Number(slackSignals?.needsReviewCount || 0),
       warning: slackSignals?.warning || null,
+      stale: Boolean(slackSignals?.stale || slackSignals?.cache?.stale),
+      fixtureMode: Boolean(slackSignals?.fixtureMode),
+      sourceLabel: slackSignals?.sourceLabel || null,
     },
     unavailableSources: [...new Set(unavailableSources)],
   };
@@ -2014,10 +2017,15 @@ function buildSourceCoverage(payload) {
 
   const slack = payload.slack || {};
   const slackCount = Array.isArray(slack.matchedSignals) ? slack.matchedSignals.length : 0;
+  const slackStale = Boolean(slack.stale || slack.cache?.stale);
   const slackNote =
-    slack.sourceStatus === "connected" || slack.sourceStatus === "partial"
-      ? `${slackCount} matched signal(s); unresolved=${slack.unresolvedCount || 0}`
-      : slack.warning || "Slack operational signals unavailable";
+    slack.fixtureMode || slack.sourceLabel
+      ? `Fixture/test data — ${slackCount} matched signal(s); unresolved=${slack.unresolvedCount || 0}`
+      : slack.sourceStatus === "connected" || slack.sourceStatus === "partial"
+        ? `${slackCount} matched signal(s); unresolved=${slack.unresolvedCount || 0}${
+            slackStale ? "; cache stale" : ""
+          }`
+        : slack.warning || "Slack operational signals unavailable";
 
   return [
     {
@@ -2037,7 +2045,11 @@ function buildSourceCoverage(payload) {
     },
     {
       source: "Slack",
-      status: slack.sourceStatus || "unavailable",
+      status: slack.fixtureMode
+        ? "fallback"
+        : slackStale && slack.sourceStatus === "connected"
+          ? "partial"
+          : slack.sourceStatus || "unavailable",
       note: slackNote,
     },
     {
@@ -2228,6 +2240,10 @@ export function buildFullShowOperationalFallback(payload) {
       blockedCount: Number(payload.slack?.blockedCount || 0),
       resolvedCount: Number(payload.slack?.resolvedCount || 0),
       needsReviewCount: Number(payload.slack?.needsReviewCount || 0),
+      warning: payload.slack?.warning || null,
+      stale: Boolean(payload.slack?.stale),
+      fixtureMode: Boolean(payload.slack?.fixtureMode),
+      sourceLabel: payload.slack?.sourceLabel || null,
     },
     crossSourceFindings: buckets.crossSourceFindings.map((item) => ({
       ...item,
@@ -2404,6 +2420,10 @@ export function normalizeFullShowOperationalAnalysis(raw, fallback, payload) {
       needsReviewCount: Number(
         payload.slack?.needsReviewCount || fb.slack?.needsReviewCount || 0
       ),
+      warning: payload.slack?.warning || fb.slack?.warning || null,
+      stale: Boolean(payload.slack?.stale || fb.slack?.stale),
+      fixtureMode: Boolean(payload.slack?.fixtureMode || fb.slack?.fixtureMode),
+      sourceLabel: payload.slack?.sourceLabel || fb.slack?.sourceLabel || null,
     },
     crossSourceFindings: buckets.crossSourceFindings.map((item) => ({
       ...item,

@@ -18,6 +18,20 @@ function asString(value) {
   return String(value ?? "").trim();
 }
 
+function envFixtureModeEnabled() {
+  const raw = String(process.env.SLACK_OPERATIONAL_FIXTURE_MODE || "").trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
+function isFixtureTaggedMessage(message) {
+  return Boolean(
+    message?.fixture ||
+      String(message?.sourceLabel || "")
+        .toLowerCase()
+        .includes("fixture")
+  );
+}
+
 function parseChannelIds(value) {
   return String(value || "")
     .split(/[,\s]+/)
@@ -249,7 +263,7 @@ export function createSlackOperationalSignalsService(options = {}) {
               knownVenues,
             });
 
-            // Preserve manual decisions unless material edit.
+            // Preserve manual decisions unless material edit (contentHash change).
             const existing = storeSnap.messages?.[normalized.messageKey];
             if (
               existing?.manualDecision &&
@@ -268,20 +282,11 @@ export function createSlackOperationalSignalsService(options = {}) {
                 }
               }
 
-              const matches = matchSlackMessageToShows(normalized, candidateShows).map(
-                (match) => ({
-                  ...match,
-                  matchState:
-                    existing?.manualDecision?.action === "approve" &&
-                    existing.manualDecision.showKey === match.showKey
-                      ? "manually_approved"
-                      : existing?.manualDecision?.action === "reject"
-                        ? "manually_rejected"
-                        : match.matchState,
-                })
-              );
+              // Material edit or first sighting: rematch cleanly (do not carry reject/approve).
+              const matches = matchSlackMessageToShows(normalized, candidateShows);
               normalized.matches = matches;
               normalized.matchState = pickPrimaryMatch(matches)?.matchState || "general_queue";
+              normalized.manualDecision = null;
             }
 
             // Fetch replies for operational parents / entity-bearing replies.
@@ -373,6 +378,9 @@ export function createSlackOperationalSignalsService(options = {}) {
             : storeSnap.sync?.lastSuccessfulSyncAt || null,
         lastError: telemetry.errors[0] || null,
         lastTelemetry: telemetry,
+        // Live sync never inherits leftover fixture-mode cache flags.
+        fixtureMode: false,
+        sourceLabel: null,
       });
       return telemetry;
     } catch (error) {
@@ -398,35 +406,48 @@ export function createSlackOperationalSignalsService(options = {}) {
       ? Math.max(0, Math.floor((Date.now() - Date.parse(lastSyncAt)) / 1000))
       : null;
     const staleAfter = Number(process.env.SLACK_OPERATIONAL_STALE_SECONDS || 3600);
-    const fixtureMode = Boolean(
-      snap.sync?.fixtureMode ||
-        String(process.env.SLACK_OPERATIONAL_FIXTURE_MODE || "").trim() === "1"
-    );
+    const envFixture = envFixtureModeEnabled();
+    const storeFixture = Boolean(snap.sync?.fixtureMode);
+    // Fixture data is only authoritative when env fixture mode is explicitly on.
+    // Leftover fixture cache must never look like live Slack.
+    const fixtureMode = envFixture;
+    const fixtureCacheIgnored = Boolean(!envFixture && storeFixture);
     const configured = isConfigured() || fixtureMode;
+    let status;
+    if (fixtureMode) {
+      status = "fallback";
+    } else if (!isConfigured()) {
+      status = "unavailable";
+    } else if (snap.sync?.syncInProgress) {
+      status = "syncing";
+    } else if (snap.sync?.lastError) {
+      status = "partial";
+    } else if (lastSyncAt) {
+      status = "connected";
+    } else {
+      status = "unavailable";
+    }
+    const stale = ageSeconds == null ? true : ageSeconds > staleAfter;
     return {
       configured,
-      status: fixtureMode
-        ? "fallback"
-        : !isConfigured()
-          ? "unavailable"
-          : snap.sync?.syncInProgress
-            ? "syncing"
-            : snap.sync?.lastError
-              ? "partial"
-              : lastSyncAt
-                ? "connected"
-                : "unavailable",
+      status,
       lastSyncAt,
       lastSuccessfulSyncAt: snap.sync?.lastSuccessfulSyncAt || null,
       ageSeconds,
-      stale: ageSeconds == null ? true : ageSeconds > staleAfter,
+      stale,
       syncInProgress: Boolean(snap.sync?.syncInProgress || syncInProgress),
       lastError: snap.sync?.lastError || null,
       lastTelemetry: snap.sync?.lastTelemetry || null,
       channelCount: Object.keys(snap.channels || {}).length,
       messageCount: Object.keys(snap.messages || {}).length,
       fixtureMode,
+      fixtureCacheIgnored,
       sourceLabel: fixtureMode ? "fixture/test data" : null,
+      warning: fixtureCacheIgnored
+        ? "Fixture/test cache present but fixture mode is disabled; not serving as live Slack."
+        : stale && status === "connected"
+          ? "Slack cache is stale."
+          : null,
     };
   }
 
@@ -457,7 +478,12 @@ export function createSlackOperationalSignalsService(options = {}) {
     }
 
     const status = await getSlackSignalSyncStatus();
-    const all = await store.listMessages({ includeDeleted: false });
+    const envFixture = envFixtureModeEnabled();
+    const allRaw = await store.listMessages({ includeDeleted: false });
+    // Never serve fixture-tagged messages unless fixture mode is explicitly enabled.
+    const all = envFixture
+      ? allRaw
+      : allRaw.filter((message) => !isFixtureTaggedMessage(message));
     const matched = all.filter((message) => {
       const matches = message.matches || [];
       return matches.some((match) => {
@@ -540,6 +566,10 @@ export function createSlackOperationalSignalsService(options = {}) {
       highConfidenceCount: signals.filter((s) => s.confidence === "high").length,
       categories,
       signals: signals.slice(0, options.limit || 50),
+      stale: Boolean(status.stale),
+      fixtureMode: Boolean(status.fixtureMode),
+      sourceLabel: status.sourceLabel || null,
+      warning: status.warning || null,
       cache: status,
     };
   }

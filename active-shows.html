@@ -915,6 +915,8 @@
       const top = Array.isArray(slack.signals) ? slack.signals[0] : null;
       const line = [
         `status=${slack.status || "unavailable"}`,
+        slack.fixtureMode || slack.sourceLabel ? "source=fixture/test data" : null,
+        slack.stale ? "cache=stale" : null,
         `unresolved=${slack.unresolvedCount ?? 0}`,
         `review=${slack.needsReviewCount ?? 0}`,
         top ? top.summary || top.originalMessage : null,
@@ -935,6 +937,10 @@
       const signals = Array.isArray(slack.signals) ? slack.signals.slice(0, 5) : [];
       const meta = [
         slack.status || "unavailable",
+        slack.fixtureMode || slack.sourceLabel
+          ? slack.sourceLabel || "fixture/test data"
+          : null,
+        slack.stale ? "cache stale" : null,
         slack.lastSyncAt ? `sync ${slack.lastSyncAt}` : null,
         `unresolved ${slack.unresolvedCount ?? 0}`,
         `needs review ${slack.needsReviewCount ?? 0}`,
@@ -942,20 +948,29 @@
       ]
         .filter(Boolean)
         .join(" · ");
+      const fixtureBanner =
+        slack.fixtureMode || slack.sourceLabel
+          ? `<div class="value" style="color:#b45309">Fixture/test Slack data — not live Slack.</div>`
+          : "";
       if (!signals.length) {
         return `
           <div class="label">Slack Operational Signals</div>
+          ${fixtureBanner}
           <div class="value muted">${escapeHtml(meta)}</div>
           <div class="value muted">No high-confidence Slack signals attached.</div>
         `;
       }
       return `
         <div class="label">Slack Operational Signals</div>
+        ${fixtureBanner}
         <div class="value muted">${escapeHtml(meta)}</div>
         ${signals
           .map((signal) => {
+            const isResolved =
+              String(signal.status || "").toLowerCase() === "resolved" ||
+              String(signal.status || "").toLowerCase() === "clear";
             return `
-              <div class="value" style="margin-top:8px">
+              <div class="value" style="margin-top:8px${isResolved ? ";opacity:0.78;border-left:3px solid #3d8b6e;padding-left:8px" : ""}">
                 <span class="pill ${slackStatusPillClass(signal.status)}">${escapeHtml(signal.status || "info")}</span>
                 <strong>${escapeHtml((signal.categories || []).join(", ") || "operations")}</strong>
                 <div>${escapeHtml(signal.summary || "")}</div>
