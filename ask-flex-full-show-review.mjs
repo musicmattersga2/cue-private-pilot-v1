@@ -1331,6 +1331,38 @@ export async function resolveFullShowContext(question, deps = {}) {
     };
   }
 
+  let slackSignals = null;
+  try {
+    if (typeof deps.getSlackSignalsForShow === "function") {
+      slackSignals = await deps.getSlackSignalsForShow({
+        showKey: matchedActiveShow?.id || slugifyShowName(resolvedShowName),
+        showName: resolvedShowName,
+        documentNumbers: flexQuoteNumbers,
+        client:
+          matchedActiveShow?.activeShowsIndex?.client ||
+          flexDocuments.find((d) => d.client)?.client ||
+          null,
+        venue: flexDocuments.find((d) => d.venue)?.venue || null,
+      });
+    }
+  } catch (error) {
+    console.warn(
+      "[CUE ASK FLEX SLACK] Signal lookup failed; continuing without Slack.",
+      error?.message || error
+    );
+    slackSignals = {
+      sourceStatus: "unavailable",
+      lastSyncAt: null,
+      matchedSignals: [],
+      unresolvedCount: 0,
+      atRiskCount: 0,
+      blockedCount: 0,
+      resolvedCount: 0,
+      needsReviewCount: 0,
+      warning: "Slack operational signals unavailable for this review.",
+    };
+  }
+
   return {
     ok: true,
     found: true,
@@ -1365,6 +1397,7 @@ export async function resolveFullShowContext(question, deps = {}) {
       fallbackReason: activeShowsSource.fallbackReason || null,
       matchedShow: matchedActiveShow,
     },
+    slackSignals,
   };
 }
 
@@ -1377,6 +1410,7 @@ export function buildFullShowOperationalPayload({
   comparison,
   activeShowResult,
   flexWarnings = [],
+  slackSignals = null,
 }) {
   const flexSummary = summarizeFlexDocuments(flexDocuments);
   const matched = activeShowResult?.matchedShow || null;
@@ -1535,6 +1569,21 @@ export function buildFullShowOperationalPayload({
         matched?.activeShowsIndex?.technicalCoverage ||
         null,
       risk: matched?.risk || matched?.activeShowsIndex?.risk || matched?.topIssue || null,
+    },
+    slack: {
+      sourceStatus: slackSignals?.sourceStatus || "unavailable",
+      lastSyncAt: slackSignals?.lastSyncAt || null,
+      matchedSignals: Array.isArray(slackSignals?.matchedSignals)
+        ? slackSignals.matchedSignals.slice(0, 20)
+        : Array.isArray(slackSignals?.signals)
+          ? slackSignals.signals.slice(0, 20)
+          : [],
+      unresolvedCount: Number(slackSignals?.unresolvedCount || 0),
+      atRiskCount: Number(slackSignals?.atRiskCount || 0),
+      blockedCount: Number(slackSignals?.blockedCount || 0),
+      resolvedCount: Number(slackSignals?.resolvedCount || 0),
+      needsReviewCount: Number(slackSignals?.needsReviewCount || 0),
+      warning: slackSignals?.warning || null,
     },
     unavailableSources: [...new Set(unavailableSources)],
   };
@@ -1820,6 +1869,71 @@ export function buildDeterministicCrossSourceFindings(payload) {
     );
   }
 
+  const slackSignals = Array.isArray(payload?.slack?.matchedSignals)
+    ? payload.slack.matchedSignals
+    : [];
+  for (const signal of slackSignals.slice(0, 8)) {
+    const statusRaw = String(signal.status || "").toLowerCase();
+    const findingStatus =
+      statusRaw === "blocked"
+        ? "blocked"
+        : statusRaw === "at_risk"
+          ? "at_risk"
+          : statusRaw === "resolved"
+            ? "review_needed"
+            : "review_needed";
+    const cats = Array.isArray(signal.categories) ? signal.categories.join(", ") : "operations";
+    findings.push(
+      finding({
+        category: `slack_${String(cats).split(",")[0] || "signal"}`,
+        status: findingStatus,
+        severity: statusRaw === "blocked" || statusRaw === "at_risk" ? "high" : "medium",
+        area: /truck/i.test(cats) ? "Trucking" : /warehouse/i.test(cats) ? "Warehouse" : "Data",
+        finding:
+          statusRaw === "resolved"
+            ? `Slack reports resolution: ${signal.summary || signal.originalMessage || "update"}`
+            : `Slack signal (${cats}): ${signal.summary || signal.originalMessage || "update"}`,
+        evidence: [
+          signal.channelName ? `channel=${signal.channelName}` : null,
+          signal.authorName ? `author=${signal.authorName}` : null,
+          signal.timestamp ? `ts=${signal.timestamp}` : null,
+          signal.confidence ? `confidence=${signal.confidence}` : null,
+          Array.isArray(signal.matchReasons) && signal.matchReasons.length
+            ? `match=${signal.matchReasons.slice(0, 2).join("; ")}`
+            : null,
+          signal.originalMessage
+            ? `message=${String(signal.originalMessage).slice(0, 180)}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" | "),
+        sources: ["Slack"],
+        owner: /truck/i.test(cats) ? "Brian Kee / Trucking Coordinator" : "PM",
+        action:
+          statusRaw === "resolved"
+            ? "Confirm Slack resolution against FLEX/Trucking state."
+            : "Review Slack operational signal and update execution status.",
+        bucket: statusRaw === "resolved" ? "contextual" : undefined,
+      })
+    );
+  }
+
+  if (Number(payload?.slack?.needsReviewCount || 0) > 0) {
+    findings.push(
+      finding({
+        category: "slack_needs_review",
+        status: "review_needed",
+        area: "Data",
+        finding: "Medium-confidence Slack signals need human review before attachment.",
+        evidence: `${payload.slack.needsReviewCount} Slack signal(s) in Needs Review.`,
+        sources: ["Slack"],
+        owner: "PM",
+        action: "Review medium-confidence Slack matches in the Needs Review queue.",
+        bucket: "contextual",
+      })
+    );
+  }
+
   return dedupeFindingsByCategory(findings);
 }
 
@@ -1898,6 +2012,13 @@ function buildSourceCoverage(payload) {
       : `Matched: ${payload.activeShows.matchedShow.name}`
     : "No Active Shows row matched";
 
+  const slack = payload.slack || {};
+  const slackCount = Array.isArray(slack.matchedSignals) ? slack.matchedSignals.length : 0;
+  const slackNote =
+    slack.sourceStatus === "connected" || slack.sourceStatus === "partial"
+      ? `${slackCount} matched signal(s); unresolved=${slack.unresolvedCount || 0}`
+      : slack.warning || "Slack operational signals unavailable";
+
   return [
     {
       source: "FLEX",
@@ -1913,6 +2034,11 @@ function buildSourceCoverage(payload) {
       source: "Active Shows",
       status: payload.activeShows?.sourceStatus || "unavailable",
       note: activeNote,
+    },
+    {
+      source: "Slack",
+      status: slack.sourceStatus || "unavailable",
+      note: slackNote,
     },
     {
       source: "Staffing",
@@ -2091,6 +2217,18 @@ export function buildFullShowOperationalFallback(payload) {
           ? ["Review warehouse pull scope against FLEX equipment families."]
           : [],
     },
+    slack: {
+      sourceStatus: payload.slack?.sourceStatus || "unavailable",
+      lastSyncAt: payload.slack?.lastSyncAt || null,
+      matchedSignals: Array.isArray(payload.slack?.matchedSignals)
+        ? payload.slack.matchedSignals
+        : [],
+      unresolvedCount: Number(payload.slack?.unresolvedCount || 0),
+      atRiskCount: Number(payload.slack?.atRiskCount || 0),
+      blockedCount: Number(payload.slack?.blockedCount || 0),
+      resolvedCount: Number(payload.slack?.resolvedCount || 0),
+      needsReviewCount: Number(payload.slack?.needsReviewCount || 0),
+    },
     crossSourceFindings: buckets.crossSourceFindings.map((item) => ({
       ...item,
       evidence: cleanEvidenceText(item.evidence),
@@ -2102,9 +2240,10 @@ export function buildFullShowOperationalFallback(payload) {
     coverageGaps: buckets.coverageGaps,
     recommendedNextActions: prioritizeActions(buckets, payload),
     assumptions: [
-      "Full show review uses only currently connected sources: FLEX, Trucking Weekly Runs, and Active Shows Index.",
+      "Full show review uses currently connected sources: FLEX, Trucking Weekly Runs, Active Shows Index, and Slack when configured.",
       "Staffing and warehouse systems are unavailable; FLEX lines are used as proxies only and are listed under Source / Coverage Gaps.",
       "Active Shows text notes are contextual unless independently confirmed by live FLEX or Weekly Runs.",
+      "Slack is current operational evidence for matched messages but does not override FLEX sold scope.",
       trucking.usedFallback
         ? "Trucking data used the safe fallback mock because live Weekly Runs was unavailable."
         : "Trucking data reflects the connected Weekly Runs source.",
@@ -2249,6 +2388,22 @@ export function normalizeFullShowOperationalAnalysis(raw, fallback, payload) {
       ),
       findings: asStringArray(fb.warehouse?.findings, 4),
       actions: asStringArray(fb.warehouse?.actions, 3),
+    },
+    slack: {
+      sourceStatus: payload.slack?.sourceStatus || fb.slack?.sourceStatus || "unavailable",
+      lastSyncAt: payload.slack?.lastSyncAt || fb.slack?.lastSyncAt || null,
+      matchedSignals: Array.isArray(payload.slack?.matchedSignals)
+        ? payload.slack.matchedSignals
+        : Array.isArray(fb.slack?.matchedSignals)
+          ? fb.slack.matchedSignals
+          : [],
+      unresolvedCount: Number(payload.slack?.unresolvedCount || fb.slack?.unresolvedCount || 0),
+      atRiskCount: Number(payload.slack?.atRiskCount || fb.slack?.atRiskCount || 0),
+      blockedCount: Number(payload.slack?.blockedCount || fb.slack?.blockedCount || 0),
+      resolvedCount: Number(payload.slack?.resolvedCount || fb.slack?.resolvedCount || 0),
+      needsReviewCount: Number(
+        payload.slack?.needsReviewCount || fb.slack?.needsReviewCount || 0
+      ),
     },
     crossSourceFindings: buckets.crossSourceFindings.map((item) => ({
       ...item,
@@ -2542,6 +2697,7 @@ export async function answerShowOperationalAnalysis(question, deps = {}) {
     comparison: resolved.comparison,
     activeShowResult: resolved.activeShowResult,
     flexWarnings: resolved.flexWarnings,
+    slackSignals: resolved.slackSignals,
   });
 
   const result = await buildFullShowOperationalAnalysis(payload, deps);

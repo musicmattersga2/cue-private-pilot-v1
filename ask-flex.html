@@ -1016,6 +1016,11 @@
       { label: "What improved?", q: "What improved?" },
       { label: "What got worse?", q: "What got worse?" },
       { label: "Review history", q: "Show review history." },
+      { label: "Slack updates", q: "What did Slack say about this show?" },
+      { label: "Slack trucking", q: "Show me Slack trucking updates." },
+      { label: "Slack warehouse", q: "What warehouse issues were mentioned in Slack?" },
+      { label: "Unresolved Slack", q: "Which Slack issues remain unresolved?" },
+      { label: "Slack needs review", q: "Which Slack signals need review?" },
       { label: "Trucking only", q: "Show me only the trucking items." },
       { label: "Confirmed issues", q: "Which findings are confirmed?" },
       { label: "Needs confirmation", q: "What still needs confirmation?" },
@@ -1122,6 +1127,78 @@
       }
       if (snapshot.saved) return "Saved just now";
       return "Snapshot unavailable";
+    }
+
+    function renderSlackSignalsBlock(slack) {
+      if (!slack) {
+        return `
+          <div class="section" style="margin-top:10px">
+            <h3>Slack Operational Signals</h3>
+            <div class="hint">Slack source unavailable.</div>
+          </div>
+        `;
+      }
+      const signals = Array.isArray(slack.matchedSignals)
+        ? slack.matchedSignals.slice(0, 5)
+        : Array.isArray(slack.signals)
+          ? slack.signals.slice(0, 5)
+          : [];
+      const meta = [
+        `Status: ${slack.sourceStatus || "unavailable"}`,
+        slack.lastSyncAt ? `Last sync: ${formatReviewTime(slack.lastSyncAt)}` : null,
+        `Unresolved: ${slack.unresolvedCount ?? 0}`,
+        `Needs review: ${slack.needsReviewCount ?? 0}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      if (!signals.length) {
+        return `
+          <div class="section" style="margin-top:10px">
+            <h3>Slack Operational Signals</h3>
+            <div class="hint">${escapeHtml(meta)}</div>
+            <div class="hint">No high-confidence Slack signals matched this show.</div>
+          </div>
+        `;
+      }
+      return `
+        <div class="section" style="margin-top:10px">
+          <h3>Slack Operational Signals</h3>
+          <div class="hint">${escapeHtml(meta)}</div>
+          ${signals
+            .map((signal) => {
+              return `
+                <div class="followup-item">
+                  <div class="followup-item-top">
+                    <span>${escapeHtml(signal.status || "info")}</span>
+                    <span>${escapeHtml((signal.categories || []).join(", ") || "operations")}</span>
+                    ${signal.confidence ? `<span>${escapeHtml(signal.confidence)}</span>` : ""}
+                  </div>
+                  <div>${escapeHtml(signal.summary || signal.originalMessage || "")}</div>
+                  <div class="hint">${escapeHtml(
+                    [
+                      signal.channelName ? `#${signal.channelName}` : null,
+                      signal.authorName || null,
+                      signal.timestamp ? formatReviewTime(signal.timestamp) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  )}</div>
+                  ${
+                    signal.originalMessage
+                      ? `<div class="hint">Original: ${escapeHtml(signal.originalMessage)}</div>`
+                      : ""
+                  }
+                  ${
+                    Array.isArray(signal.matchReasons) && signal.matchReasons.length
+                      ? `<div class="hint">Match: ${escapeHtml(signal.matchReasons.slice(0, 2).join("; "))}</div>`
+                      : ""
+                  }
+                </div>
+              `;
+            })
+            .join("")}
+        </div>
+      `;
     }
 
     function renderChangeComparisonBlock(comparison) {
@@ -2311,6 +2388,7 @@
           <span class="ops-pill"><strong>Sources</strong> ${escapeHtml(sourceSummaryLabel)}</span>
         </div>
         ${coverageHtml}
+        ${renderSlackSignalsBlock(data.slack)}
         <div class="ops-grid">
           ${renderOpsDeptCard("FLEX Scope", data.flexScope)}
           ${renderOpsDeptCard("Trucking Execution", data.truckingExecution)}

@@ -18,6 +18,8 @@ import {
 } from "./ask-flex-full-show-followup.mjs";
 import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs";
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
+import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
+import { seedSlackOperationalFixtures } from "./slack-operational-signals-fixtures.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -52,6 +54,11 @@ function resolveCueBuildBranch() {
 const CUE_BUILD_ID = resolveCueBuildId();
 const CUE_BUILD_BRANCH = resolveCueBuildBranch();
 const CUE_BUILD_LABEL = `${CUE_BUILD_BRANCH}@${CUE_BUILD_ID}`;
+
+const slackOperationalSignalsService = createSlackOperationalSignalsService();
+const SLACK_FIXTURE_MODE =
+  String(process.env.SLACK_OPERATIONAL_FIXTURE_MODE || "").trim() === "1" ||
+  String(process.env.SLACK_OPERATIONAL_FIXTURE_MODE || "").toLowerCase() === "true";
 
 
 const openai = new OpenAI({
@@ -3309,6 +3316,7 @@ function buildFlexAskBriefPayload(fullResult) {
     payload.source = result.source || null;
     payload.supportingData = fullResult?.supportingData || null;
     payload.snapshot = fullResult?.snapshot || null;
+    payload.slack = result.slack || fullResult?.result?.slack || null;
     payload.lines = (payload.recommendedNextActions || []).slice(0, 5).map((action) => ({
       text: String(action),
     }));
@@ -4986,6 +4994,23 @@ function buildAskFlexFullShowDeps() {
     parseCsvRows,
     reviewSnapshotStore: defaultReviewSnapshotStore,
     buildLabel: CUE_BUILD_LABEL,
+    getSlackSignalsForShow: async (showContext) => {
+      const payload = await slackOperationalSignalsService.getSlackSignalsForShow(
+        showContext,
+        { allowStaleRefresh: !SLACK_FIXTURE_MODE }
+      );
+      if (SLACK_FIXTURE_MODE) {
+        return {
+          ...payload,
+          sourceStatus:
+            payload.sourceStatus === "unavailable" ? "fallback" : payload.sourceStatus || "fallback",
+          warning: "Slack source is fixture/test data (not live Slack).",
+          fixtureMode: true,
+          sourceLabel: "fixture/test data",
+        };
+      }
+      return payload;
+    },
   };
 }
 
@@ -5700,6 +5725,14 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/review-snapshots",
     "/api/flex/review-snapshots/latest",
     "/api/flex/review-snapshots/compare",
+    "/api/slack-operational-signals/sync",
+    "/api/slack-operational-signals/status",
+    "/api/slack-operational-signals/show",
+    "/api/slack-operational-signals/review",
+    "/api/slack-operational-signals/review/approve",
+    "/api/slack-operational-signals/review/reject",
+    "/api/slack-operational-signals/general",
+    "/api/slack-operational-signals/rematch",
   ].includes(pathname);
 }
 
@@ -7281,12 +7314,68 @@ const server = http.createServer(async (req, res) => {
         activeShowsSource.shows.map((show) => enrichActiveShowWithFlex(show))
       );
 
+      // One shared Slack cache read — no per-show Slack API calls.
+      let slackStatus = null;
+      try {
+        slackStatus = await slackOperationalSignalsService.getSlackSignalSyncStatus();
+      } catch {
+        slackStatus = { status: "unavailable" };
+      }
+
+      const showsWithSlack = await Promise.all(
+        shows.map(async (show) => {
+          try {
+            const slack = await slackOperationalSignalsService.getSlackSignalsForShow(
+              {
+                showKey: show.id,
+                showName: show.name,
+                documentNumbers: extractActiveShowDocumentNumbers(show),
+                client: show.activeShowsIndex?.client || show.client || null,
+                venue: show.venue || null,
+              },
+              { allowStaleRefresh: false, limit: 5 }
+            );
+            return {
+              ...show,
+              slackOperationalSignals: {
+                status: SLACK_FIXTURE_MODE
+                  ? "fallback"
+                  : slack.sourceStatus || slackStatus?.status || "unavailable",
+                lastSyncAt: slack.lastSyncAt || slackStatus?.lastSuccessfulSyncAt || null,
+                highConfidenceCount: slack.highConfidenceCount || 0,
+                needsReviewCount: slack.needsReviewCount || 0,
+                unresolvedCount: slack.unresolvedCount || 0,
+                resolvedCount: slack.resolvedCount || 0,
+                categories: slack.categories || {},
+                signals: (slack.signals || []).slice(0, 5),
+                fixtureMode: Boolean(SLACK_FIXTURE_MODE),
+                sourceLabel: SLACK_FIXTURE_MODE ? "fixture/test data" : null,
+              },
+            };
+          } catch {
+            return {
+              ...show,
+              slackOperationalSignals: {
+                status: "unavailable",
+                lastSyncAt: null,
+                highConfidenceCount: 0,
+                needsReviewCount: 0,
+                unresolvedCount: 0,
+                resolvedCount: 0,
+                categories: {},
+                signals: [],
+              },
+            };
+          }
+        })
+      );
+
       const flexSummary = {
-        verified: shows.filter((show) => show.flex?.status === "Verified").length,
-        partial: shows.filter((show) => show.flex?.status === "Partial").length,
-        missing: shows.filter((show) => show.flex?.status === "Missing").length,
-        error: shows.filter((show) => show.flex?.status === "Error").length,
-        approvalNeeded: shows.filter((show) => show.flex?.approvalNeeded).length,
+        verified: showsWithSlack.filter((show) => show.flex?.status === "Verified").length,
+        partial: showsWithSlack.filter((show) => show.flex?.status === "Partial").length,
+        missing: showsWithSlack.filter((show) => show.flex?.status === "Missing").length,
+        error: showsWithSlack.filter((show) => show.flex?.status === "Error").length,
+        approvalNeeded: showsWithSlack.filter((show) => show.flex?.approvalNeeded).length,
       };
 
       return {
@@ -7301,11 +7390,12 @@ const server = http.createServer(async (req, res) => {
           rowCount: activeShowsSource.rowCount,
         },
         flexAuthority: "live",
+        slackOperationalSignalsStatus: slackStatus,
         generatedAt: new Date().toISOString(),
         message:
           "Active Shows now reads rows from the Active Shows Index when available, then enriches every FLEX/document number found on each row with live FLEX search, header fetch, and line-item pull.",
         flexSummary,
-        shows,
+        shows: showsWithSlack,
       };
     }
 
@@ -7586,6 +7676,89 @@ const server = http.createServer(async (req, res) => {
         showKey,
         comparison,
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/sync") {
+      const telemetry = await slackOperationalSignalsService.syncSlackOperationalSignals();
+      sendJson(res, 200, { ok: true, telemetry });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/slack-operational-signals/status") {
+      const status = await slackOperationalSignalsService.getSlackSignalSyncStatus();
+      sendJson(res, 200, status);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/slack-operational-signals/show") {
+      const showKey = String(url.searchParams.get("showKey") || "").trim();
+      const showName = String(url.searchParams.get("showName") || "").trim();
+      if (!showKey && !showName) {
+        sendJson(res, 400, { error: "showKey or showName is required." });
+        return;
+      }
+      const payload = await slackOperationalSignalsService.getSlackSignalsForShow(
+        { showKey, showName },
+        { allowStaleRefresh: false }
+      );
+      sendJson(res, 200, {
+        showKey: showKey || null,
+        showName: showName || null,
+        ...payload,
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/slack-operational-signals/review") {
+      const queue = await slackOperationalSignalsService.getSlackNeedsReviewQueue();
+      sendJson(res, 200, { count: queue.length, items: queue.slice(0, 100) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/review/approve") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const signalId = String(body.signalId || "").trim();
+      const showKey = String(body.showKey || "").trim();
+      if (!signalId || !showKey) {
+        sendJson(res, 400, { error: "signalId and showKey are required." });
+        return;
+      }
+      const result = await slackOperationalSignalsService.approveSlackSignalMatch(
+        signalId,
+        showKey,
+        { showName: body.showName || showKey, documentNumbers: body.documentNumbers || [] }
+      );
+      sendJson(res, result.ok ? 200 : 404, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/review/reject") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const signalId = String(body.signalId || "").trim();
+      if (!signalId) {
+        sendJson(res, 400, { error: "signalId is required." });
+        return;
+      }
+      const result = await slackOperationalSignalsService.rejectSlackSignalMatch(
+        signalId,
+        body.reason || null
+      );
+      sendJson(res, result.ok ? 200 : 404, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/slack-operational-signals/general") {
+      const queue = await slackOperationalSignalsService.getSlackGeneralOperationsQueue();
+      sendJson(res, 200, { count: queue.length, items: queue.slice(0, 100) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/rematch") {
+      const result = await slackOperationalSignalsService.rematchAll([]);
+      sendJson(res, 200, { ok: true, ...result });
       return;
     }
 
@@ -8095,7 +8268,7 @@ console.log("[CUE AI MODEL SELECT]", {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`CUE FLEX Intelligence Server running at http://localhost:${PORT}`);
   console.log(`CUE build: ${CUE_BUILD_LABEL}`);
 
@@ -8103,6 +8276,26 @@ server.listen(PORT, () => {
     console.warn("WARNING: CUE_PILOT_PASSWORD is not set. Password gate is disabled for local development.");
   } else {
     console.log("Password gate enabled.");
+  }
+
+  if (SLACK_FIXTURE_MODE) {
+    try {
+      const seeded = await seedSlackOperationalFixtures(slackOperationalSignalsService);
+      console.log(
+        `[CUE SLACK SIGNALS] Fixture mode enabled — seeded ${seeded.seeded} synthetic messages (${seeded.sourceLabel}).`
+      );
+    } catch (error) {
+      console.warn(
+        "[CUE SLACK SIGNALS] Fixture seed failed.",
+        error?.message || error
+      );
+    }
+  } else {
+    try {
+      slackOperationalSignalsService.startBackgroundSync(async () => []);
+    } catch (error) {
+      console.warn("[CUE SLACK SIGNALS] Background sync not started.", error?.message || error);
+    }
   }
 });
 

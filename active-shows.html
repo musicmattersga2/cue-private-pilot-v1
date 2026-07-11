@@ -899,6 +899,89 @@
         .replaceAll("'", "&#039;");
     }
 
+    function slackStatusPillClass(status) {
+      const raw = String(status || "").toLowerCase();
+      if (raw === "blocked" || raw === "at_risk") return "red";
+      if (raw === "needs_review") return "magenta";
+      if (raw === "resolved" || raw === "clear") return "green";
+      return "cyan";
+    }
+
+    function renderSlackCardSummary(show) {
+      const slack = show.slackOperationalSignals;
+      if (!slack) {
+        return `<div class="label">Slack</div><div class="value muted">Unavailable</div>`;
+      }
+      const top = Array.isArray(slack.signals) ? slack.signals[0] : null;
+      const line = [
+        `status=${slack.status || "unavailable"}`,
+        `unresolved=${slack.unresolvedCount ?? 0}`,
+        `review=${slack.needsReviewCount ?? 0}`,
+        top ? top.summary || top.originalMessage : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<div class="label">Slack</div><div class="value">${escapeHtml(line)}</div>`;
+    }
+
+    function renderSlackDetailSection(show) {
+      const slack = show.slackOperationalSignals;
+      if (!slack) {
+        return `
+          <div class="label">Slack Operational Signals</div>
+          <div class="value muted">Slack source unavailable.</div>
+        `;
+      }
+      const signals = Array.isArray(slack.signals) ? slack.signals.slice(0, 5) : [];
+      const meta = [
+        slack.status || "unavailable",
+        slack.lastSyncAt ? `sync ${slack.lastSyncAt}` : null,
+        `unresolved ${slack.unresolvedCount ?? 0}`,
+        `needs review ${slack.needsReviewCount ?? 0}`,
+        `resolved ${slack.resolvedCount ?? 0}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      if (!signals.length) {
+        return `
+          <div class="label">Slack Operational Signals</div>
+          <div class="value muted">${escapeHtml(meta)}</div>
+          <div class="value muted">No high-confidence Slack signals attached.</div>
+        `;
+      }
+      return `
+        <div class="label">Slack Operational Signals</div>
+        <div class="value muted">${escapeHtml(meta)}</div>
+        ${signals
+          .map((signal) => {
+            return `
+              <div class="value" style="margin-top:8px">
+                <span class="pill ${slackStatusPillClass(signal.status)}">${escapeHtml(signal.status || "info")}</span>
+                <strong>${escapeHtml((signal.categories || []).join(", ") || "operations")}</strong>
+                <div>${escapeHtml(signal.summary || "")}</div>
+                <div class="muted">${escapeHtml(
+                  [
+                    signal.channelName ? `#${signal.channelName}` : null,
+                    signal.authorName || null,
+                    signal.timestamp || null,
+                    signal.confidence ? `confidence ${signal.confidence}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                )}</div>
+                <div class="muted">Original: ${escapeHtml(signal.originalMessage || "")}</div>
+                ${
+                  Array.isArray(signal.matchReasons) && signal.matchReasons.length
+                    ? `<div class="muted">Match: ${escapeHtml(signal.matchReasons.slice(0, 2).join("; "))}</div>`
+                    : ""
+                }
+              </div>
+            `;
+          })
+          .join("")}
+      `;
+    }
+
     function yesNo(value) {
       return value ? "Yes" : "No";
     }
@@ -1799,6 +1882,7 @@
           <div class="value">${escapeHtml(show.nextAction || "")}</div>
 
           ${truckingLine ? `<div class="label">Trucking</div><div class="value">${escapeHtml(truckingLine)}</div>` : ""}
+          ${renderSlackCardSummary(show)}
 
           <div class="card-footer">
             <span class="progress">${escapeHtml(flexProgress)}</span>
@@ -2582,6 +2666,8 @@
 
           <div class="label">Trucking Signal</div>
           <div class="value">${escapeHtml(show.trucking || "")}</div>
+
+          ${renderSlackDetailSection(show)}
 
           <div class="label">FLEX Hints / Workstreams</div>
           <div class="value muted">${escapeHtml(hintText)}</div>

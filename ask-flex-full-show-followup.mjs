@@ -16,7 +16,7 @@ import {
 const QUOTE_NUMBER_RE = /\b\d{2}-\d{3,6}\b/;
 
 const FOLLOWUP_LANGUAGE_RE =
-  /\b(biggest issue|top\s+(?:three|3|things?)|brian|trucking coordinator|what should (?:the )?pm|show (?:me )?only|summarize|summary|confirmed|needs? confirmation|coverage gaps?|trucking items?|staffing items?|warehouse view|flex versus trucking|flex vs\.? trucking|source driving|preventing (?:the show from being )?clear|next actions?|what changed|what improved|got worse|worsened|review history|what is new|what was resolved|compare the last|executive summary|for chelsea|pm (?:do )?first|owner)\b/i;
+  /\b(biggest issue|top\s+(?:three|3|things?)|brian|trucking coordinator|what should (?:the )?pm|show (?:me )?only|summarize|summary|confirmed|needs? confirmation|coverage gaps?|trucking items?|staffing items?|warehouse view|flex versus trucking|flex vs\.? trucking|source driving|preventing (?:the show from being )?clear|next actions?|what changed|what improved|got worse|worsened|review history|what is new|what was resolved|compare the last|executive summary|for chelsea|pm (?:do )?first|owner|slack)\b/i;
 
 const REFRESH_RE =
   /\b(refresh|recheck|pull again|rerun)\b/i;
@@ -110,6 +110,14 @@ export function classifyFullShowFollowupType(question) {
 
   if (/\breview history|saved reviews|snapshot history\b/.test(text)) {
     return "review_history";
+  }
+  if (/\bslack\b/.test(text)) {
+    if (/\btrucking\b/.test(text)) return "slack_trucking";
+    if (/\bwarehouse\b/.test(text)) return "slack_warehouse";
+    if (/\bunresolved\b/.test(text)) return "slack_unresolved";
+    if (/\bneeds? review\b/.test(text)) return "slack_needs_review";
+    if (/\boriginal message\b/.test(text)) return "slack_original";
+    return "slack_updates";
   }
   if (/\bwhat improved|improvements?\b/.test(text)) {
     return "improvements_only";
@@ -249,6 +257,34 @@ function sanitizeStoredResult(result) {
           sourceStatus: result.warehouse.sourceStatus || null,
           findings: asArray(result.warehouse.findings).slice(0, 6),
           actions: asArray(result.warehouse.actions).slice(0, 4),
+        }
+      : null,
+    slack: result.slack
+      ? {
+          sourceStatus: result.slack.sourceStatus || null,
+          lastSyncAt: result.slack.lastSyncAt || null,
+          unresolvedCount: result.slack.unresolvedCount ?? null,
+          atRiskCount: result.slack.atRiskCount ?? null,
+          blockedCount: result.slack.blockedCount ?? null,
+          resolvedCount: result.slack.resolvedCount ?? null,
+          needsReviewCount: result.slack.needsReviewCount ?? null,
+          matchedSignals: asArray(result.slack.matchedSignals || result.slack.signals)
+            .slice(0, 12)
+            .map((signal) => ({
+              signalId: signal?.signalId || null,
+              categories: asArray(signal?.categories).slice(0, 6),
+              status: signal?.status || null,
+              summary: signal?.summary || null,
+              originalMessage: signal?.originalMessage || null,
+              channelId: signal?.channelId || null,
+              channelName: signal?.channelName || null,
+              authorName: signal?.authorName || null,
+              timestamp: signal?.timestamp || null,
+              permalink: signal?.permalink || null,
+              confidence: signal?.confidence || null,
+              matchReasons: asArray(signal?.matchReasons).slice(0, 4),
+              relatedQuotes: asArray(signal?.relatedQuotes).slice(0, 6),
+            })),
         }
       : null,
     crossSourceFindings: asArray(result.crossSourceFindings)
@@ -1092,6 +1128,70 @@ async function buildReviewHistoryFollowup(context, deps = {}) {
   };
 }
 
+function buildSlackFollowup(result, filter = "all") {
+  const slack = result?.slack || {};
+  const signals = Array.isArray(slack.matchedSignals)
+    ? slack.matchedSignals
+    : Array.isArray(slack.signals)
+      ? slack.signals
+      : [];
+  let filtered = signals;
+  if (filter === "trucking") {
+    filtered = signals.filter((s) => (s.categories || []).includes("trucking"));
+  } else if (filter === "warehouse") {
+    filtered = signals.filter((s) => (s.categories || []).includes("warehouse"));
+  } else if (filter === "unresolved") {
+    filtered = signals.filter(
+      (s) =>
+        s.unresolved ||
+        ["at_risk", "blocked", "needs_review"].includes(String(s.status || "").toLowerCase())
+    );
+  } else if (filter === "needs_review") {
+    filtered = signals.filter(
+      (s) =>
+        String(s.confidence || "").toLowerCase() === "medium" ||
+        String(s.matchState || "").toLowerCase() === "needs_review" ||
+        String(s.status || "").toLowerCase() === "needs_review"
+    );
+  }
+
+  if (!filtered.length) {
+    return {
+      answer:
+        slack.sourceStatus === "unavailable"
+          ? "Slack operational signals are unavailable for this review."
+          : "No matching Slack operational signals were found for this show in the current review.",
+      items: [],
+    };
+  }
+
+  const items = filtered.slice(0, 5).map((signal, index) =>
+    makeItemFromText({
+      priority: index + 1,
+      area: "Slack",
+      finding: signal.summary || signal.originalMessage,
+      evidence: [
+        signal.channelName ? `channel=${signal.channelName}` : null,
+        signal.authorName ? `author=${signal.authorName}` : null,
+        signal.timestamp ? `ts=${signal.timestamp}` : null,
+        signal.confidence ? `confidence=${signal.confidence}` : null,
+        Array.isArray(signal.matchReasons) && signal.matchReasons[0]
+          ? `match=${signal.matchReasons[0]}`
+          : null,
+        signal.originalMessage ? `original=${signal.originalMessage}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      source: "Slack",
+    })
+  );
+
+  return {
+    answer: `Found ${filtered.length} Slack signal(s) for this show (showing ${items.length}).`,
+    items,
+  };
+}
+
 function buildGeneralFollowup(result, question) {
   if (/\bbrian\b/i.test(question)) return buildOwnerActions(result, "brian", "Brian Kee / Trucking Coordinator");
   if (/\bpm\b|project manager/i.test(question)) return buildOwnerActions(result, "pm", "PM");
@@ -1139,6 +1239,18 @@ async function buildDeterministicFollowup(question, context, followupType, deps 
       return buildPersistentChangeFollowup(context, followupType, deps);
     case "review_history":
       return buildReviewHistoryFollowup(context, deps);
+    case "slack_updates":
+      return buildSlackFollowup(result, "all");
+    case "slack_trucking":
+      return buildSlackFollowup(result, "trucking");
+    case "slack_warehouse":
+      return buildSlackFollowup(result, "warehouse");
+    case "slack_unresolved":
+      return buildSlackFollowup(result, "unresolved");
+    case "slack_needs_review":
+      return buildSlackFollowup(result, "needs_review");
+    case "slack_original":
+      return buildSlackFollowup(result, "all");
     default:
       return buildGeneralFollowup(result, question);
   }
@@ -1166,6 +1278,12 @@ function headlineForType(followupType, showName) {
     new_issues_only: `What is new · ${show}`,
     resolved_issues_only: `What was resolved · ${show}`,
     review_history: `Review history · ${show}`,
+    slack_updates: `Slack updates · ${show}`,
+    slack_trucking: `Slack trucking · ${show}`,
+    slack_warehouse: `Slack warehouse · ${show}`,
+    slack_unresolved: `Unresolved Slack issues · ${show}`,
+    slack_needs_review: `Slack needs review · ${show}`,
+    slack_original: `Original Slack messages · ${show}`,
     general_followup: `Follow-up · ${show}`,
   };
   return map[followupType] || `Follow-up · ${show}`;

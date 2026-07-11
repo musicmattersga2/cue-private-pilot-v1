@@ -12,7 +12,15 @@ _archive-old-cue-files/
 # ASK-FLEX-004 runtime snapshot store (never commit real snapshot data)
 data/ask-flex-review-snapshots.json
 data/ask-flex-review-snapshots.acceptance.json
+data/ask-flex-review-snapshots.regression.json
+data/ask-flex-review-snapshots.e2e.json
 data/*.tmp
 data/*.corrupt-*
 data/*.accept-backup-*
+
+# Slack Operational Signals runtime cache
+data/slack-operational-signals.json
+data/slack-operational-signals.e2e.json
+data/slack-operational-signals*.tmp
+data/slack-operational-signals*.corrupt-*
 
