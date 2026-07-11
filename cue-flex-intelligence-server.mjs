@@ -1020,6 +1020,203 @@ async function buildFlexEventFolderRollup(treeResult, options = {}) {
   return payload;
 }
 
+const ACTIVE_SHOW_EVENT_FOLDER_HINTS = {
+  "country-calling-2026": {
+    documentNumber: "26-0021",
+    elementId: "881d3614-ee81-4786-a16b-8153cb59d5e3",
+    showName: "Country Calling 2026",
+  },
+  "country-calling": {
+    documentNumber: "26-0021",
+    elementId: "881d3614-ee81-4786-a16b-8153cb59d5e3",
+    showName: "Country Calling 2026",
+  },
+};
+
+function normalizeShowKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function getActiveShowEventFolderHint(show) {
+  const texts = [
+    show?.id,
+    show?.showName,
+    show?.name,
+    show?.client,
+    show?.activeShowsIndex?.client,
+    show?.topIssue,
+    show?.nextAction,
+    show?.flexSignal,
+    show?.trucking,
+    show?.technicalCoverage,
+    show?.risk,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  for (const text of texts) {
+    const key = normalizeShowKey(text);
+    if (ACTIVE_SHOW_EVENT_FOLDER_HINTS[key]) {
+      return { ...ACTIVE_SHOW_EVENT_FOLDER_HINTS[key], matchedOn: text };
+    }
+  }
+
+  for (const text of texts) {
+    const key = normalizeShowKey(text);
+    for (const [hintKey, hint] of Object.entries(ACTIVE_SHOW_EVENT_FOLDER_HINTS)) {
+      if (key.includes(hintKey) || hintKey.includes(key)) {
+        return { ...hint, matchedOn: text };
+      }
+    }
+  }
+
+  return null;
+}
+
+function mapEventFolderChildToActiveShowDocument(child) {
+  return {
+    status: "Event Folder Child",
+    approvalNeeded: false,
+    documentNumber: child?.documentNumber || null,
+    elementId: child?.elementId || null,
+    showName: child?.name || null,
+    client: null,
+    venue: null,
+    plannedStartDate: null,
+    plannedEndDate: null,
+    loadInDate: null,
+    loadOutDate: null,
+    department: child?.department || null,
+    primaryDepartment: child?.primaryDepartment || null,
+    productFamily: child?.productFamily || null,
+    fulfillmentModel: child?.fulfillmentModel || null,
+    vendorManaged: child?.vendorManaged ?? null,
+    transportationDependency: child?.transportationDependency ?? null,
+    musicMattersTruckingRequired: child?.musicMattersTruckingRequired ?? null,
+    tags: Array.isArray(child?.tags) ? child.tags : [],
+    soldDepartments: child?.department ? [child.department] : [],
+    totals: null,
+    financials: null,
+    counts: null,
+    quoteLookup: null,
+    detail: child?.detail || null,
+    detailError: child?.detailError || null,
+  };
+}
+
+async function enrichActiveShowWithEventFolder(show, eventFolderHint, lastPullAt) {
+  const treeResult = await fetchFlexElementTree(eventFolderHint.elementId);
+  const folder = await buildFlexEventFolderRollup(treeResult, {
+    elementId: eventFolderHint.elementId,
+    includeChildDetails: false,
+    includeRaw: false,
+  });
+
+  const childQuotes = Array.isArray(folder.childQuotes) ? folder.childQuotes : [];
+  const departments = Array.isArray(folder.rollup?.departments)
+    ? folder.rollup.departments
+    : [];
+  const documentNumbers = Array.isArray(folder.rollup?.documentNumbers)
+    ? folder.rollup.documentNumbers
+    : childQuotes.map((child) => child.documentNumber).filter(Boolean);
+
+  const eventFolder = folder.eventFolder || {
+    documentNumber: eventFolderHint.documentNumber,
+    elementId: eventFolderHint.elementId,
+    name: eventFolderHint.showName || show.name || null,
+  };
+
+  const documents = childQuotes.map(mapEventFolderChildToActiveShowDocument);
+  const deptText = departments.join(", ") || "No departments found";
+  const parentDoc =
+    eventFolder.documentNumber || eventFolderHint.documentNumber || "Event Folder";
+  const parentName = eventFolder.name || eventFolderHint.showName || show.name || "";
+  const flexSignal = `FLEX Event Folder - ${parentDoc} ${parentName} verified. ${childQuotes.length} child quote workstreams found. Departments: ${deptText}.`;
+
+  return {
+    ...show,
+    flexDocumentNumbers: documentNumbers,
+    flex: {
+      status: "Event Folder",
+      matchType: "event_folder",
+      approvalNeeded: false,
+      documentNumber: parentDoc,
+      documentNumbers,
+      elementId: eventFolder.elementId || eventFolderHint.elementId,
+      showName: parentName || show.name || null,
+      client: null,
+      venue: null,
+      plannedStartDate: null,
+      plannedEndDate: null,
+      loadInDate: null,
+      loadOutDate: null,
+      soldDepartments: departments,
+      totals: null,
+      financials: null,
+      counts: {
+        quotes: childQuotes.length,
+      },
+      documents,
+      eventFolder,
+      childQuotes,
+      rollup: folder.rollup || {
+        quoteCount: childQuotes.length,
+        departments,
+        documentNumbers,
+      },
+      primary: eventFolder,
+      lastPullAt,
+      message: null,
+      hintMatchedOn: eventFolderHint.matchedOn || null,
+    },
+    flexSignal,
+  };
+}
+
+function buildMissingEventFolderHintShows(existingShows = []) {
+  const presentElementIds = new Set();
+  for (const show of existingShows) {
+    const hint = getActiveShowEventFolderHint(show);
+    if (hint?.elementId) presentElementIds.add(hint.elementId);
+  }
+
+  const extras = [];
+  const seen = new Set();
+  for (const [key, hint] of Object.entries(ACTIVE_SHOW_EVENT_FOLDER_HINTS)) {
+    if (!hint?.elementId || seen.has(hint.elementId)) continue;
+    if (presentElementIds.has(hint.elementId)) continue;
+    seen.add(hint.elementId);
+
+    extras.push({
+      id: /-\d{4}$/.test(key) ? key : `${key}-2026`,
+      name: hint.showName || key,
+      timing: "Event Folder / multi-workstream",
+      priority: "High",
+      readinessStatus: "MAGENTA - Event Folder rollup",
+      changeSignal: "Cyan - FLEX Event Folder hint available",
+      topIssue:
+        "Multi-department festival scope lives under one FLEX Event Folder; confirm child quote workstreams.",
+      nextAction:
+        "Review Event Folder child quotes and pull individual workstreams as needed.",
+      flexSignal: `Event Folder parent expected: ${[
+        hint.documentNumber,
+        hint.showName,
+      ]
+        .filter(Boolean)
+        .join(" ")}.`,
+      trucking:
+        "Use child quote workstreams for trucking matching; LED Trailer is vendor-managed turnkey (not MM trucking).",
+      eventFolderHintInjected: true,
+    });
+  }
+
+  return extras;
+}
+
 
 function toNumber(value) {
   if (value == null) return 0;
@@ -7290,6 +7487,21 @@ const server = http.createServer(async (req, res) => {
         trucking:
           "Runs found on 7/5, 7/6, 7/7. Driver/LPO true; Info Sent FALSE.",
       },
+      {
+        id: "country-calling-2026",
+        name: "Country Calling 2026",
+        timing: "Festival / multi-workstream",
+        priority: "High",
+        readinessStatus: "MAGENTA - Event Folder rollup",
+        changeSignal: "Cyan - FLEX Event Folder hint available",
+        topIssue:
+          "Multi-department festival scope lives under one FLEX Event Folder; confirm child quote workstreams.",
+        nextAction:
+          "Review Event Folder child quotes and pull individual workstreams as needed.",
+        flexSignal: "Event Folder parent expected: 26-0021 Country Calling 2026.",
+        trucking:
+          "Use child quote workstreams for trucking matching; LED Trailer is vendor-managed turnkey (not MM trucking).",
+      },
     ];
     
     function extractActiveShowDocumentNumbers(show) {
@@ -7437,6 +7649,64 @@ const server = http.createServer(async (req, res) => {
     async function enrichActiveShowWithFlex(show) {
       const documentNumbers = extractActiveShowDocumentNumbers(show);
       const lastPullAt = new Date().toISOString();
+
+      const eventFolderHint = getActiveShowEventFolderHint(show);
+      const onlyParentEventFolderNumber =
+        Boolean(eventFolderHint?.documentNumber) &&
+        documentNumbers.length > 0 &&
+        documentNumbers.every(
+          (documentNumber) => documentNumber === eventFolderHint.documentNumber
+        );
+
+      // Event Folder path: no quote numbers, or only the parent Event Folder doc #.
+      // Direct child quote numbers still use normal quote matching.
+      if (
+        eventFolderHint?.elementId &&
+        (!documentNumbers.length || onlyParentEventFolderNumber)
+      ) {
+        try {
+          return await enrichActiveShowWithEventFolder(
+            show,
+            eventFolderHint,
+            lastPullAt
+          );
+        } catch (error) {
+          return {
+            ...show,
+            flex: {
+              status: "Missing",
+              matchType: "event_folder_error",
+              approvalNeeded: true,
+              documentNumber: eventFolderHint.documentNumber || null,
+              documentNumbers: [],
+              elementId: eventFolderHint.elementId || null,
+              showName: eventFolderHint.showName || show.name || null,
+              client: null,
+              venue: null,
+              plannedStartDate: null,
+              plannedEndDate: null,
+              loadInDate: null,
+              loadOutDate: null,
+              soldDepartments: [],
+              totals: null,
+              financials: null,
+              counts: null,
+              documents: [],
+              eventFolder: null,
+              childQuotes: [],
+              rollup: null,
+              primary: null,
+              lastPullAt,
+              message:
+                error?.message ||
+                "Event Folder hint found but FLEX tree enrichment failed.",
+            },
+            flexSignal: `FLEX Event Folder hint found for ${
+              eventFolderHint.documentNumber || "folder"
+            }, but live tree enrichment failed. Treat trucking / Drive evidence as hints only.`,
+          };
+        }
+      }
 
       if (!documentNumbers.length) {
         return {
@@ -7712,8 +7982,12 @@ const server = http.createServer(async (req, res) => {
 
     async function buildActiveShowsResponse(sourceLabel) {
       const activeShowsSource = await getActiveShowsRowsWithFallback();
+      const showsWithHints = [
+        ...activeShowsSource.shows,
+        ...buildMissingEventFolderHintShows(activeShowsSource.shows),
+      ];
       const shows = await Promise.all(
-        activeShowsSource.shows.map((show) => enrichActiveShowWithFlex(show))
+        showsWithHints.map((show) => enrichActiveShowWithFlex(show))
       );
 
       // One shared Slack cache read — no per-show Slack API calls.

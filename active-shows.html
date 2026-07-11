@@ -1205,9 +1205,274 @@
     }
 
     function getFlexHints(show) {
+      if (
+        Array.isArray(show?.flex?.documentNumbers) &&
+        show.flex.documentNumbers.length
+      ) {
+        return show.flex.documentNumbers;
+      }
       return Array.isArray(show.flexDocumentNumbers) && show.flexDocumentNumbers.length
         ? show.flexDocumentNumbers
         : flexDocumentHints[show.id] || [];
+    }
+
+    function isEventFolderFlex(show) {
+      return (
+        show?.flex?.matchType === "event_folder" ||
+        show?.flex?.status === "Event Folder"
+      );
+    }
+
+    function getEventFolderChildQuotes(show) {
+      if (Array.isArray(show?.flex?.childQuotes) && show.flex.childQuotes.length) {
+        return show.flex.childQuotes;
+      }
+      if (Array.isArray(show?.flex?.documents)) {
+        return show.flex.documents.filter(
+          (doc) => doc?.status === "Event Folder Child" || doc?.documentNumber
+        );
+      }
+      return [];
+    }
+
+    function renderEventFolderCardSummary(show) {
+      if (!isEventFolderFlex(show)) return "";
+
+      const folder = show.flex.eventFolder || show.flex.primary || {};
+      const rollup = show.flex.rollup || {};
+      const childCount =
+        rollup.quoteCount ??
+        getEventFolderChildQuotes(show).length ??
+        0;
+      const departments =
+        (Array.isArray(rollup.departments) && rollup.departments.length
+          ? rollup.departments
+          : show.flex.soldDepartments) || [];
+      const parent = [
+        folder.documentNumber || show.flex.documentNumber || "",
+        folder.name || show.flex.showName || show.name || "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      return `
+        <div class="label">FLEX Match Type</div>
+        <div class="value">Event Folder</div>
+        <div class="label">Parent</div>
+        <div class="value">${escapeHtml(parent || "—")}</div>
+        <div class="label">Child Quotes</div>
+        <div class="value">${escapeHtml(String(childCount))}</div>
+        <div class="label">Departments</div>
+        <div class="value">${escapeHtml(departments.join(", ") || "—")}</div>
+      `;
+    }
+
+    function renderEventFolderChildMeta(child) {
+      const bits = [];
+      if (child.department || child.primaryDepartment) {
+        bits.push(child.department || child.primaryDepartment);
+      }
+      if (child.productFamily) bits.push(child.productFamily);
+      if (child.fulfillmentModel) bits.push(child.fulfillmentModel);
+      if (child.vendorManaged === true) bits.push("Vendor Managed");
+      if (child.vendorManaged === false) bits.push("Not Vendor Managed");
+      if (child.musicMattersTruckingRequired === true) {
+        bits.push("MM Trucking Required: Yes");
+      } else if (child.musicMattersTruckingRequired === false) {
+        bits.push("MM Trucking Required: No");
+      }
+      return bits.join(" · ");
+    }
+
+    function renderEventFolderDetailSection(show) {
+      if (!isEventFolderFlex(show)) return "";
+
+      const folder = show.flex.eventFolder || show.flex.primary || {};
+      const rollup = show.flex.rollup || {};
+      const children = getEventFolderChildQuotes(show);
+      const departments =
+        (Array.isArray(rollup.departments) && rollup.departments.length
+          ? rollup.departments
+          : show.flex.soldDepartments) || [];
+      const parentLabel = [
+        folder.documentNumber || show.flex.documentNumber || "",
+        folder.name || show.flex.showName || show.name || "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const elementId = folder.elementId || show.flex.elementId || "";
+      const loading = Boolean(show.eventFolderDetailsLoading);
+
+      const rows = children
+        .map((child) => {
+          const meta = renderEventFolderChildMeta(child);
+          const familyFulfillment = [
+            child.productFamily || "",
+            child.fulfillmentModel || "",
+          ]
+            .filter(Boolean)
+            .join(" / ");
+          const isLedTrailer =
+            /led\s*trailer/i.test(String(child.name || "")) ||
+            /led\s*trailer/i.test(String(child.productFamily || ""));
+          const richMeta =
+            isLedTrailer && meta
+              ? `<div class="muted" style="margin-top:4px">${escapeHtml(meta)}</div>`
+              : "";
+          return `
+            <tr>
+              <td>${escapeHtml(child.documentNumber || "—")}</td>
+              <td>
+                ${escapeHtml(child.name || child.showName || "—")}
+                ${richMeta}
+              </td>
+              <td>${escapeHtml(child.department || child.primaryDepartment || "—")}</td>
+              <td>${escapeHtml(familyFulfillment || "—")}</td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      return `
+        <div class="detail-panel" style="margin-top:14px">
+          <h3>FLEX Event Folder</h3>
+          <div class="label">Parent</div>
+          <div class="value">${escapeHtml(parentLabel || "—")}</div>
+          <div class="label">Parent Element ID</div>
+          <div class="value muted">${escapeHtml(elementId || "—")}</div>
+          <div class="label">Child Quote Count</div>
+          <div class="value">${escapeHtml(
+            String(rollup.quoteCount ?? children.length ?? 0)
+          )}</div>
+          <div class="label">Departments</div>
+          <div class="value">${escapeHtml(departments.join(", ") || "—")}</div>
+
+          <div class="label" style="margin-top:12px">Child Quotes</div>
+          ${
+            children.length
+              ? `<table class="mini-table">
+                  <thead>
+                    <tr>
+                      <th>Quote #</th>
+                      <th>Workstream / Name</th>
+                      <th>Department</th>
+                      <th>Product Family / Fulfillment</th>
+                    </tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+                </table>`
+              : `<div class="value muted">No child quotes attached yet.</div>`
+          }
+
+          <div style="margin-top:12px">
+            <button
+              class="small ${loading ? "querying" : ""}"
+              ${loading || !elementId ? "disabled" : ""}
+              onclick="event.stopPropagation(); pullEventFolderChildDetails('${escapeHtml(
+                show.id
+              )}')"
+            >
+              ${loading ? "Pulling Child Details…" : "Pull Child Quote Details"}
+            </button>
+          </div>
+          ${
+            show.eventFolderDetailsError
+              ? `<div class="value" style="color:var(--red);margin-top:8px">${escapeHtml(
+                  show.eventFolderDetailsError
+                )}</div>`
+              : ""
+          }
+        </div>
+      `;
+    }
+
+    async function pullEventFolderChildDetails(showId) {
+      const index = activeShows.findIndex((item) => item.id === showId);
+      if (index < 0) return;
+
+      const show = activeShows[index];
+      const elementId =
+        show?.flex?.eventFolder?.elementId || show?.flex?.elementId || "";
+      if (!elementId) {
+        statusEl.textContent = "No Event Folder elementId available.";
+        return;
+      }
+
+      activeShows[index] = {
+        ...show,
+        eventFolderDetailsLoading: true,
+        eventFolderDetailsError: null,
+      };
+      rerenderAll();
+      statusEl.textContent = `Pulling Event Folder child details for ${show.name}...`;
+
+      try {
+        const response = await fetch(
+          `/api/flex/event-folder?elementId=${encodeURIComponent(
+            elementId
+          )}&includeChildDetails=true`
+        );
+        const data = await response.json();
+        if (!response.ok || data?.ok === false) {
+          throw new Error(data?.error || `HTTP ${response.status}`);
+        }
+
+        const childQuotes = Array.isArray(data.childQuotes)
+          ? data.childQuotes
+          : [];
+        const rollup = data.rollup || show.flex?.rollup || null;
+        const eventFolder = data.eventFolder || show.flex?.eventFolder || null;
+        const documents = childQuotes.map((child) => ({
+          status: "Event Folder Child",
+          approvalNeeded: false,
+          documentNumber: child.documentNumber || null,
+          elementId: child.elementId || null,
+          showName: child.name || null,
+          department: child.department || null,
+          primaryDepartment: child.primaryDepartment || null,
+          productFamily: child.productFamily || null,
+          fulfillmentModel: child.fulfillmentModel || null,
+          vendorManaged: child.vendorManaged ?? null,
+          transportationDependency: child.transportationDependency ?? null,
+          musicMattersTruckingRequired: child.musicMattersTruckingRequired ?? null,
+          tags: Array.isArray(child.tags) ? child.tags : [],
+          detail: child.detail || null,
+          detailError: child.detailError || null,
+        }));
+
+        activeShows[index] = {
+          ...activeShows[index],
+          eventFolderDetailsLoading: false,
+          eventFolderDetailsError: null,
+          flex: {
+            ...activeShows[index].flex,
+            eventFolder,
+            childQuotes,
+            rollup,
+            documents,
+            documentNumbers:
+              rollup?.documentNumbers ||
+              childQuotes.map((c) => c.documentNumber).filter(Boolean),
+            soldDepartments: rollup?.departments || activeShows[index].flex?.soldDepartments,
+            primary: eventFolder || activeShows[index].flex?.primary,
+          },
+          flexDocumentNumbers:
+            rollup?.documentNumbers ||
+            childQuotes.map((c) => c.documentNumber).filter(Boolean),
+        };
+
+        statusEl.textContent = `Event Folder child details loaded for ${show.name}: ${childQuotes.length} quotes.`;
+        rerenderAll();
+      } catch (error) {
+        activeShows[index] = {
+          ...activeShows[index],
+          eventFolderDetailsLoading: false,
+          eventFolderDetailsError: error.message || "Child detail pull failed.",
+        };
+        statusEl.textContent =
+          "Error pulling Event Folder child details: " + error.message;
+        rerenderAll();
+      }
     }
 
     function getPulledFlexData(show) {
@@ -1897,10 +2162,19 @@
           <div class="value">${escapeHtml(show.nextAction || "")}</div>
 
           ${truckingLine ? `<div class="label">Trucking</div><div class="value">${escapeHtml(truckingLine)}</div>` : ""}
+          ${renderEventFolderCardSummary(show)}
           ${renderSlackCardSummary(show)}
 
           <div class="card-footer">
-            <span class="progress">${escapeHtml(flexProgress)}</span>
+            <span class="progress">${escapeHtml(
+              isEventFolderFlex(show)
+                ? `Event Folder · ${
+                    show.flex?.rollup?.quoteCount ??
+                    getEventFolderChildQuotes(show).length ??
+                    hints.length
+                  } quotes`
+                : flexProgress
+            )}</span>
             <span>
               <button class="small ${isShowAskingFlex(show) ? "querying" : ""}" data-query-flex="${escapeHtml(show.id)}">${isShowAskingFlex(show) ? "Asking FLEX…" : "Query FLEX"}</button>
               <span class="open-link">Open show →</span>
@@ -2678,6 +2952,8 @@
 
           <div class="label">FLEX Signal</div>
           <div class="value">${escapeHtml(show.flexSignal || "")}</div>
+
+          ${renderEventFolderDetailSection(show)}
 
           <div class="label">Trucking Signal</div>
           <div class="value">${escapeHtml(show.trucking || "")}</div>
