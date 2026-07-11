@@ -618,6 +618,357 @@ async function fetchFlexShowIntake(elementId) {
   };
 }
 
+function buildFlexElementTreeUrl(elementId) {
+  const base = getFlexBaseUrl();
+  const url = new URL(
+    `${base}/api/element/${encodeURIComponent(elementId)}/tree`
+  );
+  url.searchParams.set("_dc", String(Date.now()));
+  return url;
+}
+
+async function fetchFlexElementTree(elementId) {
+  const id = String(elementId || "").trim();
+  if (!id) {
+    throw new Error("Missing required elementId for FLEX element tree.");
+  }
+
+  const url = buildFlexElementTreeUrl(id);
+  console.log("Fetching FLEX element tree from:", url.toString());
+  const data = await fetchJsonFromFlex(url);
+
+  return {
+    elementId: id,
+    requestUrl: url.toString(),
+    data,
+  };
+}
+
+function pickFirstString(obj, keys = []) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const key of keys) {
+    if (key.includes(".")) {
+      const parts = key.split(".");
+      let cursor = obj;
+      for (const part of parts) {
+        if (cursor == null || typeof cursor !== "object") {
+          cursor = null;
+          break;
+        }
+        cursor = cursor[part];
+      }
+      const value = normalizeFlexCellValue(cursor);
+      if (value != null && String(value).trim()) return String(value).trim();
+      continue;
+    }
+    const value = normalizeFlexCellValue(obj[key]);
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return null;
+}
+
+function looksLikeFlexTreeElementNode(node) {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return false;
+  const hasId = Boolean(
+    pickFirstString(node, [
+      "id",
+      "elementId",
+      "elementID",
+      "uuid",
+      "objectId",
+      "objectID",
+      "nodeId",
+    ])
+  );
+  const hasDoc = Boolean(
+    pickFirstString(node, [
+      "documentNumber",
+      "docNumber",
+      "number",
+      "quoteNumber",
+      "evNumber",
+      "document_number",
+    ])
+  );
+  const hasName = Boolean(
+    pickFirstString(node, [
+      "name",
+      "title",
+      "displayName",
+      "elementName",
+      "documentName",
+      "description",
+    ])
+  );
+  const hasChildrenKey =
+    "children" in node || "childNodes" in node || "nodes" in node;
+  return hasId || hasDoc || (hasName && hasChildrenKey);
+}
+
+function normalizeFlexElementTree(treeData) {
+  const nodes = [];
+  const seen = new Set();
+
+  function walk(value, parentHint = null) {
+    if (value == null) return;
+
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, parentHint);
+      return;
+    }
+
+    if (typeof value !== "object") return;
+
+    if (looksLikeFlexTreeElementNode(value)) {
+      const elementId = pickFirstString(value, [
+        "id",
+        "elementId",
+        "elementID",
+        "uuid",
+        "objectId",
+        "objectID",
+        "nodeId",
+      ]);
+      const documentNumber = pickFirstString(value, [
+        "documentNumber",
+        "docNumber",
+        "number",
+        "quoteNumber",
+        "evNumber",
+        "document_number",
+      ]);
+      const name = pickFirstString(value, [
+        "name",
+        "title",
+        "displayName",
+        "elementName",
+        "documentName",
+        "description",
+      ]);
+      const type =
+        pickFirstString(value, [
+          "type",
+          "elementType",
+          "elementTypeName",
+          "elementType.name",
+          "type.name",
+          "domainId",
+          "domain",
+        ]) || null;
+      const parentId =
+        pickFirstString(value, [
+          "parentId",
+          "parentElementId",
+          "parentUUID",
+          "parent.id",
+          "parent.elementId",
+        ]) ||
+        parentHint ||
+        null;
+
+      const dedupeKey = [
+        elementId || "",
+        documentNumber || "",
+        name || "",
+      ]
+        .join("|")
+        .toLowerCase();
+
+      if (!seen.has(dedupeKey) && (elementId || documentNumber || name)) {
+        seen.add(dedupeKey);
+        nodes.push({
+          elementId: elementId || null,
+          documentNumber: documentNumber || null,
+          name: name || null,
+          type,
+          parentId,
+          leaf: typeof value.leaf === "boolean" ? value.leaf : null,
+          domainId: pickFirstString(value, ["domainId", "domain"]) || null,
+        });
+      }
+
+      const nextParent = elementId || parentHint;
+      if (Array.isArray(value.children)) walk(value.children, nextParent);
+      if (Array.isArray(value.childNodes)) walk(value.childNodes, nextParent);
+      if (Array.isArray(value.nodes)) walk(value.nodes, nextParent);
+      return;
+    }
+
+    for (const nested of Object.values(value)) {
+      if (nested && typeof nested === "object") walk(nested, parentHint);
+    }
+  }
+
+  walk(treeData, null);
+  return nodes;
+}
+
+function classifyFlexEventFolderDepartment(name) {
+  const text = String(name || "").toLowerCase();
+  if (/\baudio\b/.test(text)) return "Audio";
+  if (/\blighting\b|\blx\b/.test(text)) return "Lighting";
+  if (/\bled\b/.test(text)) return "LED";
+  if (/\bvideo\b|\bimag\b|\bcamera\b/.test(text)) return "Video";
+  if (
+    /\brigging\b|\bproduction mgmt\b|\bproduction management\b|\bproduction\b/.test(
+      text
+    )
+  ) {
+    return "Rigging / Production";
+  }
+  if (/\bdelay\b/.test(text)) return "Delay";
+  if (/\btrailer\b|\btransportation\b|\btransport\b/.test(text)) {
+    return "Trailer / Transportation";
+  }
+  return "Other";
+}
+
+function isFlexQuoteDocumentNumber(value) {
+  return /^\d{2}-\d{4}$/.test(String(value || "").trim());
+}
+
+function dedupeFlexEventFolderNodes(nodes = []) {
+  const out = [];
+  const seen = new Set();
+  for (const node of nodes) {
+    const key = [
+      String(node.elementId || "").toLowerCase(),
+      String(node.documentNumber || "").toLowerCase(),
+      String(node.name || "").toLowerCase(),
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(node);
+  }
+  return out;
+}
+
+async function buildFlexEventFolderRollup(treeResult, options = {}) {
+  const requestedElementId = String(
+    options.elementId || treeResult?.elementId || ""
+  ).trim();
+  const includeRaw = Boolean(options.includeRaw);
+  const includeChildDetails = Boolean(options.includeChildDetails);
+
+  const normalizedNodes = dedupeFlexEventFolderNodes(
+    normalizeFlexElementTree(treeResult?.data)
+  );
+
+  let eventFolder =
+    normalizedNodes.find(
+      (node) =>
+        requestedElementId &&
+        String(node.elementId || "").toLowerCase() ===
+          requestedElementId.toLowerCase()
+    ) || null;
+
+  if (!eventFolder) {
+    eventFolder =
+      normalizedNodes.find((node) => {
+        const doc = String(node.documentNumber || "");
+        const typeName = `${node.type || ""} ${node.name || ""} ${node.domainId || ""}`;
+        return (
+          isFlexQuoteDocumentNumber(doc) &&
+          /event\s*folder|simple-project-element|project/i.test(typeName)
+        );
+      }) || null;
+  }
+
+  if (!eventFolder) {
+    eventFolder = normalizedNodes[0] || null;
+  }
+
+  const eventFolderDoc = String(eventFolder?.documentNumber || "").trim();
+
+  const childQuotes = dedupeFlexEventFolderNodes(
+    normalizedNodes
+      .filter((node) => {
+        const doc = String(node.documentNumber || "").trim();
+        if (!isFlexQuoteDocumentNumber(doc)) return false;
+        if (eventFolderDoc && doc === eventFolderDoc) return false;
+        if (
+          eventFolder?.elementId &&
+          node.elementId &&
+          String(node.elementId) === String(eventFolder.elementId)
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .map((node) => ({
+        ...node,
+        department: classifyFlexEventFolderDepartment(node.name),
+      }))
+  ).sort((a, b) =>
+    String(a.documentNumber || "").localeCompare(String(b.documentNumber || ""))
+  );
+
+  if (includeChildDetails) {
+    for (const child of childQuotes) {
+      if (!child.elementId) {
+        child.detailError = "Missing elementId for child quote.";
+        continue;
+      }
+      try {
+        const intake = await fetchFlexShowIntake(child.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+        const soldDepartments = Array.from(
+          new Set(
+            (detail.sections || [])
+              .map((section) => String(section?.name || "").trim())
+              .filter(Boolean)
+          )
+        );
+        child.detail = {
+          showContext: detail.showContext || null,
+          summary: detail.summary || null,
+          counts: detail.counts || null,
+          financials: detail.summary?.financials || detail.showContext?.financials || null,
+          sections: detail.sections || [],
+          soldDepartments,
+        };
+      } catch (error) {
+        child.detailError = error?.message || String(error);
+      }
+    }
+  }
+
+  const departments = Array.from(
+    new Set(childQuotes.map((child) => child.department).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b));
+
+  const documentNumbers = childQuotes
+    .map((child) => child.documentNumber)
+    .filter(Boolean);
+
+  const payload = {
+    elementId: requestedElementId || eventFolder?.elementId || null,
+    requestUrl: treeResult?.requestUrl || null,
+    eventFolder: eventFolder
+      ? {
+          elementId: eventFolder.elementId || null,
+          documentNumber: eventFolder.documentNumber || null,
+          name: eventFolder.name || null,
+          type: eventFolder.type || null,
+          parentId: eventFolder.parentId || null,
+          domainId: eventFolder.domainId || null,
+        }
+      : null,
+    childQuotes,
+    rollup: {
+      quoteCount: childQuotes.length,
+      departments,
+      documentNumbers,
+    },
+  };
+
+  if (includeRaw) {
+    payload.rawTree = treeResult?.data ?? null;
+  }
+
+  return payload;
+}
+
 
 function toNumber(value) {
   if (value == null) return 0;
@@ -5717,6 +6068,7 @@ function isAutomationAllowedPath(pathname) {
     "/api/flex/sales-goals-rollup",
     "/api/flex/sales-goals-row",
     "/api/flex/document-detail",
+    "/api/flex/event-folder",
     "/api/flex/find-quote",
     "/api/flex/search-quotes",
     "/api/flex/ask",
@@ -7819,6 +8171,37 @@ const server = http.createServer(async (req, res) => {
             }
           : null,
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/flex/event-folder") {
+      const elementId = url.searchParams.get("elementId");
+      if (!elementId) {
+        sendJson(res, 400, {
+          error: "Missing required query parameter: elementId",
+        });
+        return;
+      }
+
+      const includeChildDetails =
+        String(url.searchParams.get("includeChildDetails") || "")
+          .trim()
+          .toLowerCase() === "true" ||
+        url.searchParams.get("includeChildDetails") === "1";
+      const includeRaw =
+        String(url.searchParams.get("includeRaw") || "")
+          .trim()
+          .toLowerCase() === "true" ||
+        url.searchParams.get("includeRaw") === "1";
+
+      const treeResult = await fetchFlexElementTree(elementId);
+      const payload = await buildFlexEventFolderRollup(treeResult, {
+        elementId,
+        includeChildDetails,
+        includeRaw,
+      });
+
+      sendJson(res, 200, payload);
       return;
     }
 
