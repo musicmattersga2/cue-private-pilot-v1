@@ -647,6 +647,7 @@ function dedupeFindingsByCategory(findings) {
       map.set(key, {
         ...item,
         category: key,
+        evidence: cleanEvidenceText(item.evidence),
         sources: [...new Set(asStringArray(item.sources, 8))],
       });
       continue;
@@ -658,16 +659,13 @@ function dedupeFindingsByCategory(findings) {
         ...asStringArray(item.sources, 8),
       ]),
     ];
-    const evidenceParts = [existing.evidence, item.evidence]
-      .map((value) => String(value || "").trim())
-      .filter(Boolean);
-    const uniqueEvidence = [...new Set(evidenceParts)].join(" | ");
 
     map.set(key, {
       ...existing,
       status: maxStatus(existing.status, item.status),
       severity: severityForStatus(maxStatus(existing.status, item.status)),
-      evidence: uniqueEvidence || existing.evidence,
+      // Prefer deterministic evidence; only merge when the first entry had none.
+      evidence: existing.evidence || cleanEvidenceText(item.evidence),
       sources: mergedSources,
       action: existing.action || item.action,
       owner: existing.owner || item.owner,
@@ -678,6 +676,54 @@ function dedupeFindingsByCategory(findings) {
   }
 
   return [...map.values()];
+}
+
+function cleanEvidenceText(evidence) {
+  const parts = String(evidence || "")
+    .split(/\s*\|\s*/)
+    .map((part) => String(part || "").trim().replace(/\s+/g, " ").replace(/[.;:\s]+$/g, ""))
+    .filter(Boolean);
+
+  const unique = [];
+  for (const part of parts) {
+    const key = part.toLowerCase();
+    const subsumedIndex = unique.findIndex((existing) => {
+      const existingKey = existing.toLowerCase();
+      return existingKey.includes(key) || key.includes(existingKey);
+    });
+    if (subsumedIndex === -1) {
+      unique.push(part);
+      continue;
+    }
+    if (part.length > unique[subsumedIndex].length) {
+      unique[subsumedIndex] = part;
+    }
+  }
+
+  if (!unique.length) return "";
+  if (unique.length === 1) return unique[0].endsWith(".") ? unique[0] : `${unique[0]}.`;
+  return `${unique.join("; ")}.`;
+}
+
+function mergeEvidenceText(...values) {
+  return cleanEvidenceText(values.filter(Boolean).join(" | "));
+}
+
+function scrubExecutiveAssessment(text, maxSentences = 3) {
+  let cleaned = String(text || "")
+    .replace(/\boverallStatus is[^.?!]*(?:[.?!]|$)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "";
+
+  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned];
+  return sentences
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .slice(0, maxSentences)
+    .join(" ")
+    .trim();
 }
 
 function buildCoverageGaps(payload) {
@@ -778,7 +824,7 @@ function partitionOperationalBuckets(findings, payload) {
         severity: "medium",
         finding:
           Number(summary.maybeTruckRows || 0) > 0
-            ? `${summary.maybeTruckRows} Maybe Truck row(s) remain unresolved — confirm whether the extra truck(s) are required.`
+            ? `${summary.maybeTruckRows} Maybe Truck row(s) remain unresolved — confirm whether the unresolved Maybe Truck movements are required.`
             : item.finding,
       });
       crossSourceFindings.push({
@@ -1928,7 +1974,7 @@ export function buildFullShowOperationalFallback(payload) {
   if (flexSimple && truckingAttention) {
     const bits = [];
     if (Number(summary.rowsFound || 0) > 1) bits.push("multiple movements");
-    if (Number(summary.maybeTruckRows || 0) > 0) bits.push("unresolved Maybe Truck rows");
+    if (Number(summary.maybeTruckRows || 0) > 0) bits.push("unresolved Maybe Truck movements");
     if (
       Number(summary.infoSentFalse || 0) > 0 ||
       Number(summary.lpoSentFalse || 0) > 0
@@ -1938,13 +1984,25 @@ export function buildFullShowOperationalFallback(payload) {
     if (Number(summary.needDriverRows || 0) > 0) {
       bits.push("NEED DRIVER requirement(s)");
     }
+    if (Number(summary.tbdRows || 0) > 0) {
+      bits.push("TBD timing or equipment fields");
+    }
     const because = bits.length ? bits.join(", ") : "execution exceptions in Weekly Runs";
-    assessment = `FLEX scope appears simple, but trucking execution requires attention because Weekly Runs shows ${because}. ${statusReason}`;
+    assessment = `FLEX scope appears simple, but trucking execution needs review because Weekly Runs shows ${because}. Confirm open trucking items before treating the show as clear.`;
   } else if (overallStatus === "clear") {
-    assessment = `Connected sources for ${payload.show?.name || "this show"} do not currently show material cross-source operational exceptions. ${statusReason}`;
+    assessment = `Connected sources for ${payload.show?.name || "this show"} do not currently show material cross-source operational exceptions.`;
   } else {
-    assessment = `${payload.show?.name || "This show"} needs operational follow-up across connected sources. ${statusReason}`;
+    const bits = [];
+    if (Number(summary.maybeTruckRows || 0) > 0) bits.push("unresolved Maybe Truck movements");
+    if (Number(summary.infoSentFalse || 0) > 0 || Number(summary.lpoSentFalse || 0) > 0) {
+      bits.push("incomplete Info/LPO administration");
+    }
+    if (Number(summary.tbdRows || 0) > 0) bits.push("TBD fields");
+    if (Number(summary.needDriverRows || 0) > 0) bits.push("NEED DRIVER rows");
+    const because = bits.length ? bits.join(", ") : "open items across connected sources";
+    assessment = `${payload.show?.name || "This show"} needs operational follow-up. Weekly Runs and related FLEX workstreams show ${because}. Confirm those items before execution.`;
   }
+  assessment = scrubExecutiveAssessment(assessment, 3);
 
   const dateRange = [
     payload.show?.loadInDate || payload.show?.plannedStartDate || null,
@@ -2033,7 +2091,10 @@ export function buildFullShowOperationalFallback(payload) {
           ? ["Review warehouse pull scope against FLEX equipment families."]
           : [],
     },
-    crossSourceFindings: buckets.crossSourceFindings,
+    crossSourceFindings: buckets.crossSourceFindings.map((item) => ({
+      ...item,
+      evidence: cleanEvidenceText(item.evidence),
+    })),
     confirmedIssues: confirmedIssueTexts,
     confirmedIssueDetails: buckets.confirmedIssues,
     needsConfirmation: needsConfirmationTexts,
@@ -2118,10 +2179,8 @@ export function normalizeFullShowOperationalAnalysis(raw, fallback, payload) {
     finalAssessment = fb.assessment;
   }
 
-  // Ensure assessment states the deterministic status driver.
-  if (!/overallStatus is/i.test(finalAssessment)) {
-    finalAssessment = `${finalAssessment} ${statusReason}`.trim();
-  }
+  // Keep statusReason in payload for debugging; scrub it out of executive assessment copy.
+  finalAssessment = scrubExecutiveAssessment(finalAssessment, 3) || scrubExecutiveAssessment(fb.assessment, 3);
 
   let complexityLevel = clampEnum(
     base.complexityLevel,
@@ -2191,7 +2250,10 @@ export function normalizeFullShowOperationalAnalysis(raw, fallback, payload) {
       findings: asStringArray(fb.warehouse?.findings, 4),
       actions: asStringArray(fb.warehouse?.actions, 3),
     },
-    crossSourceFindings: buckets.crossSourceFindings,
+    crossSourceFindings: buckets.crossSourceFindings.map((item) => ({
+      ...item,
+      evidence: cleanEvidenceText(item.evidence),
+    })),
     confirmedIssues: buckets.confirmedIssues.map((item) => item.finding),
     confirmedIssueDetails: buckets.confirmedIssues,
     needsConfirmation: buckets.needsConfirmation.map((item) => item.finding),
@@ -2210,7 +2272,7 @@ Ask FLEX Full Show Operational Review rules:
 
 1. Analyze the whole show across connected sources: FLEX, Trucking Weekly Runs, Active Shows Index.
 2. Never invent quantities, dates, trucks, drivers, or conflicts.
-3. The most operationally significant evidence across sources drives the final assessment. Explicitly state which evidence drives overallStatus.
+3. The most operationally significant evidence across sources drives the final assessment. Write assessment in concise operating language (max 3 sentences). Do not include internal phrasing like "overallStatus is...".
 4. If FLEX looks simple but trucking has multiple movements / Maybe Truck / NEED DRIVER / incomplete Info/LPO, overall status must NOT be clear and complexity must NOT stay Low solely due to FLEX.
 5. Explicit trucking Weekly Runs evidence overrides quote-only assumptions.
 6. Do not suppress NEED DRIVER when trucking rows contain it. NEED DRIVER is an execution-impacting issue and may justify at_risk.
@@ -2302,7 +2364,7 @@ export async function buildFullShowOperationalAnalysis(payload, deps = {}) {
             required_schema: {
               headline: "Full Show Operational Review",
               scopeLabel: "CUE Full Show Review",
-              assessment: "2-3 concise sentences that state which evidence drives overallStatus",
+              assessment: "2-3 concise operating sentences; no internal overallStatus phrasing",
               overallStatus: "clear | review_needed | at_risk | blocked",
               complexityLevel: "Low | Medium | High",
               confidence: "low | medium | high",
@@ -2373,7 +2435,7 @@ export async function buildFullShowOperationalAnalysis(payload, deps = {}) {
             },
             compact_payload: compactPayload,
             fallback_assessment_example:
-              "FLEX scope appears simple, but trucking execution requires attention because Weekly Runs shows multiple movements, unresolved Maybe Truck rows, and incomplete Info/LPO administration. overallStatus is review_needed because unresolved Maybe Truck row(s), incomplete Info Sent, incomplete LPO Sent.",
+              "FLEX scope appears simple, but trucking execution needs review because Weekly Runs shows multiple movements, unresolved Maybe Truck movements, and incomplete Info/LPO administration. Confirm open trucking items before treating the show as clear.",
           }),
         },
       ],

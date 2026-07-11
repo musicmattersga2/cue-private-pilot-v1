@@ -2,6 +2,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { execSync } from "child_process";
 import OpenAI from "openai";
 import "dotenv/config";
 import {
@@ -15,6 +16,33 @@ const ASK_FLEX_HTML_FILE = path.resolve("./ask-flex.html");
 const CUE_PILOT_PASSWORD = process.env.CUE_PILOT_PASSWORD || "";
 const CUE_PILOT_SESSION_SECRET =
   process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
+
+function resolveCueBuildId() {
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return process.env.CUE_BUILD_ID || "unknown";
+  }
+}
+
+function resolveCueBuildBranch() {
+  try {
+    return execSync("git branch --show-current", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return process.env.CUE_BUILD_BRANCH || "unknown";
+  }
+}
+
+// Temporary build identifier so browser/API can confirm the intended server build.
+const CUE_BUILD_ID = resolveCueBuildId();
+const CUE_BUILD_BRANCH = resolveCueBuildBranch();
+const CUE_BUILD_LABEL = `${CUE_BUILD_BRANCH}@${CUE_BUILD_ID}`;
 
 
 const openai = new OpenAI({
@@ -3095,6 +3123,9 @@ function buildFlexAskBriefPayload(fullResult) {
     answer: fullResult?.answer || result?.answer || "",
     headline: result?.headline || null,
     warnings: summary?.warnings || [],
+    cueBuildId: CUE_BUILD_ID,
+    cueBuildBranch: CUE_BUILD_BRANCH,
+    cueBuildLabel: CUE_BUILD_LABEL,
   };
 
   if (fullResult?.needsSelection) {
@@ -7184,7 +7215,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/ask-flex") {
-      const html = fs.readFileSync(ASK_FLEX_HTML_FILE, "utf8");
+      let html = fs.readFileSync(ASK_FLEX_HTML_FILE, "utf8");
+      html = html
+        .replaceAll("__CUE_BUILD_ID__", CUE_BUILD_ID)
+        .replaceAll("__CUE_BUILD_BRANCH__", CUE_BUILD_BRANCH)
+        .replaceAll("__CUE_BUILD_LABEL__", CUE_BUILD_LABEL);
 
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
@@ -7818,7 +7853,8 @@ console.log("[CUE AI MODEL SELECT]", {
 });
 
 server.listen(PORT, () => {
-    console.log(`CUE FLEX Intelligence Server running at http://localhost:${PORT}`);
+  console.log(`CUE FLEX Intelligence Server running at http://localhost:${PORT}`);
+  console.log(`CUE build: ${CUE_BUILD_LABEL}`);
 
   if (!CUE_PILOT_PASSWORD) {
     console.warn("WARNING: CUE_PILOT_PASSWORD is not set. Password gate is disabled for local development.");

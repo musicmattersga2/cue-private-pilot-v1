@@ -918,6 +918,10 @@
           </details>
         </div>
       </div>
+
+      <div id="cueBuildFooter" class="hint" style="margin-top:18px;opacity:0.75">
+        CUE build: <span id="cueBuildLabel">__CUE_BUILD_LABEL__</span>
+      </div>
     </section>
   </main>
 
@@ -1835,7 +1839,15 @@
           : Array.isArray(data.flexScope?.relatedWorkstreams)
             ? data.flexScope.relatedWorkstreams
             : [];
-      const statusReason = String(data.statusReason || "").trim();
+
+      const connectedSourceCount = sourceCoverage.filter((item) => {
+        const status = String(item?.status || "").toLowerCase();
+        return status === "connected" || status === "fallback" || status === "partial";
+      }).length;
+      const unavailableSourceCount = Math.max(0, sourceCoverage.length - connectedSourceCount);
+      const sourceSummaryLabel = sourceCoverage.length
+        ? `${connectedSourceCount} connected · ${unavailableSourceCount} unavailable`
+        : "0 connected · 0 unavailable";
 
       const showBits = [
         show.showName || data.showName || null,
@@ -1844,9 +1856,29 @@
         show.dateRange || null,
         relatedQuotes.length ? `Quotes ${relatedQuotes.join(", ")}` : null,
         Array.isArray(show.projectManagers) && show.projectManagers.length
-          ? `PM ${show.projectManagers.join(", ")}`
+          ? `FLEX PM field: ${show.projectManagers.join(", ")}`
           : null,
       ].filter(Boolean);
+
+      const cleanEvidenceDisplay = (evidence) => {
+        const parts = String(evidence || "")
+          .split(/\s*\|\s*/)
+          .map((part) => part.trim().replace(/\s+/g, " "))
+          .filter(Boolean);
+        const unique = [];
+        for (const part of parts) {
+          const key = part.toLowerCase();
+          const idx = unique.findIndex((existing) => {
+            const existingKey = existing.toLowerCase();
+            return existingKey.includes(key) || key.includes(existingKey);
+          });
+          if (idx === -1) unique.push(part);
+          else if (part.length > unique[idx].length) unique[idx] = part;
+        }
+        if (!unique.length) return "";
+        if (unique.length === 1) return unique[0];
+        return `${unique.join("; ")}.`.replace(/\.\.+$/, ".");
+      };
 
       const coverageHtml = sourceCoverage.length
         ? `
@@ -1887,7 +1919,7 @@
                     ${statusRaw ? `<span>${escapeHtml(formatOverallStatusLabel(statusRaw))}</span>` : ""}
                   </div>
                   <div>${escapeHtml(flag.finding || "")}</div>
-                  ${flag.evidence ? `<div class="hint">Evidence: ${escapeHtml(flag.evidence)}</div>` : ""}
+                  ${flag.evidence ? `<div class="hint">Evidence: ${escapeHtml(cleanEvidenceDisplay(flag.evidence))}</div>` : ""}
                   ${sources ? `<div class="hint">Sources: ${escapeHtml(sources)}</div>` : ""}
                 </div>
               `;
@@ -1963,9 +1995,8 @@
           <span class="ops-pill ready-${escapeHtml(overall)}"><strong>Overall</strong> ${escapeHtml(formatOverallStatusLabel(overall))}</span>
           <span class="ops-pill"><strong>Complexity</strong> ${escapeHtml(data.complexityLevel || "—")}</span>
           ${data.confidence ? `<span class="ops-pill confidence-pill">${escapeHtml(formatConfidenceLabel(data.confidence))} confidence</span>` : ""}
-          <span class="ops-pill"><strong>Sources</strong> ${escapeHtml(String(sourceCoverage.length || 0))}</span>
+          <span class="ops-pill"><strong>Sources</strong> ${escapeHtml(sourceSummaryLabel)}</span>
         </div>
-        ${statusReason ? `<div class="hint" style="margin-top:8px">${escapeHtml(statusReason)}</div>` : ""}
         ${coverageHtml}
         <div class="ops-grid">
           ${renderOpsDeptCard("FLEX Scope", data.flexScope)}
@@ -2010,10 +2041,22 @@
       }
     }
 
+    function updateBuildFooter(data) {
+      const labelEl = document.getElementById("cueBuildLabel");
+      if (!labelEl) return;
+      const label =
+        data?.cueBuildLabel ||
+        (data?.cueBuildBranch && data?.cueBuildId
+          ? `${data.cueBuildBranch}@${data.cueBuildId}`
+          : data?.cueBuildId || null);
+      if (label) labelEl.textContent = label;
+    }
+
     function renderAnswer(data) {
       headlineEl.textContent = data.headline || "Answer";
       answerEl.textContent = data.answer || "";
       renderMeta(data);
+      updateBuildFooter(data);
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
