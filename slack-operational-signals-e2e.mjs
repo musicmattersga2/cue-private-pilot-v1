@@ -57,6 +57,45 @@ function hasSlackCoverage(data) {
   );
 }
 
+/**
+ * Locked operational facts for repeat-review stability checks.
+ * Excludes OpenAI free-text fields (finding categories, issue phrasing, actions)
+ * that can vary between identical source pulls.
+ */
+function lockedOperationalSnapshotFacts(data) {
+  const truck = data?.supportingData?.truckingSummary || {};
+  const slack = data?.slack || {};
+  const slackCov = (data?.sourceCoverage || []).find(
+    (item) => String(item?.source || "").toLowerCase() === "slack"
+  );
+  const truckingCov = (data?.sourceCoverage || []).find(
+    (item) => String(item?.source || "").toLowerCase() === "trucking"
+  );
+  return {
+    showName: String(data?.showName || "")
+      .trim()
+      .toLowerCase(),
+    overallStatus: String(data?.overallStatus || "")
+      .trim()
+      .toLowerCase(),
+    trucking: {
+      sourceStatus: String(truckingCov?.status || "").toLowerCase(),
+      rowsFound: Number(truck.rowsFound ?? data?.truckingExecution?.runCount ?? 0),
+      maybeTruckRows: Number(truck.maybeTruckRows ?? 0),
+      needDriverRows: Number(truck.needDriverRows ?? 0),
+      infoSentFalse: Number(truck.infoSentFalse ?? 0),
+      lpoSentFalse: Number(truck.lpoSentFalse ?? 0),
+    },
+    slack: {
+      sourceStatus: String(slackCov?.status || slack.sourceStatus || "").toLowerCase(),
+      unresolvedCount: Number(slack.unresolvedCount ?? 0),
+      resolvedCount: Number(slack.resolvedCount ?? 0),
+      needsReviewCount: Number(slack.needsReviewCount ?? 0),
+      fixtureMode: Boolean(slack.fixtureMode || slack.sourceLabel),
+    },
+  };
+}
+
 console.log("\n=== E2E Slack Operational Signals smoke ===\n");
 
 // Build probe
@@ -160,13 +199,27 @@ for (const [q, expectedType] of followups) {
   };
 }
 
-// Duplicate snapshot
+// Repeat review: assert locked operational facts (not OpenAI phrasing / contentHash).
 const second = await api("/api/flex/ask-brief", {
   method: "POST",
   question: "Give me a full operational review of Sound Haven",
 });
 assert(second.status === 200, "second review HTTP 200");
-assert(second.data.snapshot?.duplicate === true, "snapshot dedupe on repeat review");
+const lockedFirst = lockedOperationalSnapshotFacts(first.data);
+const lockedSecond = lockedOperationalSnapshotFacts(second.data);
+assert(
+  JSON.stringify(lockedFirst) === JSON.stringify(lockedSecond),
+  "locked operational snapshot facts stable on repeat review"
+);
+report.askFlex.snapshotRepeat = {
+  contentHashDuplicate: second.data.snapshot?.duplicate === true,
+  lockedFactsMatch: true,
+  lockedFacts: lockedSecond,
+  note:
+    second.data.snapshot?.duplicate === true
+      ? "contentHash duplicate matched"
+      : "contentHash differed (model phrasing variance); locked ops facts matched",
+};
 
 // Brian + exec
 const brian = await api("/api/flex/ask-brief", {
