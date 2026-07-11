@@ -7,11 +7,13 @@ import { createSlackOperationalSignalsStore } from "./slack-operational-signals-
 import {
   normalizeSlackMessage,
   isOperationallyRelevant,
+  isSlackSystemNoise,
   slackTsToIso,
 } from "./slack-operational-signals-normalize.mjs";
 import {
   matchSlackMessageToShows,
   pickPrimaryMatch,
+  buildShowNameAliases,
 } from "./slack-operational-signals-match.mjs";
 
 function asString(value) {
@@ -108,11 +110,98 @@ export function createSlackOperationalSignalsService(options = {}) {
     options.channelIds ||
     parseChannelIds(process.env.SLACK_OPERATIONAL_CHANNEL_IDS);
 
+  let getCandidateShows =
+    typeof options.getCandidateShows === "function"
+      ? options.getCandidateShows
+      : async () => [];
+  let resolveQuoteCandidate =
+    typeof options.resolveQuoteCandidate === "function"
+      ? options.resolveQuoteCandidate
+      : null;
+
   let syncInProgress = false;
   let intervalHandle = null;
 
+  function configureMatching(next = {}) {
+    if (typeof next.getCandidateShows === "function") {
+      getCandidateShows = next.getCandidateShows;
+    }
+    if (typeof next.resolveQuoteCandidate === "function") {
+      resolveQuoteCandidate = next.resolveQuoteCandidate;
+    }
+  }
+
   function isConfigured() {
     return client.isConfigured() && channelIds.length > 0;
+  }
+
+  async function loadBaseCandidates(syncOptions = {}) {
+    if (syncOptions.candidateShows) {
+      return await Promise.resolve(syncOptions.candidateShows);
+    }
+    if (typeof getCandidateShows === "function") {
+      return (await getCandidateShows()) || [];
+    }
+    return [];
+  }
+
+  async function expandCandidatesForQuotes(baseCandidates, messages = []) {
+    const candidates = [...(baseCandidates || [])];
+    const knownDocs = new Set(
+      candidates.flatMap((show) =>
+        (show.documentNumbers || show.relatedQuotes || []).map((d) =>
+          String(d).toLowerCase()
+        )
+      )
+    );
+    const quotes = new Set();
+    for (const message of messages || []) {
+      for (const quote of message?.extractedEntities?.quotes || []) {
+        quotes.add(String(quote).trim());
+      }
+    }
+    if (!resolveQuoteCandidate) return candidates;
+
+    for (const quote of quotes) {
+      if (!quote || knownDocs.has(quote.toLowerCase())) continue;
+      try {
+        const resolved = await resolveQuoteCandidate(quote);
+        if (!resolved) continue;
+        const docs = (resolved.documentNumbers || [quote]).map((d) =>
+          String(d).toLowerCase()
+        );
+        docs.forEach((d) => knownDocs.add(d));
+        candidates.push({
+          ...resolved,
+          aliases: resolved.aliases || buildShowNameAliases(resolved.showName || resolved.name),
+          source: resolved.source || "flex_quote_lookup",
+        });
+      } catch (error) {
+        // Quote resolution is best-effort; leave unmatched rather than fail sync.
+        console.warn(
+          "[CUE SLACK SIGNALS] Quote candidate resolve failed.",
+          quote,
+          asString(error?.message || error)
+        );
+      }
+    }
+    return candidates;
+  }
+
+  function applyMatches(message, candidateShows) {
+    if (isSlackSystemNoise(message)) {
+      return {
+        ...message,
+        matches: [],
+        matchState: "excluded_system",
+      };
+    }
+    const matches = matchSlackMessageToShows(message, candidateShows);
+    return {
+      ...message,
+      matches,
+      matchState: pickPrimaryMatch(matches)?.matchState || "general_queue",
+    };
   }
 
   async function resolveAuthorName(userId, cacheUsers) {
@@ -216,11 +305,7 @@ export function createSlackOperationalSignalsService(options = {}) {
     client.resetTelemetry?.();
 
     try {
-      const candidateShows = syncOptions.candidateShows
-        ? await Promise.resolve(syncOptions.candidateShows)
-        : typeof options.getCandidateShows === "function"
-          ? await options.getCandidateShows()
-          : [];
+      let candidateShows = await loadBaseCandidates(syncOptions);
       const knownShowNames = candidateShows.map((s) => s.showName || s.name).filter(Boolean);
       const knownClients = candidateShows.map((s) => s.client).filter(Boolean);
       const knownVenues = candidateShows.map((s) => s.venue).filter(Boolean);
@@ -282,11 +367,14 @@ export function createSlackOperationalSignalsService(options = {}) {
                 }
               }
 
-              // Material edit or first sighting: rematch cleanly (do not carry reject/approve).
-              const matches = matchSlackMessageToShows(normalized, candidateShows);
-              normalized.matches = matches;
-              normalized.matchState = pickPrimaryMatch(matches)?.matchState || "general_queue";
+              candidateShows = await expandCandidatesForQuotes(candidateShows, [
+                normalized,
+              ]);
+              normalized = applyMatches(normalized, candidateShows);
               normalized.manualDecision = null;
+            } else if (isSlackSystemNoise(normalized)) {
+              normalized.matches = [];
+              normalized.matchState = "excluded_system";
             }
 
             // Fetch replies for operational parents / entity-bearing replies.
@@ -310,13 +398,10 @@ export function createSlackOperationalSignalsService(options = {}) {
                   });
                   replyNorm.threadParentMatch = pickPrimaryMatch(normalized.matches || []);
                   if (isOperationallyRelevant(replyNorm) || replyNorm.threadParentMatch) {
-                    const replyMatches = matchSlackMessageToShows(
+                    candidateShows = await expandCandidatesForQuotes(candidateShows, [
                       replyNorm,
-                      candidateShows
-                    );
-                    replyNorm.matches = replyMatches;
-                    replyNorm.matchState =
-                      pickPrimaryMatch(replyMatches)?.matchState || "general_queue";
+                    ]);
+                    replyNorm = applyMatches(replyNorm, candidateShows);
                     normalizedBatch.push(replyNorm);
                     if (!maxPersistedTs || replyNorm.ts > maxPersistedTs) {
                       maxPersistedTs = replyNorm.ts;
@@ -366,6 +451,13 @@ export function createSlackOperationalSignalsService(options = {}) {
         telemetry.status = "error";
       } else if (telemetry.errors.length && telemetry.channelsSucceeded) {
         telemetry.status = "partial";
+      }
+
+      // Always rematch the cache with current Active Shows + quote fallbacks
+      // before queue counts are considered current.
+      if (telemetry.status === "ok" || telemetry.status === "partial") {
+        const rematch = await rematchAll(candidateShows, { expandQuotes: true });
+        telemetry.rematch = rematch;
       }
 
       telemetry.completedAt = new Date().toISOString();
@@ -590,39 +682,56 @@ export function createSlackOperationalSignalsService(options = {}) {
     return store.rejectMatch(signalId, reason);
   }
 
-  async function rematchAll(candidateShows = []) {
+  async function rematchAll(candidateShowsInput = null, rematchOptions = {}) {
     const snap = await store.read();
+    const messages = Object.values(snap.messages || {});
+    let candidateShows =
+      candidateShowsInput != null
+        ? await Promise.resolve(candidateShowsInput)
+        : await loadBaseCandidates({});
+    if (rematchOptions.expandQuotes !== false) {
+      candidateShows = await expandCandidatesForQuotes(candidateShows, messages);
+    }
+
     const updated = [];
-    for (const message of Object.values(snap.messages || {})) {
+    for (const message of messages) {
       if (message.deleted) continue;
       if (message.manualDecision && message.contentHash) {
         // Keep manual decisions unless caller forces later.
         updated.push(message);
         continue;
       }
-      const matches = matchSlackMessageToShows(message, candidateShows);
+      const next = applyMatches(message, candidateShows);
       updated.push({
-        ...message,
-        matches,
-        matchState: pickPrimaryMatch(matches)?.matchState || "general_queue",
+        ...next,
         updatedAt: new Date().toISOString(),
       });
     }
     await store.upsertMessages(updated);
-    return { rematched: updated.length };
+    return {
+      rematched: updated.length,
+      candidateShowCount: candidateShows.length,
+      candidateQuoteNumbers: [
+        ...new Set(
+          candidateShows.flatMap((show) => show.documentNumbers || []).filter(Boolean)
+        ),
+      ],
+    };
   }
 
-  function startBackgroundSync(getCandidateShows) {
+  function startBackgroundSync(getCandidateShowsFn) {
     const minutes = Number(process.env.SLACK_OPERATIONAL_SYNC_INTERVAL_MINUTES || 0);
     if (!minutes || minutes < 5) return null;
     if (intervalHandle) return intervalHandle;
     const ms = minutes * 60 * 1000;
     intervalHandle = setInterval(() => {
-      syncSlackOperationalSignals({
-        candidateShows: typeof getCandidateShows === "function" ? getCandidateShows() : [],
-      }).catch((error) => {
-        console.warn("[CUE SLACK SIGNALS] Background sync failed.", error?.message || error);
-      });
+      const loader =
+        typeof getCandidateShowsFn === "function" ? getCandidateShowsFn : getCandidateShows;
+      Promise.resolve(typeof loader === "function" ? loader() : [])
+        .then((candidateShows) => syncSlackOperationalSignals({ candidateShows }))
+        .catch((error) => {
+          console.warn("[CUE SLACK SIGNALS] Background sync failed.", error?.message || error);
+        });
     }, ms);
     if (typeof intervalHandle.unref === "function") intervalHandle.unref();
     return intervalHandle;
@@ -630,6 +739,7 @@ export function createSlackOperationalSignalsService(options = {}) {
 
   return {
     isConfigured,
+    configureMatching,
     syncSlackOperationalSignals,
     getSlackSignalsForShow,
     getSlackNeedsReviewQueue,
@@ -643,6 +753,8 @@ export function createSlackOperationalSignalsService(options = {}) {
     store,
     client,
     toPublicSignal,
+    loadBaseCandidates,
+    expandCandidatesForQuotes,
   };
 }
 

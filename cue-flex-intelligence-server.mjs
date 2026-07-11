@@ -59,6 +59,19 @@ const SLACK_FIXTURE_MODE =
   String(process.env.SLACK_OPERATIONAL_FIXTURE_MODE || "").trim() === "1" ||
   String(process.env.SLACK_OPERATIONAL_FIXTURE_MODE || "").toLowerCase() === "true";
 
+/** Wired after Active Shows helpers exist inside the HTTP server bootstrap. */
+const slackMatchDeps = {
+  getCandidateShows: async () => [],
+  resolveQuoteCandidate: null,
+};
+
+slackOperationalSignalsService.configureMatching({
+  getCandidateShows: (...args) => slackMatchDeps.getCandidateShows(...args),
+  resolveQuoteCandidate: (...args) =>
+    typeof slackMatchDeps.resolveQuoteCandidate === "function"
+      ? slackMatchDeps.resolveQuoteCandidate(...args)
+      : null,
+});
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -1637,6 +1650,159 @@ async function findFlexQuoteByDocumentNumber(documentNumber) {
     })),
     requestUrl: searchResult.requestUrl,
     rawCount: results.length,
+  };
+}
+
+function extractQuoteNumbersFromText(value) {
+  const matches = String(value || "").match(/\b\d{2}-\d{3,6}\b/g) || [];
+  return [...new Set(matches.map((item) => item.trim()))];
+}
+
+function buildSlackCandidateFromActiveShow(show) {
+  const showName = show?.name || show?.showName || "Unnamed Show";
+  const documentNumbers = [
+    ...extractQuoteNumbersFromText(
+      [
+        show?.id,
+        showName,
+        show?.timing,
+        show?.priority,
+        show?.readinessStatus,
+        show?.changeSignal,
+        show?.topIssue,
+        show?.nextAction,
+        show?.flexSignal,
+        show?.trucking,
+        show?.activeShowsIndex?.keyDocs,
+      ]
+        .filter(Boolean)
+        .join(" ")
+    ),
+    ...(Array.isArray(show?.flexDocumentNumbers) ? show.flexDocumentNumbers : []),
+    ...(Array.isArray(show?.flex?.documentNumbers) ? show.flex.documentNumbers : []),
+    ...(Array.isArray(show?.flex?.childQuotes)
+      ? show.flex.childQuotes.map((child) => child.documentNumber).filter(Boolean)
+      : []),
+  ];
+
+  const daysOutRaw =
+    show?.activeShowsIndex?.daysOut ??
+    show?.daysOut ??
+    (String(show?.timing || "").match(/(\d+)\s*days?\s*out/i) || [])[1] ??
+    null;
+
+  return {
+    showKey: show?.id || normalizeShowKey(showName),
+    showName,
+    client: show?.activeShowsIndex?.client || show?.client || null,
+    venue: show?.venue || null,
+    documentNumbers: [...new Set(documentNumbers.map((d) => String(d).trim()).filter(Boolean))],
+    aliases: [],
+    plannedStartDate: show?.flex?.plannedStartDate || null,
+    plannedEndDate: show?.flex?.plannedEndDate || null,
+    loadInDate: show?.flex?.loadInDate || null,
+    loadOutDate: show?.flex?.loadOutDate || null,
+    departments: Array.isArray(show?.flex?.soldDepartments)
+      ? show.flex.soldDepartments
+      : Array.isArray(show?.flex?.rollup?.departments)
+        ? show.flex.rollup.departments
+        : [],
+    daysOut: daysOutRaw,
+    status: show?.readinessStatus || show?.status || null,
+    source: "active_shows",
+  };
+}
+
+async function resolveSlackCandidateFromFlexQuote(documentNumber) {
+  const wanted = String(documentNumber || "").trim();
+  if (!wanted) return null;
+
+  // FLEX global search often returns an unrelated top hit with no documentNumber
+  // on the search payload. Never trust candidates[0] alone for Slack auto-attach.
+  const searchResult = await fetchFlexSearch(wanted);
+  const results = normalizeFlexSearchResults(searchResult.data);
+  const searchCandidates = results
+    .map((result) => ({
+      elementId: extractSearchResultId(result),
+      name:
+        result?.name ||
+        result?.displayName ||
+        result?.preferredDisplayString ||
+        result?.text ||
+        result?.label ||
+        null,
+      documentNumber:
+        result?.documentNumber ||
+        result?.number ||
+        result?.docNumber ||
+        result?.identifier ||
+        null,
+    }))
+    .filter((candidate) => candidate.elementId)
+    .slice(0, 8);
+
+  if (!searchCandidates.length) return null;
+
+  const wantedLower = wanted.toLowerCase();
+  const exactSearchHits = searchCandidates.filter(
+    (candidate) =>
+      String(candidate.documentNumber || "").trim().toLowerCase() === wantedLower
+  );
+
+  const ranked = exactSearchHits.length ? exactSearchHits : searchCandidates;
+  let verified = null;
+
+  for (const candidate of ranked) {
+    try {
+      const intake = await fetchFlexShowIntake(candidate.elementId);
+      const ctx = intake?.showContext || {};
+      const headerDoc = String(ctx.documentNumber || "").trim();
+      const headerMatches = headerDoc.toLowerCase() === wantedLower;
+      if (!headerMatches) continue;
+
+      const nameBlob = `${candidate.name || ""} ${ctx.showName || ""}`.toLowerCase();
+      const nameMentionsDoc = nameBlob.includes(wantedLower);
+      const searchHadExactDoc =
+        String(candidate.documentNumber || "").trim().toLowerCase() === wantedLower;
+
+      // Header can echo a searched number on the wrong element after a weak
+      // global-search fallback. Require the quote number to appear on the search
+      // hit itself or in the show/quote name before promoting a Slack candidate.
+      if (!searchHadExactDoc && !nameMentionsDoc) {
+        continue;
+      }
+
+      verified = {
+        elementId: candidate.elementId,
+        showName: ctx.showName || candidate.name || wanted,
+        ctx,
+        headerDoc,
+      };
+      break;
+    } catch {
+      // Best-effort enrichment; try the next search hit.
+    }
+  }
+
+  if (!verified) return null;
+
+  const showName = verified.showName;
+  return {
+    showKey: normalizeShowKey(`${showName}-${wanted}`),
+    showName,
+    client: verified.ctx.client || null,
+    venue: verified.ctx.venue || null,
+    documentNumbers: [...new Set([wanted, verified.headerDoc].filter(Boolean))],
+    aliases: [],
+    plannedStartDate: verified.ctx.plannedStartDate || null,
+    plannedEndDate: verified.ctx.plannedEndDate || null,
+    loadInDate: verified.ctx.loadInDate || null,
+    loadOutDate: verified.ctx.loadOutDate || null,
+    showStartDate: verified.ctx.showStartDate || null,
+    departments: [],
+    source: "flex_quote_lookup",
+    elementId: verified.elementId,
+    quoteVerified: true,
   };
 }
 
@@ -8015,6 +8181,18 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Wire Slack matching candidates: Active Shows (+ Event Folder hints) and
+    // live FLEX quote fallback for exact document numbers.
+    slackMatchDeps.getCandidateShows = async () => {
+      const source = await getActiveShowsRowsWithFallback();
+      const shows = [
+        ...source.shows,
+        ...buildMissingEventFolderHintShows(source.shows),
+      ];
+      return shows.map(buildSlackCandidateFromActiveShow);
+    };
+    slackMatchDeps.resolveQuoteCandidate = resolveSlackCandidateFromFlexQuote;
+
     async function buildActiveShowsResponse(sourceLabel) {
       const activeShowsSource = await getActiveShowsRowsWithFallback();
       const showsWithHints = [
@@ -8473,7 +8651,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/rematch") {
-      const result = await slackOperationalSignalsService.rematchAll([]);
+      const result = await slackOperationalSignalsService.rematchAll(null, {
+        expandQuotes: true,
+      });
       sendJson(res, 200, { ok: true, ...result });
       return;
     }

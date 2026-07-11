@@ -22,6 +22,8 @@ import {
 import {
   matchSlackMessageToShows,
   scoreMatchConfidence,
+  buildShowNameAliases,
+  stripShowNameDecorations,
 } from "./slack-operational-signals-match.mjs";
 import {
   createSlackOperationalSignalsService,
@@ -661,6 +663,187 @@ console.log("\nservice: fixture cache ignored when fixture mode off");
 
   if (prev == null) delete process.env.SLACK_OPERATIONAL_FIXTURE_MODE;
   else process.env.SLACK_OPERATIONAL_FIXTURE_MODE = prev;
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log("\nalias / fuzzy / ambiguity matching");
+{
+  assert(
+    stripShowNameDecorations("Paul Simon LED Wall - 2026") === "paul simon",
+    "alias strip Paul Simon"
+  );
+  assert(
+    stripShowNameDecorations("Sound Haven - Continuum - SL320 - 7/27-8/3").includes(
+      "sound haven"
+    ),
+    "alias strip Sound Haven"
+  );
+  const aliases = buildShowNameAliases("Paul Simon LED Wall - 2026");
+  assert(aliases.includes("paul simon"), "build aliases includes paul simon");
+  notes.aliasExamples = {
+    paulSimon: aliases,
+    soundHaven: buildShowNameAliases("Sound Haven - Continuum - SL320 - 7/27-8/3"),
+  };
+
+  const paul = {
+    showKey: "paul-simon-2026",
+    showName: "Paul Simon LED Wall - 2026",
+    documentNumbers: ["26-2001"],
+    source: "active_shows",
+    daysOut: 12,
+    departments: ["video", "led"],
+  };
+  const sound = {
+    showKey: "sound-haven-2026",
+    showName: "Sound Haven - Continuum - SL320 - 7/27-8/3",
+    documentNumbers: ["26-1421"],
+    source: "active_shows",
+    daysOut: 20,
+    departments: ["audio"],
+  };
+  const nmr = {
+    showKey: "nmr-2026",
+    showName: "NMR Summer Tour 2026",
+    documentNumbers: ["26-3001"],
+    aliases: ["NMR"],
+    source: "active_shows",
+    daysOut: 8,
+    departments: ["trucking"],
+  };
+  const paulOld = {
+    showKey: "paul-simon-2019",
+    showName: "Paul Simon LED Wall - 2019",
+    documentNumbers: ["19-1001"],
+    source: "flex_quote_lookup",
+    status: "closed",
+    daysOut: -400,
+  };
+
+  const paulMsg = normalizeSlackMessage(
+    { ts: "2.1", text: "Paul Simon is loaded", user: "U1" },
+    { channelId: "C_VIDEO", channelName: "video", authorName: "Ops" }
+  );
+  const paulMatch = matchSlackMessageToShows(paulMsg, [paul, sound, nmr]);
+  assert(paulMatch[0]?.showKey === "paul-simon-2026", "Paul Simon parent-show match");
+  assert(paulMatch[0]?.confidenceBand === "high", "Paul Simon high confidence");
+  assert(paulMatch[0]?.workstreamUnspecified === true, "Paul Simon workstream unspecified");
+  notes.paulSimon = paulMatch[0];
+
+  const paulAmbiguous = matchSlackMessageToShows(paulMsg, [paul, { ...paulOld, status: "active", daysOut: 5, source: "active_shows" }]);
+  // Two active Paul Simon events → Needs Review
+  const twoPauls = [
+    paul,
+    {
+      showKey: "paul-simon-europe-2026",
+      showName: "Paul Simon Europe 2026",
+      documentNumbers: ["26-2002"],
+      source: "active_shows",
+      daysOut: 15,
+    },
+  ];
+  const amb = matchSlackMessageToShows(paulMsg, twoPauls);
+  assert(amb[0]?.matchState === "needs_review", "two Paul Simon shows → needs_review");
+  notes.paulSimonAmbiguity = amb.slice(0, 2);
+
+  const shMsg = normalizeSlackMessage(
+    { ts: "2.2", text: "Sound Haven is now loaded", user: "U2" },
+    { channelId: "C_AUDIO", channelName: "audiowarehouse", authorName: "Ops" }
+  );
+  const shMatch = matchSlackMessageToShows(shMsg, [paul, sound, nmr]);
+  assert(shMatch[0]?.showKey === "sound-haven-2026", "Sound Haven shorthand match");
+  assert(shMatch[0]?.confidenceBand === "high", "Sound Haven high confidence");
+  notes.soundHavenShorthand = shMatch[0];
+
+  const piedmontA = {
+    showKey: "piedmont-finals",
+    showName: "Piedmont Finals 2026",
+    documentNumbers: ["26-4101"],
+    source: "active_shows",
+    daysOut: 10,
+  };
+  const piedmontB = {
+    showKey: "piedmont-classic",
+    showName: "Piedmont Classic 2026",
+    documentNumbers: ["26-4102"],
+    source: "active_shows",
+    daysOut: 18,
+  };
+  const piedmontMsg = normalizeSlackMessage(
+    { ts: "2.3", text: "Piedmont needs cable", user: "U3" },
+    { channelId: "C_LIGHT", channelName: "lighting", authorName: "Ops" }
+  );
+  const piedmontMatch = matchSlackMessageToShows(piedmontMsg, [piedmontA, piedmontB]);
+  assert(
+    piedmontMatch[0]?.matchState === "needs_review",
+    "multiple Piedmont → needs_review"
+  );
+
+  const nmrMsg = normalizeSlackMessage(
+    { ts: "2.4", text: "NMR is waiting on trucking", user: "U4" },
+    { channelId: "C_LOG", channelName: "logistics", authorName: "Ops" }
+  );
+  const nmrMatch = matchSlackMessageToShows(nmrMsg, [paul, sound, nmr]);
+  assert(nmrMatch[0]?.showKey === "nmr-2026", "NMR acronym match");
+  assert(nmrMatch[0]?.confidenceBand === "high", "NMR high confidence");
+
+  const typoMsg = normalizeSlackMessage(
+    { ts: "2.5", text: "Sond Haven is loaded", user: "U5" },
+    { channelId: "C_AUDIO", channelName: "audiowarehouse", authorName: "Ops" }
+  );
+  const typoMatch = matchSlackMessageToShows(typoMsg, [paul, sound, nmr]);
+  assert(typoMatch[0]?.showKey === "sound-haven-2026", "typo Sond Haven → Sound Haven");
+  assert(
+    typoMatch[0]?.confidenceBand === "high" || typoMatch[0]?.score >= 55,
+    "typo unique current show is strong/medium+"
+  );
+
+  const oldVsNew = matchSlackMessageToShows(paulMsg, [paulOld, paul]);
+  assert(oldVsNew[0]?.showKey === "paul-simon-2026", "active Paul Simon beats archived");
+
+  const badFlexQuote = {
+    showKey: "wrong-chastain-led",
+    showName: "Live Nation: Chastain LED Wall Installation",
+    documentNumbers: ["26-0733"],
+    source: "flex_quote_lookup",
+    daysOut: 5,
+  };
+  const llumaMsg = normalizeSlackMessage(
+    {
+      ts: "2.6",
+      text: "RTL: LLUMA Live - 7.3.26 MA3 Full (26-0733) will be here at 4:40pm",
+      user: "U6",
+    },
+    { channelId: "C_LIGHT", channelName: "lighting", authorName: "Ops" }
+  );
+  const badQuoteMatch = matchSlackMessageToShows(llumaMsg, [badFlexQuote, paul, sound]);
+  assert(
+    !badQuoteMatch.some(
+      (m) =>
+        m.showKey === "wrong-chastain-led" && m.confidenceBand === "high"
+    ),
+    "unverified flex quote mapping must not auto-attach high"
+  );
+  assert(
+    (badQuoteMatch.find((m) => m.showKey === "wrong-chastain-led")?.reasons || []).some(
+      (r) => /unverified quote mapping/i.test(r)
+    ),
+    "unverified quote mapping reason present"
+  );
+}
+
+console.log("\nsystem noise excluded from queues");
+{
+  const dir = tempDir();
+  const filePath = path.join(dir, "slack-operational-signals.json");
+  const store = createSlackOperationalSignalsStore({ filePath });
+  const joinMsg = normalizeSlackMessage(
+    { ts: "3.1", text: "<@U1> has joined the channel", user: "U1", subtype: "channel_join" },
+    { channelId: "C_OPS", channelName: "ops", authorName: "Bot" }
+  );
+  joinMsg.matchState = "general_queue";
+  await store.upsertMessages([joinMsg]);
+  const general = await store.getGeneralQueue();
+  assert(general.length === 0, "channel join excluded from general queue");
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

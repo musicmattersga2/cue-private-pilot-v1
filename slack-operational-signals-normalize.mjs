@@ -251,6 +251,7 @@ export function normalizeSlackMessage(rawMessage, context = {}) {
 
 export function isOperationallyRelevant(normalized) {
   if (!normalized || normalized.deleted) return false;
+  if (isSlackSystemNoise(normalized)) return false;
   const cats = normalized.operationalClassification?.categories || [];
   if (!cats.length || (cats.length === 1 && cats[0] === "general_operations")) {
     const entities = normalized.extractedEntities || {};
@@ -263,4 +264,40 @@ export function isOperationallyRelevant(normalized) {
     );
   }
   return true;
+}
+
+/**
+ * Channel joins, deleted placeholders, and Slackbot admin noise.
+ * Kept in cache for audit, but excluded from operational queues.
+ */
+export function isSlackSystemNoise(message) {
+  if (!message) return false;
+  if (message.deleted) return true;
+  const subtype = asString(message.subtype).toLowerCase();
+  if (
+    [
+      "channel_join",
+      "channel_leave",
+      "channel_archive",
+      "channel_unarchive",
+      "group_join",
+      "group_leave",
+      "channel_name",
+      "channel_purpose",
+      "channel_topic",
+      "message_deleted",
+      "bot_add",
+      "bot_remove",
+    ].includes(subtype)
+  ) {
+    return true;
+  }
+  const text = asString(message.text);
+  if (/has joined the channel/i.test(text)) return true;
+  if (/^this message was deleted\.?$/i.test(text)) return true;
+  const author = asString(message.authorName || message.userId).toUpperCase();
+  if (author === "USLACKBOT" && (!text || text.length < 8 || /joined|left|archived|purpose|topic/i.test(text))) {
+    return true;
+  }
+  return false;
 }

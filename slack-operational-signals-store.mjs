@@ -4,6 +4,7 @@
 
 import fs from "fs";
 import path from "path";
+import { isSlackSystemNoise } from "./slack-operational-signals-normalize.mjs";
 
 const DEFAULT_PATH = path.resolve(
   process.env.SLACK_OPERATIONAL_CACHE_PATH || "./data/slack-operational-signals.json"
@@ -114,6 +115,7 @@ function rebuildQueues(store) {
   const general = [];
   for (const message of Object.values(store.messages || {})) {
     if (message.deleted) continue;
+    if (isSlackSystemNoise(message)) continue;
     const primary = (message.matches || [])[0];
     const state = primary?.matchState || message.matchState || null;
     if (state === "needs_review") {
