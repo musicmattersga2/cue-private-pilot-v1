@@ -4,6 +4,10 @@ import path from "path";
 import crypto from "crypto";
 import OpenAI from "openai";
 import "dotenv/config";
+import {
+  isShowOperationalAnalysisQuestion,
+  answerShowOperationalAnalysis,
+} from "./ask-flex-full-show-review.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -2321,6 +2325,11 @@ function buildFlexContextAnswer(detail, question) {
 
 
 function isFlexOperationalAnalysisQuestion(question) {
+  // Full-show / cross-source language belongs to show_operational_analysis.
+  if (isShowOperationalAnalysisQuestion(question)) {
+    return false;
+  }
+
   const text = String(question || "").toLowerCase();
 
   if (
@@ -2357,6 +2366,11 @@ function isFlexOperationalAnalysisQuestion(question) {
 
 function classifyFlexAskIntent(question) {
   const text = String(question || "").toLowerCase();
+
+  // Full-show cross-source review must win before single-quote operational analysis.
+  if (isShowOperationalAnalysisQuestion(question)) {
+    return "show_operational_analysis";
+  }
 
   // Operational analysis must win before labor / trucking / sections / inventory.
   if (isFlexOperationalAnalysisQuestion(question)) {
@@ -3176,6 +3190,54 @@ function buildFlexAskBriefPayload(fullResult) {
     return payload;
   }
 
+  if (fullResult?.intent === "show_operational_analysis") {
+    payload.headline = result.headline || "Full Show Operational Review";
+    payload.scopeLabel = result.scopeLabel || "CUE Full Show Review";
+    payload.showName = fullResult?.showName || result.showSummary?.showName || null;
+    payload.found = fullResult?.found !== false;
+    payload.answer = fullResult?.answer || result.assessment || "";
+    payload.assessment = result.assessment || payload.answer;
+    payload.overallStatus = result.overallStatus || null;
+    payload.statusReason = result.statusReason || null;
+    payload.complexityLevel = result.complexityLevel || null;
+    payload.confidence = result.confidence || null;
+    payload.sourceCoverage = Array.isArray(result.sourceCoverage)
+      ? result.sourceCoverage
+      : Array.isArray(fullResult?.sourceCoverage)
+        ? fullResult.sourceCoverage
+        : [];
+    payload.showSummary = result.showSummary || null;
+    payload.relatedWorkstreams = Array.isArray(result.showSummary?.relatedWorkstreams)
+      ? result.showSummary.relatedWorkstreams
+      : Array.isArray(result.flexScope?.relatedWorkstreams)
+        ? result.flexScope.relatedWorkstreams
+        : [];
+    payload.flexScope = result.flexScope || null;
+    payload.truckingExecution = result.truckingExecution || null;
+    payload.staffing = result.staffing || null;
+    payload.warehouse = result.warehouse || null;
+    payload.crossSourceFindings = Array.isArray(result.crossSourceFindings)
+      ? result.crossSourceFindings
+      : [];
+    payload.confirmedIssues = Array.isArray(result.confirmedIssues)
+      ? result.confirmedIssues
+      : [];
+    payload.needsConfirmation = Array.isArray(result.needsConfirmation)
+      ? result.needsConfirmation
+      : [];
+    payload.coverageGaps = Array.isArray(result.coverageGaps) ? result.coverageGaps : [];
+    payload.recommendedNextActions = Array.isArray(result.recommendedNextActions)
+      ? result.recommendedNextActions.slice(0, 5)
+      : [];
+    payload.assumptions = Array.isArray(result.assumptions) ? result.assumptions : [];
+    payload.source = result.source || null;
+    payload.supportingData = fullResult?.supportingData || null;
+    payload.lines = (payload.recommendedNextActions || []).slice(0, 5).map((action) => ({
+      text: String(action),
+    }));
+    return payload;
+  }
+
   if (fullResult?.intent === "document_sections") {
     payload.sectionType = result.sectionType || null;
     payload.facts = result.facts || {};
@@ -3456,6 +3518,23 @@ function extractQuoteSearchQueryFromQuestion(question) {
     /\bbalance\b/gi,
     /\bsummary\b/gi,
     /\babout\b/gi,
+    /\bfull\b/gi,
+    /\bwhole\b/gi,
+    /\bentire\b/gi,
+    /\bcross[- ]source\b/gi,
+    /\boverall\b/gi,
+    /\breal\b/gi,
+    /\boperational\b/gi,
+    /\breview\b/gi,
+    /\banalysis\b/gi,
+    /\banalyze\b/gi,
+    /\bpicture\b/gi,
+    /\brisks?\b/gi,
+    /\bcue\b/gi,
+    /\brelated\b/gi,
+    /\bsources?\b/gi,
+    /\bconnected\b/gi,
+    /\bacross\b/gi,
 
     // Context-question intent words. These should not pollute quote-name search.
     /\bowner\b/gi,
@@ -4815,10 +4894,30 @@ async function buildAskFlexOperationalAnalysis(detail, question) {
   }
 }
 
+function buildAskFlexFullShowDeps() {
+  return {
+    searchFlexQuotes,
+    findFlexQuoteByDocumentNumber,
+    fetchFlexShowIntake,
+    buildFlexDocumentDetail,
+    matchTruckingRowsWithFallback,
+    summarizeTruckingRows,
+    buildFlexVsTruckingComparison,
+    selectCueModel,
+    safeParseModelJson,
+    openai,
+    parseCsvRows,
+  };
+}
+
 async function answerFlexAskQuestion(question) {
   const documentNumbers = extractDocumentNumbersFromQuestion(question);
   const documentNumber = documentNumbers[0] || null;
   const intent = documentNumbers.length >= 2 ? "document_compare" : classifyFlexAskIntent(question);
+
+  if (intent === "show_operational_analysis") {
+    return answerShowOperationalAnalysis(question, buildAskFlexFullShowDeps());
+  }
 
   if (intent === "document_compare") {
     if (documentNumbers.length < 2) {

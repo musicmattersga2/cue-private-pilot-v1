@@ -366,9 +366,67 @@
       color: #b9f8ff;
     }
 
+    .ops-pill.ready-blocked {
+      border-color: rgba(255, 107, 107, 0.55);
+      color: #ffb4b4;
+    }
+
     .ops-pill.ready-at_risk {
       border-color: rgba(255, 176, 32, 0.5);
       color: #ffd79a;
+    }
+
+    .source-coverage-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    @media (max-width: 900px) {
+      .source-coverage-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    .source-card {
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.03);
+      border-radius: 16px;
+      padding: 10px 12px;
+      min-height: 78px;
+    }
+
+    .source-card .source-name {
+      font-weight: 800;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .source-card .source-status {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .source-card.status-connected .source-status { color: #b8ffc4; }
+    .source-card.status-fallback .source-status { color: #ffd79a; }
+    .source-card.status-partial .source-status { color: #b9f8ff; }
+    .source-card.status-unavailable .source-status { color: #ffb4b4; }
+
+    .source-card .source-note {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .ops-flag.sev-critical {
+      border-color: rgba(255, 107, 107, 0.55);
     }
 
     .ops-pill.confidence-pill {
@@ -386,6 +444,47 @@
     .ops-card details summary {
       cursor: pointer;
       color: var(--cyan);
+    }
+
+    .workstream-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+
+    .workstream-table th,
+    .workstream-table td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      vertical-align: top;
+    }
+
+    .workstream-table th {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .coverage-gap-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .coverage-gap-item {
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+
+    .coverage-gap-item strong {
+      display: block;
+      margin-bottom: 4px;
     }
 
     .ops-card .ops-facts,
@@ -794,6 +893,7 @@
       </div>
 
       <div class="examples">
+        <div class="chip chip-featured" data-q="Give me a full operational review of Sound Haven">Full review of Sound Haven</div>
         <div class="chip chip-featured" data-q="Give me an operational review of 26-0401">Operational review of 26-0401</div>
         <div class="chip" data-q="What labor is on 26-1747?">Labor on 26-1747</div>
         <div class="chip" data-q="What inventory is on 26-1747?">Inventory on 26-1747</div>
@@ -1032,6 +1132,9 @@
 
     function renderMeta(data) {
       const parts = [
+        data.intent === "show_operational_analysis" && data.showName
+          ? `Show ${data.showName}`
+          : null,
         data.documentNumber ? `Quote ${data.documentNumber}` : null,
         data.client || null,
         data.venue || null,
@@ -1501,6 +1604,7 @@
       if (value === "low") return "Low";
       if (value === "medium") return "Medium";
       if (value === "high") return "High";
+      if (value === "critical") return "Critical";
       return String(severity || "—");
     }
 
@@ -1510,6 +1614,19 @@
       if (value === "medium") return "Medium";
       if (value === "high") return "High";
       return String(confidence || "—");
+    }
+
+    function formatSourceStatusLabel(status) {
+      const value = String(status || "").toLowerCase();
+      if (value === "connected") return "Live";
+      if (value === "fallback") return "Fallback";
+      if (value === "partial") return "Partial";
+      if (value === "unavailable") return "Unavailable";
+      return String(status || "—");
+    }
+
+    function formatOverallStatusLabel(status) {
+      return formatReadinessLabel(status);
     }
 
     function renderListBlock(title, items) {
@@ -1552,6 +1669,23 @@
         if (Array.isArray(block.likelyDepartments) && block.likelyDepartments.length) {
           metaBits.push(block.likelyDepartments.slice(0, 4).join(", "));
         }
+      }
+      if (title === "FLEX Scope") {
+        if (block.quoteCount != null) metaBits.push(`${block.quoteCount} quote(s)`);
+        if (block.laborHeadcount != null) metaBits.push(`Headcount ${block.laborHeadcount}`);
+        if (block.equipmentLineItemCount != null) {
+          metaBits.push(`${block.equipmentLineItemCount} equipment line items`);
+        }
+      }
+      if (title === "Trucking Execution") {
+        if (block.runCount != null) metaBits.push(`${block.runCount} run(s)`);
+        if (block.status) metaBits.push(block.status);
+      }
+      if (title === "Staffing" && block.sourceStatus) {
+        metaBits.push(formatSourceStatusLabel(block.sourceStatus));
+      }
+      if (title === "Warehouse" && block.sourceStatus) {
+        metaBits.push(formatSourceStatusLabel(block.sourceStatus));
       }
 
       const extraCount = extraFindings.length + extraActions.length;
@@ -1678,6 +1812,183 @@
       `;
     }
 
+    function renderShowOperationalAnalysis(data) {
+      const overallRaw = String(data.overallStatus || "").toLowerCase();
+      const overall = ["clear", "review_needed", "at_risk", "blocked"].includes(overallRaw)
+        ? overallRaw
+        : "review_needed";
+      const sourceCoverage = Array.isArray(data.sourceCoverage) ? data.sourceCoverage : [];
+      const crossFindings = Array.isArray(data.crossSourceFindings) ? data.crossSourceFindings : [];
+      const confirmedIssues = Array.isArray(data.confirmedIssues) ? data.confirmedIssues : [];
+      const needsConfirmation = Array.isArray(data.needsConfirmation) ? data.needsConfirmation : [];
+      const coverageGaps = Array.isArray(data.coverageGaps) ? data.coverageGaps : [];
+      const nextActions = Array.isArray(data.recommendedNextActions)
+        ? data.recommendedNextActions.slice(0, 5)
+        : [];
+      const assumptions = Array.isArray(data.assumptions) ? data.assumptions : [];
+      const show = data.showSummary || {};
+      const relatedQuotes = Array.isArray(show.relatedQuotes) ? show.relatedQuotes : [];
+      const relatedWorkstreams = Array.isArray(data.relatedWorkstreams) && data.relatedWorkstreams.length
+        ? data.relatedWorkstreams
+        : Array.isArray(show.relatedWorkstreams)
+          ? show.relatedWorkstreams
+          : Array.isArray(data.flexScope?.relatedWorkstreams)
+            ? data.flexScope.relatedWorkstreams
+            : [];
+      const statusReason = String(data.statusReason || "").trim();
+
+      const showBits = [
+        show.showName || data.showName || null,
+        show.client || null,
+        show.venue || null,
+        show.dateRange || null,
+        relatedQuotes.length ? `Quotes ${relatedQuotes.join(", ")}` : null,
+        Array.isArray(show.projectManagers) && show.projectManagers.length
+          ? `PM ${show.projectManagers.join(", ")}`
+          : null,
+      ].filter(Boolean);
+
+      const coverageHtml = sourceCoverage.length
+        ? `
+          <div class="source-coverage-grid">
+            ${sourceCoverage.map((item) => {
+              const statusRaw = String(item?.status || "unavailable").toLowerCase();
+              const status = ["connected", "fallback", "partial", "unavailable"].includes(statusRaw)
+                ? statusRaw
+                : "unavailable";
+              return `
+                <div class="source-card status-${escapeHtml(status)}">
+                  <div class="source-name">${escapeHtml(item.source || "Source")}</div>
+                  <div class="source-status">${escapeHtml(formatSourceStatusLabel(status))}</div>
+                  <div class="source-note">${escapeHtml(item.note || "")}</div>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `
+        : "";
+
+      const findingsHtml = crossFindings.length
+        ? `
+          <div class="section">
+            <h3>Cross-Source Findings</h3>
+            ${crossFindings.map((flag) => {
+              const severityRaw = String(flag?.severity || "").toLowerCase();
+              const severity = ["low", "medium", "high", "critical"].includes(severityRaw)
+                ? severityRaw
+                : "medium";
+              const statusRaw = String(flag?.status || "").toLowerCase();
+              const sources = Array.isArray(flag?.sources) ? flag.sources.join(", ") : "";
+              return `
+                <div class="ops-flag sev-${escapeHtml(severity)}">
+                  <div class="ops-flag-top">
+                    <strong>${escapeHtml(formatSeverityLabel(severity))}</strong>
+                    <span>${escapeHtml(flag.area || "")}</span>
+                    ${statusRaw ? `<span>${escapeHtml(formatOverallStatusLabel(statusRaw))}</span>` : ""}
+                  </div>
+                  <div>${escapeHtml(flag.finding || "")}</div>
+                  ${flag.evidence ? `<div class="hint">Evidence: ${escapeHtml(flag.evidence)}</div>` : ""}
+                  ${sources ? `<div class="hint">Sources: ${escapeHtml(sources)}</div>` : ""}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        `
+        : `
+          <div class="section">
+            <h3>Cross-Source Findings</h3>
+            <div class="hint">No material cross-source discrepancies detected from connected data.</div>
+          </div>
+        `;
+
+      const coverageGapsHtml = coverageGaps.length
+        ? `
+          <div class="section">
+            <h3>Source / Coverage Gaps</h3>
+            <div class="coverage-gap-list">
+              ${coverageGaps.map((gap) => {
+                if (typeof gap === "string") {
+                  return `<div class="coverage-gap-item">${escapeHtml(gap)}</div>`;
+                }
+                return `
+                  <div class="coverage-gap-item">
+                    <strong>${escapeHtml(gap.source || "Source")} · ${escapeHtml(gap.status || "unavailable")}</strong>
+                    <div class="hint">${escapeHtml(gap.note || "")}</div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
+        `
+        : "";
+
+      const workstreamsHtml = relatedWorkstreams.length
+        ? `
+          <details>
+            <summary>Related FLEX Workstreams (${relatedWorkstreams.length})</summary>
+            <table class="workstream-table">
+              <thead>
+                <tr>
+                  <th>Document #</th>
+                  <th>FLEX Name</th>
+                  <th>Client</th>
+                  <th>Planned Dates</th>
+                  <th>Match Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${relatedWorkstreams.map((row) => {
+                  const dates = [row.plannedStartDate, row.plannedEndDate].filter(Boolean).join(" → ") || "—";
+                  return `
+                    <tr>
+                      <td>${escapeHtml(row.documentNumber || "—")}</td>
+                      <td>${escapeHtml(row.showName || "—")}</td>
+                      <td>${escapeHtml(row.client || "—")}</td>
+                      <td>${escapeHtml(dates)}</td>
+                      <td>${escapeHtml(row.matchReason || "—")}</td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          </details>
+        `
+        : "";
+
+      return `
+        <div class="hint" style="margin-top:6px">${escapeHtml(data.scopeLabel || "CUE Full Show Review")}</div>
+        <div class="hint">Combined view of FLEX, Trucking, and Active Shows data.</div>
+        ${showBits.length ? `<div class="meta" style="margin-top:8px">${showBits.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>` : ""}
+        <div class="ops-pill-row">
+          <span class="ops-pill ready-${escapeHtml(overall)}"><strong>Overall</strong> ${escapeHtml(formatOverallStatusLabel(overall))}</span>
+          <span class="ops-pill"><strong>Complexity</strong> ${escapeHtml(data.complexityLevel || "—")}</span>
+          ${data.confidence ? `<span class="ops-pill confidence-pill">${escapeHtml(formatConfidenceLabel(data.confidence))} confidence</span>` : ""}
+          <span class="ops-pill"><strong>Sources</strong> ${escapeHtml(String(sourceCoverage.length || 0))}</span>
+        </div>
+        ${statusReason ? `<div class="hint" style="margin-top:8px">${escapeHtml(statusReason)}</div>` : ""}
+        ${coverageHtml}
+        <div class="ops-grid">
+          ${renderOpsDeptCard("FLEX Scope", data.flexScope)}
+          ${renderOpsDeptCard("Trucking Execution", data.truckingExecution)}
+          ${renderOpsDeptCard("Staffing", data.staffing)}
+          ${renderOpsDeptCard("Warehouse", data.warehouse)}
+        </div>
+        ${findingsHtml}
+        ${renderListBlock("Confirmed Operational Issues", confirmedIssues)}
+        ${renderListBlock("Needs Confirmation", needsConfirmation)}
+        ${coverageGapsHtml}
+        ${renderListBlock("Recommended Next Actions", nextActions)}
+        ${workstreamsHtml}
+        <details>
+          <summary>Assumptions &amp; confidence</summary>
+          <div class="hint" style="margin-top:10px">Confidence: ${escapeHtml(formatConfidenceLabel(data.confidence))}</div>
+          ${assumptions.length
+            ? `<ul>${assumptions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+            : `<div class="hint">No assumptions listed.</div>`}
+        </details>
+      `;
+    }
+
     function bindMatchCards() {
       for (const card of document.querySelectorAll(".match-card")) {
         card.addEventListener("click", () => {
@@ -1706,6 +2017,8 @@
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.intent === "show_operational_analysis") {
+        detailsEl.innerHTML = renderShowOperationalAnalysis(data);
       } else if (data.intent === "document_operational_analysis") {
         detailsEl.innerHTML = renderOperationalAnalysis(data);
       } else if (data.intent === "document_compare" || data.comparisonType) {
