@@ -9,6 +9,13 @@ import {
   isShowOperationalAnalysisQuestion,
   answerShowOperationalAnalysis,
 } from "./ask-flex-full-show-review.mjs";
+import {
+  isShowOperationalFollowupQuestion,
+  isRefreshFollowupQuestion,
+  answerFullShowFollowup,
+  sanitizeFullShowFollowupContext,
+  classifyFullShowFollowupType,
+} from "./ask-flex-full-show-followup.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -3221,6 +3228,36 @@ function buildFlexAskBriefPayload(fullResult) {
     return payload;
   }
 
+  if (fullResult?.intent === "show_operational_followup") {
+    payload.headline = fullResult.headline || "Follow-up";
+    payload.showName = fullResult.showName || null;
+    payload.found = fullResult.found !== false;
+    payload.answer = fullResult.answer || "";
+    payload.followupType = fullResult.followupType || null;
+    payload.sourceReviewTimestamp = fullResult.sourceReviewTimestamp || null;
+    payload.usedStoredReview = Boolean(fullResult.usedStoredReview);
+    payload.refreshRequired = Boolean(fullResult.refreshRequired);
+    payload.refreshed = Boolean(fullResult.refreshed);
+    payload.refreshNote = fullResult.refreshNote || null;
+    payload.items = Array.isArray(fullResult.items) ? fullResult.items : [];
+    payload.supportingData = fullResult.supportingData || null;
+    payload.overallStatus = fullResult.supportingData?.overallStatus || null;
+    payload.complexityLevel = fullResult.supportingData?.complexityLevel || null;
+    payload.confidence = fullResult.supportingData?.confidence || null;
+    payload.sourceCoverage = Array.isArray(fullResult.supportingData?.sourceCoverage)
+      ? fullResult.supportingData.sourceCoverage
+      : [];
+    payload.needsClarification = Boolean(fullResult.needsClarification);
+    payload.refreshedReview = fullResult.refreshedReview || null;
+    payload.lines = (payload.items || []).slice(0, 5).map((item) => ({
+      text: [item.finding, item.action].filter(Boolean).join(" — "),
+      area: item.area || null,
+      owner: item.owner || null,
+      evidence: item.evidence || null,
+    }));
+    return payload;
+  }
+
   if (fullResult?.intent === "show_operational_analysis") {
     payload.headline = result.headline || "Full Show Operational Review";
     payload.scopeLabel = result.scopeLabel || "CUE Full Show Review";
@@ -4941,9 +4978,74 @@ function buildAskFlexFullShowDeps() {
   };
 }
 
-async function answerFlexAskQuestion(question) {
+async function answerFlexAskQuestion(question, options = {}) {
   const documentNumbers = extractDocumentNumbersFromQuestion(question);
   const documentNumber = documentNumbers[0] || null;
+  const followupContext = sanitizeFullShowFollowupContext(options.context);
+
+  // Session follow-up against a stored full-show review (ASK-FLEX-003).
+  if (isShowOperationalFollowupQuestion(question, followupContext)) {
+    const wantsRefresh = isRefreshFollowupQuestion(question);
+    let contextForAnswer = followupContext;
+    let refreshed = false;
+
+    if (wantsRefresh && followupContext?.showName) {
+      const refreshQuestion = `Give me a full operational review of ${followupContext.showName}`;
+      const fresh = await answerShowOperationalAnalysis(
+        refreshQuestion,
+        buildAskFlexFullShowDeps()
+      );
+      if (fresh?.found && fresh?.result) {
+        const briefLike = {
+          ...fresh.result,
+          showName: fresh.showName || fresh.result.showSummary?.showName || followupContext.showName,
+          answer: fresh.answer || fresh.result.assessment,
+          supportingData: fresh.supportingData || null,
+          sourceCoverage: fresh.sourceCoverage || fresh.result.sourceCoverage || [],
+        };
+        contextForAnswer = sanitizeFullShowFollowupContext({
+          type: "full_show_review",
+          showName: briefLike.showName,
+          reviewedAt: new Date().toISOString(),
+          question: refreshQuestion,
+          previousResult: followupContext.result,
+          result: briefLike,
+          cueBuildLabel: CUE_BUILD_LABEL,
+        });
+        refreshed = true;
+      }
+    }
+
+    const followup = await answerFullShowFollowup(question, contextForAnswer, {
+      openai,
+      selectCueModel,
+      safeParseModelJson,
+      refreshed,
+    });
+
+    if (refreshed) {
+      followup.refreshed = true;
+      followup.refreshNote = "Refreshed from live connected sources";
+      followup.refreshedReview = contextForAnswer?.result || null;
+      followup.previousReview = followupContext?.result || null;
+      if (classifyFullShowFollowupType(question) === "change_since_last" || /\bwhat changed\b/i.test(question)) {
+        const changed = await answerFullShowFollowup(
+          "What changed since the last review?",
+          contextForAnswer,
+          { openai, selectCueModel, safeParseModelJson, refreshed: true }
+        );
+        followup.answer = `${followup.refreshNote}. ${changed.answer}`;
+        followup.items = changed.items;
+        followup.followupType = "change_since_last";
+        followup.headline = changed.headline;
+      } else {
+        followup.answer = `${followup.refreshNote}. ${followup.answer}`;
+      }
+    }
+
+    return followup;
+  }
+
   const intent = documentNumbers.length >= 2 ? "document_compare" : classifyFlexAskIntent(question);
 
   if (intent === "show_operational_analysis") {
@@ -7316,6 +7418,7 @@ const server = http.createServer(async (req, res) => {
     ) {
       let question = url.searchParams.get("question");
       let format = url.searchParams.get("format") || "";
+      let requestContext = null;
 
       if (url.pathname === "/api/flex/ask-brief") {
         format = "brief";
@@ -7326,6 +7429,7 @@ const server = http.createServer(async (req, res) => {
         const requestBody = JSON.parse(rawBody || "{}");
         question = requestBody.question || question;
         format = requestBody.format || format;
+        requestContext = requestBody.context || null;
       }
 
       if (!question) {
@@ -7335,7 +7439,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const result = await answerFlexAskQuestion(question);
+      const result = await answerFlexAskQuestion(question, { context: requestContext });
 
       if (String(format).toLowerCase() === "brief") {
         sendJson(res, 200, buildFlexAskBriefPayload(result));

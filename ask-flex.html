@@ -487,6 +487,50 @@
       margin-bottom: 4px;
     }
 
+    .followup-panel {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .followup-panel .followup-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .followup-panel .followup-context {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .followup-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .followup-item {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin-top: 8px;
+      background: rgba(255,255,255,0.03);
+    }
+
+    .followup-item .followup-item-top {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
     .ops-card .ops-facts,
     .ops-card .ops-actions {
       margin: 10px 0 0;
@@ -903,6 +947,11 @@
       </div>
 
       <div id="error" class="error"></div>
+      <div id="followupPanel" class="followup-panel" hidden>
+        <div class="followup-title" id="followupTitle">Ask a follow-up</div>
+        <div class="followup-context" id="followupContext"></div>
+        <div class="followup-chips" id="followupChips"></div>
+      </div>
 
       <div id="result" class="result">
         <div class="answer-card">
@@ -936,6 +985,152 @@
     const detailsEl = document.getElementById("details");
     const warningsEl = document.getElementById("warnings");
     const rawEl = document.getElementById("raw");
+    const followupPanelEl = document.getElementById("followupPanel");
+    const followupTitleEl = document.getElementById("followupTitle");
+    const followupContextEl = document.getElementById("followupContext");
+    const followupChipsEl = document.getElementById("followupChips");
+
+    let latestFullShowReview = null;
+    let fullShowReviewHistory = [];
+
+    const FOLLOWUP_CHIPS = [
+      { label: "Biggest issue", q: "What is the biggest issue?" },
+      { label: "Brian’s top 3", q: "What are the top three things Brian needs to resolve?" },
+      { label: "Trucking only", q: "Show me only the trucking items." },
+      { label: "Confirmed issues", q: "Which findings are confirmed?" },
+      { label: "Needs confirmation", q: "What still needs confirmation?" },
+      { label: "Coverage gaps", q: "What are the coverage gaps?" },
+      { label: "PM first action", q: "What should the PM do first?" },
+      { label: "Executive summary", q: "Give me a five-line executive summary." },
+    ];
+
+    function formatReviewTime(value) {
+      if (!value) return "just now";
+      try {
+        return new Date(value).toLocaleString();
+      } catch {
+        return String(value);
+      }
+    }
+
+    function buildSafeFullShowContextPayload(review) {
+      if (!review?.result) return null;
+      return {
+        type: "full_show_review",
+        showName: review.showName || null,
+        reviewedAt: review.timestamp || null,
+        question: review.question || null,
+        cueBuildLabel: review.buildLabel || null,
+        previousResult: fullShowReviewHistory.length > 1
+          ? fullShowReviewHistory[0]?.result || null
+          : null,
+        result: review.result,
+      };
+    }
+
+    function storeFullShowReview(data, question) {
+      if (!data || data.intent !== "show_operational_analysis" || data.found === false) return;
+      const snapshot = {
+        showName: data.showName || data.showSummary?.showName || null,
+        question: question || data.question || null,
+        result: data,
+        sourceCoverage: Array.isArray(data.sourceCoverage) ? data.sourceCoverage : [],
+        timestamp: new Date().toISOString(),
+        buildLabel: data.cueBuildLabel || null,
+        relatedQuotes: Array.isArray(data.showSummary?.relatedQuotes)
+          ? data.showSummary.relatedQuotes
+          : [],
+      };
+
+      if (latestFullShowReview) {
+        fullShowReviewHistory = [latestFullShowReview, snapshot].slice(-2);
+      } else {
+        fullShowReviewHistory = [snapshot];
+      }
+      latestFullShowReview = snapshot;
+      renderFollowupPanel();
+    }
+
+    function renderFollowupPanel() {
+      if (!followupPanelEl || !latestFullShowReview) {
+        if (followupPanelEl) followupPanelEl.hidden = true;
+        return;
+      }
+      const showName = latestFullShowReview.showName || "this show";
+      followupPanelEl.hidden = false;
+      followupTitleEl.textContent = `Ask a follow-up about ${showName}`;
+      followupContextEl.textContent = `Using ${showName} review from ${formatReviewTime(latestFullShowReview.timestamp)}`;
+      followupChipsEl.innerHTML = [
+        ...FOLLOWUP_CHIPS.map(
+          (chip) =>
+            `<div class="chip" data-followup-q="${escapeHtml(chip.q)}">${escapeHtml(chip.label)}</div>`
+        ),
+        `<div class="chip" id="clearFollowupContextChip" type="button">Clear follow-up context</div>`,
+      ].join("");
+      for (const chip of followupChipsEl.querySelectorAll(".chip[data-followup-q]")) {
+        chip.addEventListener("click", () => {
+          setPrompt(chip.dataset.followupQ);
+          askFlex();
+        });
+      }
+      const clearChip = document.getElementById("clearFollowupContextChip");
+      if (clearChip) {
+        clearChip.addEventListener("click", () => {
+          clearFullShowFollowupContext();
+        });
+      }
+    }
+
+    function clearFullShowFollowupContext() {
+      latestFullShowReview = null;
+      fullShowReviewHistory = [];
+      if (followupPanelEl) followupPanelEl.hidden = true;
+      if (followupChipsEl) followupChipsEl.innerHTML = "";
+      if (followupTitleEl) followupTitleEl.textContent = "Ask a follow-up";
+      if (followupContextEl) followupContextEl.textContent = "";
+    }
+
+    function renderShowOperationalFollowup(data) {
+      const items = Array.isArray(data.items) ? data.items.slice(0, 5) : [];
+      const reviewedAt = data.sourceReviewTimestamp
+        ? formatReviewTime(data.sourceReviewTimestamp)
+        : latestFullShowReview
+          ? formatReviewTime(latestFullShowReview.timestamp)
+          : null;
+      const showName = data.showName || latestFullShowReview?.showName || "this show";
+      const itemsHtml = items.length
+        ? items
+            .map((item) => {
+              return `
+                <div class="followup-item">
+                  <div class="followup-item-top">
+                    ${item.priority != null ? `<span>#${escapeHtml(String(item.priority))}</span>` : ""}
+                    ${item.area ? `<span>${escapeHtml(item.area)}</span>` : ""}
+                    ${item.owner ? `<span>${escapeHtml(item.owner)}</span>` : ""}
+                  </div>
+                  <div>${escapeHtml(item.finding || item.action || "")}</div>
+                  ${item.evidence ? `<div class="hint">Evidence: ${escapeHtml(item.evidence)}</div>` : ""}
+                  ${item.action && item.action !== item.finding ? `<div class="hint">Action: ${escapeHtml(item.action)}</div>` : ""}
+                </div>
+              `;
+            })
+            .join("")
+        : `<div class="hint">No supporting items for this follow-up.</div>`;
+
+      return `
+        <div class="hint" style="margin-top:6px">Focused follow-up · ${escapeHtml(data.followupType || "general_followup")}</div>
+        ${reviewedAt ? `<div class="hint">Using ${escapeHtml(showName)} review from ${escapeHtml(reviewedAt)}</div>` : ""}
+        ${data.refreshed || data.refreshNote ? `<div class="hint">${escapeHtml(data.refreshNote || "Refreshed from live connected sources")}</div>` : ""}
+        ${data.usedStoredReview && !data.refreshed ? `<div class="hint">Answered from the stored full-show review (no silent refresh).</div>` : ""}
+        <div class="section" style="margin-top:10px">
+          <h3>Supporting items</h3>
+          ${itemsHtml}
+        </div>
+        <div class="followup-chips" style="margin-top:12px">
+          <div class="chip" id="refreshFullReviewChip" data-q="Refresh this review and tell me what changed.">Refresh full review</div>
+        </div>
+      `;
+    }
 
     const filterPreviewEl = document.getElementById("filterPreview");
     const clearFiltersButton = document.getElementById("clearFilters");
@@ -2055,11 +2250,24 @@
     function renderAnswer(data) {
       headlineEl.textContent = data.headline || "Answer";
       answerEl.textContent = data.answer || "";
+      answerEl.style.whiteSpace =
+        data.intent === "show_operational_followup" && /\n/.test(String(data.answer || ""))
+          ? "pre-line"
+          : "";
       renderMeta(data);
       updateBuildFooter(data);
 
       if (data.needsSelection) {
         detailsEl.innerHTML = renderMatchCards(data);
+      } else if (data.intent === "show_operational_followup") {
+        detailsEl.innerHTML = renderShowOperationalFollowup(data);
+        const refreshChip = document.getElementById("refreshFullReviewChip");
+        if (refreshChip) {
+          refreshChip.addEventListener("click", () => {
+            setPrompt(refreshChip.dataset.q || "Refresh this review and tell me what changed.");
+            askFlex();
+          });
+        }
       } else if (data.intent === "show_operational_analysis") {
         detailsEl.innerHTML = renderShowOperationalAnalysis(data);
       } else if (data.intent === "document_operational_analysis") {
@@ -2102,11 +2310,25 @@
       errorEl.textContent = "";
 
       try {
-        const url = `/api/flex/ask-brief?question=${encodeURIComponent(effectiveQuestion)}`;
-        const response = await fetch(url, {
-          method: "GET",
-          credentials: "same-origin",
-        });
+        const context = buildSafeFullShowContextPayload(latestFullShowReview);
+        const usePost = Boolean(context);
+        const response = usePost
+          ? await fetch("/api/flex/ask-brief", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                question: effectiveQuestion,
+                context,
+              }),
+            })
+          : await fetch(
+              `/api/flex/ask-brief?question=${encodeURIComponent(effectiveQuestion)}`,
+              {
+                method: "GET",
+                credentials: "same-origin",
+              }
+            );
 
         const text = await response.text();
         let data;
@@ -2119,6 +2341,22 @@
 
         if (!response.ok) {
           throw new Error(data.error || JSON.stringify(data, null, 2));
+        }
+
+        if (data.intent === "show_operational_analysis") {
+          storeFullShowReview(data, effectiveQuestion);
+        } else if (data.intent === "show_operational_followup" && data.refreshed && data.refreshedReview) {
+          storeFullShowReview(
+            {
+              ...data.refreshedReview,
+              intent: "show_operational_analysis",
+              found: true,
+              cueBuildLabel: data.cueBuildLabel || data.refreshedReview.cueBuildLabel || null,
+            },
+            `Give me a full operational review of ${data.showName || latestFullShowReview?.showName || "this show"}`
+          );
+        } else {
+          renderFollowupPanel();
         }
 
         saveRecentSearch(effectiveQuestion);
