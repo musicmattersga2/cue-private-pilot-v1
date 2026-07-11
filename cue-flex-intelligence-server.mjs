@@ -803,24 +803,65 @@ function normalizeFlexElementTree(treeData) {
   return nodes;
 }
 
-function classifyFlexEventFolderDepartment(name) {
+function classifyFlexEventFolderQuote(name) {
   const text = String(name || "").toLowerCase();
-  if (/\baudio\b/.test(text)) return "Audio";
-  if (/\blighting\b|\blx\b/.test(text)) return "Lighting";
-  if (/\bled\b/.test(text)) return "LED";
-  if (/\bvideo\b|\bimag\b|\bcamera\b/.test(text)) return "Video";
+
+  // LED Trailer is a vendor-managed video/LED product with transport dependency,
+  // not Music Matters trucking / normal transportation scope.
   if (
+    /\bled\s*trailer\b/.test(text) ||
+    (/\bled\b/.test(text) && /\btrailer\b/.test(text))
+  ) {
+    return {
+      department: "Video / LED",
+      primaryDepartment: "Video / LED",
+      productFamily: "LED Trailer",
+      fulfillmentModel: "Turnkey Cross-Rental",
+      vendorManaged: true,
+      transportationDependency: true,
+      musicMattersTruckingRequired: false,
+      tags: [
+        "LED",
+        "Video",
+        "LED Trailer",
+        "Delay Screen",
+        "Vendor Managed",
+        "Transportation Dependency",
+      ],
+    };
+  }
+
+  let department = "Other";
+  if (/\baudio\b/.test(text)) department = "Audio";
+  else if (/\blighting\b|\blx\b/.test(text)) department = "Lighting";
+  else if (/\bled\b/.test(text)) department = "LED";
+  else if (/\bvideo\b|\bimag\b|\bcamera\b/.test(text)) department = "Video";
+  else if (
     /\brigging\b|\bproduction mgmt\b|\bproduction management\b|\bproduction\b/.test(
       text
     )
   ) {
-    return "Rigging / Production";
+    department = "Rigging / Production";
+  } else if (/\bdelay\b/.test(text)) {
+    department = "Delay";
+  } else if (/\btrailer\b|\btransportation\b|\btransport\b/.test(text)) {
+    department = "Trailer / Transportation";
   }
-  if (/\bdelay\b/.test(text)) return "Delay";
-  if (/\btrailer\b|\btransportation\b|\btransport\b/.test(text)) {
-    return "Trailer / Transportation";
-  }
-  return "Other";
+
+  return {
+    department,
+    primaryDepartment: department,
+    productFamily: null,
+    fulfillmentModel: null,
+    vendorManaged: false,
+    transportationDependency: false,
+    musicMattersTruckingRequired: null,
+    tags: department === "Other" ? [] : [department],
+  };
+}
+
+function classifyFlexEventFolderDepartment(name) {
+  return classifyFlexEventFolderQuote(name).department;
 }
 
 function isFlexQuoteDocumentNumber(value) {
@@ -895,10 +936,20 @@ async function buildFlexEventFolderRollup(treeResult, options = {}) {
         }
         return true;
       })
-      .map((node) => ({
-        ...node,
-        department: classifyFlexEventFolderDepartment(node.name),
-      }))
+      .map((node) => {
+        const classification = classifyFlexEventFolderQuote(node.name);
+        return {
+          ...node,
+          department: classification.department,
+          primaryDepartment: classification.primaryDepartment,
+          productFamily: classification.productFamily,
+          fulfillmentModel: classification.fulfillmentModel,
+          vendorManaged: classification.vendorManaged,
+          transportationDependency: classification.transportationDependency,
+          musicMattersTruckingRequired: classification.musicMattersTruckingRequired,
+          tags: Array.isArray(classification.tags) ? classification.tags : [],
+        };
+      })
   ).sort((a, b) =>
     String(a.documentNumber || "").localeCompare(String(b.documentNumber || ""))
   );
