@@ -651,6 +651,22 @@
       margin-bottom: 18px;
     }
 
+    .answer .exec-summary-list {
+      margin: 0;
+      padding-left: 1.35em;
+      font-size: 18px;
+      line-height: 1.45;
+      letter-spacing: -0.01em;
+    }
+
+    .answer .exec-summary-list li {
+      margin: 0 0 8px;
+    }
+
+    .answer .exec-summary-list li:last-child {
+      margin-bottom: 0;
+    }
+
     .meta {
       display: flex;
       flex-wrap: wrap;
@@ -2247,13 +2263,37 @@
       if (label) labelEl.textContent = label;
     }
 
+    function renderExecutiveSummaryAnswer(answerText) {
+      const lines = String(answerText || "")
+        .split(/\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => line.replace(/^\d+\.\s*/, ""))
+        .slice(0, 5);
+
+      if (!lines.length) {
+        answerEl.textContent = "";
+        return;
+      }
+
+      answerEl.innerHTML = `<ol class="exec-summary-list">${lines
+        .map((line) => `<li>${escapeHtml(line)}</li>`)
+        .join("")}</ol>`;
+    }
+
     function renderAnswer(data) {
       headlineEl.textContent = data.headline || "Answer";
-      answerEl.textContent = data.answer || "";
-      answerEl.style.whiteSpace =
-        data.intent === "show_operational_followup" && /\n/.test(String(data.answer || ""))
-          ? "pre-line"
-          : "";
+      answerEl.style.whiteSpace = "";
+
+      if (
+        data.intent === "show_operational_followup" &&
+        data.followupType === "executive_summary"
+      ) {
+        renderExecutiveSummaryAnswer(data.answer);
+      } else {
+        answerEl.textContent = data.answer || "";
+      }
+
       renderMeta(data);
       updateBuildFooter(data);
 
