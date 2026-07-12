@@ -20,6 +20,7 @@ import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
 import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
+import { buildFlexQuoteUrl, isFlexElementId } from "./flex-quote-link.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -8608,6 +8609,29 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/flex/quote/open") {
+      const documentNumber = String(url.searchParams.get("documentNumber") || "").trim();
+      let elementId = String(url.searchParams.get("elementId") || "").trim();
+      if (!elementId && documentNumber) {
+        const resolved = await resolveSlackCandidateFromFlexQuote(documentNumber);
+        elementId = String(resolved?.elementId || "").trim();
+      }
+      if (!isFlexElementId(elementId)) {
+        sendJson(res, 404, {
+          error: documentNumber
+            ? `CUE could not resolve FLEX quote ${documentNumber} to a verified element.`
+            : "A FLEX document number or valid element ID is required.",
+        });
+        return;
+      }
+      res.writeHead(302, {
+        Location: buildFlexQuoteUrl(elementId),
+        "Cache-Control": "no-store",
+      });
+      res.end();
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/foundation/decision-cards") {
       const showId = String(url.searchParams.get("showId") || "").trim() || null;
       const status = String(url.searchParams.get("status") || "").trim() || null;
@@ -8618,10 +8642,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/foundation/summary") {
       const summary = await defaultCueFoundationStore.getSummary();
-      sendJson(res, 200, {
-        ...summary,
-        flexQuoteUrlTemplate: process.env.FLEX_QUOTE_URL_TEMPLATE || null,
-      });
+      sendJson(res, 200, summary);
       return;
     }
 
