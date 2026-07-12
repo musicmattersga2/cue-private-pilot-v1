@@ -75,6 +75,28 @@ const matchDb = await matchStore.read();
 assert.equal(Object.values(matchDb.intakeItems)[0].matchedShowId, "paul-simon", "confirmed show persisted to Intake");
 assert.equal(matchDb.learnedAliases["chastain paul"].showId, "paul-simon", "confirmed alias learned");
 
+const explicitQuoteStore = createCueFoundationStore({ filePath: path.join(dir, "explicit-quote.json") });
+const explicitQuoteMessage = {
+  ...message,
+  messageKey: "CAUDIO:1783821005.1001",
+  contentHash: "explicit-quote-h1",
+  text: "Chastain: Spare Galaxy 2026 (26-0821)",
+  extractedEntities: { trucks: [], quotes: ["26-0821"] },
+  matches: [{ showKey: "chastain-imag", showName: "Chastain IMAG", documentNumbers: [], quoteElements: [], score: 55, confidenceBand: "medium", reasons: ["Chastain alias"], matchState: "needs_review" }],
+};
+await explicitQuoteStore.syncSlackSnapshot({ messages: { [explicitQuoteMessage.messageKey]: explicitQuoteMessage } });
+const explicitQuoteIntake = Object.values((await explicitQuoteStore.read()).intakeItems)[0];
+assert.deepEqual(explicitQuoteIntake.flexDocumentNumbers, ["26-0821"], "explicit Slack quote enters Intake even when the show catalog lacks it");
+assert.equal(explicitQuoteIntake.primaryFlexDocumentNumber, "26-0821", "one explicit Slack quote becomes the proposed primary workstream");
+assert.equal(explicitQuoteIntake.status, "needs_review", "explicit quote evidence does not silently confirm an uncertain show match");
+
+const multipleQuoteStore = createCueFoundationStore({ filePath: path.join(dir, "multiple-explicit-quotes.json") });
+const multipleQuoteMessage = { ...explicitQuoteMessage, messageKey: "CAUDIO:1783821005.1002", contentHash: "explicit-quote-h2", text: "Compare 26-0821 and 26-0822", extractedEntities: { trucks: [], quotes: ["26-0821", "26-0822"] } };
+await multipleQuoteStore.syncSlackSnapshot({ messages: { [multipleQuoteMessage.messageKey]: multipleQuoteMessage } });
+const multipleQuoteIntake = Object.values((await multipleQuoteStore.read()).intakeItems)[0];
+assert.deepEqual(multipleQuoteIntake.flexDocumentNumbers, ["26-0821", "26-0822"], "all explicit quote evidence is preserved");
+assert.equal(multipleQuoteIntake.primaryFlexDocumentNumber, null, "multiple explicit quotes require human workstream confirmation");
+
 const qualityStore = createCueFoundationStore({ filePath: path.join(dir, "quality.json") });
 const birthday = { ...unmatched, messageKey: "CGENERAL:1783821006.0001", contentHash: "h7", text: "Happy birthday! Hope you have a blast.", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Happy birthday!", unresolved: false } };
 const guardrails = { ...message, messageKey: "CLOG:1783821007.0001", contentHash: "h8", text: "<@U47> We need two guardrails for LiteFlair.", operationalClassification: { categories: ["general_operations"], status: "at_risk", summary: "<@U47> We need two guardrails for LiteFlair.", unresolved: true } };
