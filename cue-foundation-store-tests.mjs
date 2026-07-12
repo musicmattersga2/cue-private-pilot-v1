@@ -29,3 +29,9 @@ const routineStore = createCueFoundationStore({ filePath: path.join(dir, "routin
 const routine = { ...message, messageKey: "CLOG:1783821001.0001", contentHash: "h2", text: "5301 is loaded with Frost motors.", operationalClassification: { categories: ["trucking", "warehouse", "equipment", "resolution"], status: "resolved", summary: "5301 is loaded with Frost motors.", unresolved: false }, matchState: "needs_review" };
 const routineResult = await routineStore.syncSlackSnapshot({ messages: { [routine.messageKey]: routine } });
 assert.equal(routineResult.openDecisionCount, 0, "routine state confirmation does not clutter decisions");
+
+const unmatchedStore = createCueFoundationStore({ filePath: path.join(dir, "unmatched.json") });
+const unmatched = { ...message, messageKey: "CGENERAL:1783821002.0001", contentHash: "h3", text: "Can someone receive the delivery?", matches: [], matchState: "general_queue", operationalClassification: { categories: ["trucking"], status: "needs_review", summary: "Can someone receive the delivery?", unresolved: true } };
+const unmatchedResult = await unmatchedStore.syncSlackSnapshot({ messages: { [unmatched.messageKey]: unmatched } });
+assert.equal(unmatchedResult.intakeCount, 1, "unmatched operational signal retained in Intake");
+assert.equal(unmatchedResult.openDecisionCount, 0, "unmatched chatter does not flood My Decisions");
