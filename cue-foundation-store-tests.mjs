@@ -64,3 +64,16 @@ assert(matchDecision.ok && matchDecision.event, "show match decision is recorded
 const matchDb = await matchStore.read();
 assert.equal(Object.values(matchDb.intakeItems)[0].matchedShowId, "paul-simon", "confirmed show persisted to Intake");
 assert.equal(matchDb.learnedAliases["chastain paul"].showId, "paul-simon", "confirmed alias learned");
+
+const qualityStore = createCueFoundationStore({ filePath: path.join(dir, "quality.json") });
+const birthday = { ...unmatched, messageKey: "CGENERAL:1783821006.0001", contentHash: "h7", text: "Happy birthday! Hope you have a blast.", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Happy birthday!", unresolved: false } };
+const guardrails = { ...message, messageKey: "CLOG:1783821007.0001", contentHash: "h8", text: "<@U47> We need two guardrails for LiteFlair.", operationalClassification: { categories: ["general_operations"], status: "at_risk", summary: "<@U47> We need two guardrails for LiteFlair.", unresolved: true } };
+await qualityStore.syncSlackSnapshot({ users: { U47: { displayName: "Aaron" } }, messages: { [birthday.messageKey]: birthday, [guardrails.messageKey]: guardrails } });
+const qualityDb = await qualityStore.read();
+assert.equal(Object.keys(qualityDb.intakeItems).length, 1, "social chatter excluded from operational Intake");
+const qualityIntake = Object.values(qualityDb.intakeItems)[0];
+assert.equal(qualityIntake.category, "equipment", "equipment language overrides broad cached category");
+assert.match(qualityIntake.summary, /@Aaron/, "Slack user mention resolved for human-readable evidence");
+await qualityStore.syncSlackSnapshot({ messages: { [birthday.messageKey]: birthday } });
+const reconciledDb = await qualityStore.read();
+assert.equal(Object.keys(reconciledDb.intakeItems).length, 0, "stale derived Intake is reconciled when no longer operational");
