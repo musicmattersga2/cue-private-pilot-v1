@@ -5,7 +5,8 @@
   "main": "cue-flex-intelligence-server.mjs",
   "scripts": {
     "start": "node cue-flex-intelligence-server.mjs",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node slack-operational-signals-tests.mjs && node cue-foundation-store-tests.mjs",
+    "test:foundation": "node cue-foundation-store-tests.mjs"
   },
   "keywords": [],
   "author": "",
