@@ -1,0 +1,61 @@
+{
+  "id": "G00",
+  "rule_id": null,
+  "description": "Clean show — missing staffing/warehouse must not invent false risks",
+  "now": "2026-07-01T12:00:00.000Z",
+  "expect": {
+    "rule_ids": [],
+    "min_findings": 0,
+    "max_findings": 0
+  },
+  "snapshot": {
+    "snapshot_id": "g00",
+    "snapshot_version": "intelligence-show-snapshot.v1",
+    "generated_at": "2026-07-01T12:00:00.000Z",
+    "show": {
+      "show_id": "fixture-g00-clean",
+      "name": "Clean Corporate Show",
+      "status": "active",
+      "client": "Corp",
+      "venue": "Ballroom",
+      "ship_at": "2026-07-20T08:00:00.000Z",
+      "load_in_at": "2026-07-21T14:00:00.000Z",
+      "show_start_at": "2026-07-22T19:00:00.000Z",
+      "load_out_at": "2026-07-23T02:00:00.000Z",
+      "project_manager": "PM",
+      "source_refs": []
+    },
+    "active_fact_candidates": [
+      {
+        "field_path": "show.venue",
+        "normalized_value": "ballroom",
+        "display_value": "Ballroom",
+        "source_type": "flex",
+        "source_id": "flex:clean",
+        "source_reliability": "high",
+        "confidence": "high",
+        "active": true,
+        "superseded": false
+      }
+    ],
+    "staffing": { "source_status": "unavailable", "positions": [] },
+    "trucking": { "source_status": "unavailable", "runs": [] },
+    "warehouse": {
+      "source_status": "unavailable",
+      "pull_required": null,
+      "pull_status": null,
+      "pull_progress": null,
+      "source_refs": []
+    },
+    "milestones": [
+      { "milestone_id": "ship", "type": "ship_at", "at": "2026-07-20T08:00:00.000Z", "source_refs": [] },
+      { "milestone_id": "load_in", "type": "load_in_at", "at": "2026-07-21T14:00:00.000Z", "source_refs": [] },
+      { "milestone_id": "show_start", "type": "show_start_at", "at": "2026-07-22T19:00:00.000Z", "source_refs": [] },
+      { "milestone_id": "load_out", "type": "load_out_at", "at": "2026-07-23T02:00:00.000Z", "source_refs": [] }
+    ],
+    "adapter_telemetry": {
+      "missing_inputs": ["staffing.positions", "trucking.runs", "warehouse.pull_progress"],
+      "notes": ["Sources unavailable — unknown is not a risk."]
+    }
+  }
+}

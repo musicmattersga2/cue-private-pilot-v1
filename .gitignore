@@ -24,3 +24,8 @@ data/slack-operational-signals.e2e.json
 data/slack-operational-signals*.tmp
 data/slack-operational-signals*.corrupt-*
 
+# Intelligence Rules findings store (observe-only pilot runtime)
+data/cue-intelligence-findings.json
+data/cue-intelligence-findings*.tmp
+data/cue-intelligence-findings*.corrupt-*
+

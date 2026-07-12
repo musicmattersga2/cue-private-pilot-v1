@@ -564,6 +564,36 @@
       min-height: 100%;
     }
 
+    .intelligence-findings .intel-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .intelligence-finding {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      margin-top: 8px;
+    }
+
+    .intelligence-finding .intel-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .intelligence-finding .evidence {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
     .action-row {
       display: grid;
       grid-template-columns: auto 1fr;
@@ -1031,6 +1061,211 @@
     let activeShows = [];
     let selectedShowId = null;
     let activeShowsView = "row";
+    let intelligenceFindingsByShow = {};
+
+    function intelligenceSeverityTone(severity) {
+      const raw = String(severity || "").toLowerCase();
+      if (raw === "critical") return "red";
+      if (raw === "needs_attention") return "magenta";
+      if (raw === "watch") return "yellow";
+      return "cyan";
+    }
+
+    function getIntelligenceFindingsForShow(showId) {
+      return intelligenceFindingsByShow[String(showId)] || [];
+    }
+
+    function intelligenceOpenCount(showId) {
+      return getIntelligenceFindingsForShow(showId).filter((item) =>
+        ["open", "acknowledged", "snoozed"].includes(item.status)
+      ).length;
+    }
+
+    function renderIntelligenceSummaryPill(showId) {
+      const count = intelligenceOpenCount(showId);
+      if (!count) return "";
+      const findings = getIntelligenceFindingsForShow(showId).filter((item) =>
+        ["open", "acknowledged", "snoozed"].includes(item.status)
+      );
+      const worst = findings.some((f) => f.severity === "critical")
+        ? "critical"
+        : findings.some((f) => f.severity === "needs_attention")
+          ? "needs_attention"
+          : "watch";
+      return `<span class="pill ${escapeHtml(
+        intelligenceSeverityTone(worst)
+      )}">Intel · ${escapeHtml(String(count))}</span>`;
+    }
+
+    function renderIntelligenceFindingsSection(show) {
+      const findings = getIntelligenceFindingsForShow(show.id).filter((item) =>
+        ["open", "acknowledged", "snoozed", "dismissed", "resolved"].includes(
+          item.status
+        )
+      );
+      const visible = findings.slice(0, 12);
+      const rows =
+        visible
+          .map((finding) => {
+            const evidence = (finding.evidence_refs || [])
+              .slice(0, 4)
+              .map(
+                (ref) =>
+                  `${ref.field_path || ref.source_type || "evidence"}: ${
+                    ref.display_value ?? ref.normalized_value ?? ""
+                  }`
+              )
+              .join("\n");
+            const lifecycleButtons =
+              finding.status === "dismissed" || finding.status === "resolved"
+                ? `<button class="small" data-intel-action="reopen" data-intel-id="${escapeHtml(
+                    finding.finding_id
+                  )}">Reopen</button>`
+                : `<button class="small" data-intel-action="acknowledge" data-intel-id="${escapeHtml(
+                    finding.finding_id
+                  )}">Acknowledge</button>
+                   <button class="small" data-intel-action="snooze" data-intel-id="${escapeHtml(
+                     finding.finding_id
+                   )}">Snooze 24h</button>
+                   <button class="small" data-intel-action="dismiss" data-intel-id="${escapeHtml(
+                     finding.finding_id
+                   )}">Dismiss</button>`;
+            return `
+              <div class="intelligence-finding">
+                <div>
+                  <span class="pill ${escapeHtml(
+                    intelligenceSeverityTone(finding.severity)
+                  )}">${escapeHtml(finding.severity)}</span>
+                  <span class="pill cyan">${escapeHtml(finding.rule_id)}</span>
+                  <span class="pill cyan">observe only</span>
+                  <span class="pill cyan">${escapeHtml(finding.status)}</span>
+                </div>
+                <div class="action-row-title" style="margin-top:8px">${escapeHtml(
+                  finding.title
+                )}</div>
+                <div class="action-row-meta">${escapeHtml(finding.summary)}</div>
+                ${
+                  finding.recommended_action
+                    ? `<div class="value muted" style="margin-top:6px">Next: ${escapeHtml(
+                        finding.recommended_action
+                      )}</div>`
+                    : ""
+                }
+                ${
+                  evidence
+                    ? `<div class="evidence">${escapeHtml(evidence)}</div>`
+                    : ""
+                }
+                <div class="intel-actions">${lifecycleButtons}</div>
+              </div>
+            `;
+          })
+          .join("") ||
+        `<div class="value muted">No Intelligence findings for this show yet. Run evaluate to refresh.</div>`;
+
+      return `
+        <div class="detail-panel detail-section intelligence-findings">
+          <h3>Intelligence Findings
+            <span class="intel-badge">
+              <span class="pill cyan">observe only</span>
+              ${renderIntelligenceSummaryPill(show.id)}
+            </span>
+          </h3>
+          <div class="value muted" style="margin-bottom:8px">
+            Findings never change FLEX, Intake, or show truth. They are review signals only.
+          </div>
+          <div style="margin-bottom:8px">
+            <button class="small" data-intel-evaluate="${escapeHtml(
+              show.id
+            )}">Evaluate Intelligence</button>
+          </div>
+          ${rows}
+        </div>
+      `;
+    }
+
+    async function refreshIntelligenceFindings(showId = null) {
+      try {
+        const params = new URLSearchParams();
+        if (showId) params.set("showId", showId);
+        params.set("status", "open,acknowledged,snoozed,dismissed,resolved");
+        const response = await fetch(
+          `/api/intelligence-rules/findings?${params.toString()}`
+        );
+        if (response.status === 401) return;
+        const data = await response.json();
+        if (!data.ok) return;
+        if (showId) {
+          intelligenceFindingsByShow[String(showId)] = data.items || [];
+        } else {
+          const next = {};
+          for (const item of data.items || []) {
+            const key = String(item.show_id || "");
+            if (!key) continue;
+            if (!next[key]) next[key] = [];
+            next[key].push(item);
+          }
+          intelligenceFindingsByShow = next;
+        }
+      } catch (error) {
+        console.warn("[Intelligence] findings refresh failed", error);
+      }
+    }
+
+    async function evaluateIntelligenceForShow(showId) {
+      statusEl.textContent = `Evaluating Intelligence for ${showId}…`;
+      try {
+        const response = await fetch("/api/intelligence-rules/evaluate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ showId }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        intelligenceFindingsByShow[String(showId)] = data.findings || [];
+        statusEl.textContent = `Intelligence evaluated · ${
+          (data.actionable || []).length
+        } actionable finding(s)`;
+        rerenderAll();
+      } catch (error) {
+        statusEl.textContent = `Intelligence evaluate failed: ${error.message}`;
+      }
+    }
+
+    async function intelligenceLifecycleAction(findingId, action) {
+      try {
+        const body = { actorId: "active-shows-user" };
+        if (action === "snooze") {
+          body.until = new Date(
+            Date.now() + 24 * 60 * 60 * 1000
+          ).toISOString();
+          body.reason = "Snoozed 24h from Active Shows";
+        }
+        const response = await fetch(
+          `/api/intelligence-rules/findings/${encodeURIComponent(
+            findingId
+          )}/${action}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }
+        );
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        const showId = data.finding?.show_id;
+        if (showId) await refreshIntelligenceFindings(showId);
+        else await refreshIntelligenceFindings();
+        rerenderAll();
+        statusEl.textContent = `Intelligence finding ${action} recorded`;
+      } catch (error) {
+        statusEl.textContent = `Intelligence ${action} failed: ${error.message}`;
+      }
+    }
 
     function setActiveShowsView(view) {
       activeShowsView = view === "card" ? "card" : "row";
@@ -2826,6 +3061,9 @@
               </td>
               <td>
                 <div>${escapeHtml(presentation.nextAction)}</div>
+                <div style="margin-top:6px">${renderIntelligenceSummaryPill(
+                  show.id
+                )}</div>
                 <div class="row-actions" style="margin-top:8px">
                   <button class="small ${querying ? "querying" : ""}" data-query-flex="${escapeHtml(
                     show.id
@@ -2880,6 +3118,7 @@
             <span class="pill cyan">${escapeHtml(
               presentation.flexSourceLabel.replace(/^FLEX Source:\s*/i, "FLEX: ")
             )}</span>
+            ${renderIntelligenceSummaryPill(show.id)}
           </div>
 
           ${renderDepartmentBadges(presentation.departments, 5)}
@@ -3788,6 +4027,8 @@
           </div>
         </div>
 
+        ${renderIntelligenceFindingsSection(show)}
+
         <div class="detail-two-col">
           <div class="detail-panel detail-section balanced" style="margin-bottom:0">
             <h3>FLEX Scope</h3>
@@ -3853,7 +4094,7 @@
       `;
     }
 
-    function openShowDetail(showId) {
+    async function openShowDetail(showId) {
       selectedShowId = showId;
       const show = activeShows.find((item) => item.id === showId);
       if (!show) return;
@@ -3861,6 +4102,11 @@
       renderShowDetail(show);
       modalBackdropEl.classList.add("open");
       showModalEl.classList.add("open");
+      await refreshIntelligenceFindings(showId);
+      if (selectedShowId === showId) {
+        const refreshed = activeShows.find((item) => item.id === showId);
+        if (refreshed) renderShowDetail(refreshed);
+      }
     }
 
     function closeShowDetail() {
@@ -3905,6 +4151,27 @@
         return;
       }
 
+      const evaluateButton = event.target.closest("[data-intel-evaluate]");
+      if (evaluateButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        evaluateIntelligenceForShow(
+          evaluateButton.getAttribute("data-intel-evaluate")
+        );
+        return;
+      }
+
+      const intelAction = event.target.closest("[data-intel-action]");
+      if (intelAction) {
+        event.preventDefault();
+        event.stopPropagation();
+        intelligenceLifecycleAction(
+          intelAction.getAttribute("data-intel-id"),
+          intelAction.getAttribute("data-intel-action")
+        );
+        return;
+      }
+
       const pullButton = event.target.closest("[data-pull-flex-show]");
       if (pullButton) {
         event.preventDefault();
@@ -3928,6 +4195,7 @@
         }
 
         activeShows = enrichShowsWithFlexHints(data.shows || []);
+        await refreshIntelligenceFindings();
         renderShows(activeShows);
       } catch (error) {
         statusEl.textContent = "Error loading active shows: " + error.message;
@@ -3950,6 +4218,7 @@
         }
 
         activeShows = enrichShowsWithFlexHints(data.shows || []);
+        await refreshIntelligenceFindings();
         renderShows(activeShows);
       } catch (error) {
         statusEl.textContent = "Error syncing: " + error.message;

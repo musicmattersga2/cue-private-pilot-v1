@@ -1,0 +1,56 @@
+{
+  "id": "G03",
+  "rule_id": "TRK-001",
+  "description": "Required run missing confirmed driver and vehicle",
+  "now": "2026-07-09T12:00:00.000Z",
+  "expect": {
+    "rule_ids": ["TRK-001"],
+    "min_findings": 1,
+    "severity": "needs_attention"
+  },
+  "snapshot": {
+    "snapshot_id": "g03",
+    "snapshot_version": "intelligence-show-snapshot.v1",
+    "generated_at": "2026-07-09T12:00:00.000Z",
+    "show": {
+      "show_id": "fixture-g03-trucking",
+      "name": "Trucking Gap Show",
+      "status": "active",
+      "client": "Acme",
+      "venue": "Arena",
+      "ship_at": "2026-07-11T06:00:00.000Z",
+      "load_in_at": "2026-07-12T14:00:00.000Z",
+      "show_start_at": "2026-07-13T19:00:00.000Z",
+      "load_out_at": "2026-07-14T02:00:00.000Z",
+      "project_manager": "PM",
+      "source_refs": []
+    },
+    "active_fact_candidates": [],
+    "staffing": { "source_status": "unavailable", "positions": [] },
+    "trucking": {
+      "source_status": "available",
+      "runs": [
+        {
+          "run_id": "run-outbound-1",
+          "required": true,
+          "status": "unassigned",
+          "driver_id": null,
+          "driver_confirmed": false,
+          "vehicle_id": null,
+          "vehicle_confirmed": false,
+          "departure_at": "2026-07-11T06:00:00.000Z",
+          "source_refs": []
+        }
+      ]
+    },
+    "warehouse": {
+      "source_status": "unavailable",
+      "pull_required": null,
+      "pull_status": null,
+      "pull_progress": null,
+      "source_refs": []
+    },
+    "milestones": [],
+    "adapter_telemetry": { "missing_inputs": [], "notes": [] }
+  }
+}
