@@ -375,7 +375,21 @@ export function createSlackOperationalSignalsService(options = {}) {
               candidateShows = await expandCandidatesForQuotes(candidateShows, [
                 normalized,
               ]);
-              normalized = applyMatches(normalized, candidateShows);
+              if (
+                candidateShows.length === 0 &&
+                existing?.contentHash === normalized.contentHash &&
+                Array.isArray(existing.matches) &&
+                existing.matches.length > 0
+              ) {
+                // Candidate discovery can be temporarily unavailable while the
+                // server or Active Shows source is warming up. Never downgrade
+                // previously established machine matches merely because the
+                // current catalog is empty.
+                normalized.matches = existing.matches;
+                normalized.matchState = existing.matchState;
+              } else {
+                normalized = applyMatches(normalized, candidateShows);
+              }
               normalized.manualDecision = null;
             } else if (isSlackSystemNoise(normalized)) {
               normalized.matches = [];
@@ -723,6 +737,16 @@ export function createSlackOperationalSignalsService(options = {}) {
         : await loadBaseCandidates({});
     if (rematchOptions.expandQuotes !== false) {
       candidateShows = await expandCandidatesForQuotes(candidateShows, messages);
+    }
+
+    if (candidateShows.length === 0) {
+      return {
+        rematched: 0,
+        skipped: true,
+        skipReason: "candidate_catalog_empty",
+        candidateShowCount: 0,
+        candidateQuoteNumbers: [],
+      };
     }
 
     const updated = [];
