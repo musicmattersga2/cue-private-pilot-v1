@@ -522,6 +522,17 @@ console.log("\nservice sync fixtures (no live Slack)");
   const storeAfter = await service.store.read();
   assert(storeAfter.channels.C_OPS?.latestTs === cursorBefore || storeAfter.channels.C_OPS?.latestTs >= cursorBefore, "cursor preserved/advanced safely");
 
+  const attachedBeforeEmptyRematch = Object.values(storeAfter.messages)
+    .flatMap((message) => message.matches || [])
+    .filter((match) => match.matchState === "auto_attached").length;
+  const emptyRematch = await service.rematchAll([], { expandQuotes: false });
+  const afterEmptyRematch = await service.store.read();
+  const attachedAfterEmptyRematch = Object.values(afterEmptyRematch.messages)
+    .flatMap((message) => message.matches || [])
+    .filter((match) => match.matchState === "auto_attached").length;
+  assert(emptyRematch.skipped && emptyRematch.skipReason === "candidate_catalog_empty", "empty candidate catalog skips destructive rematch");
+  assert(attachedAfterEmptyRematch === attachedBeforeEmptyRematch, "empty catalog preserves established matches");
+
   // Security: no token in store
   const raw = fs.readFileSync(filePath, "utf8").toLowerCase();
   assert(!raw.includes("xoxb-"), "store has no bot token");
