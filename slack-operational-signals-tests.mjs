@@ -840,6 +840,24 @@ console.log("\nalias / fuzzy / ambiguity matching");
     ),
     "unverified quote mapping reason present"
   );
+
+  const moonchildCandidate = {
+    showKey: "live-nation-moonchild-the-fox",
+    showName: "Live Nation Moonchild @ The Fox",
+    documentNumbers: ["26-1846", "26-0836"],
+    primaryDocumentNumber: "26-1846",
+    elementId: "85141d01-8008-4d29-8fc2-1749159e35e0",
+    documentRefs: [{ documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0" }],
+    source: "active_shows",
+    daysOut: 5,
+  };
+  const pullSheetMessage = normalizeSlackMessage(
+    { ts: "2.7", text: "Live Nation Moonchild @ The Fox (26-0836) pull sheet is ready", user: "U7" },
+    { channelId: "C_WAREHOUSE", channelName: "warehouse", authorName: "Ops" }
+  );
+  const pullSheetMatch = matchSlackMessageToShows(pullSheetMessage, [moonchildCandidate])[0];
+  assert(pullSheetMatch?.primaryDocumentNumber === "26-1846", "matcher preserves canonical show quote separately from mentioned pull sheet");
+  assert(pullSheetMatch?.documentRefs?.[0]?.elementId === moonchildCandidate.elementId, "matcher carries Intake Engine UUID forward");
 }
 
 console.log("\nsystem noise excluded from queues");
