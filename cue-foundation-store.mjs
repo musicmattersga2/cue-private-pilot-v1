@@ -15,6 +15,15 @@ const DEFAULT_PATH = path.resolve(
 let writeChain = Promise.resolve();
 
 function now() { return new Date().toISOString(); }
+function cleanText(value) {
+  return String(value ?? "")
+    .replace(/â€™|â/g, "'")
+    .replace(/â|â/g, '"')
+    .replace(/â|â/g, "-")
+    .replace(/âs\b/g, "'s")
+    .replace(/Â/g, "")
+    .trim();
+}
 function id(prefix, value) {
   const hash = crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 24);
   return `${prefix}_${hash}`;
@@ -90,13 +99,15 @@ export function createCueFoundationStore(options = {}) {
         const sourceId = id("src", `slack:${message.messageKey}:${message.contentHash}`);
         const intakeId = id("intake", sourceId);
         const match = primaryMatch(message); const domain = domainOf(message);
+        const cleanedText = cleanText(message.text);
+        const cleanedSummary = cleanText(message.operationalClassification?.summary || message.text);
         const sourceRecord = {
           id: sourceId, sourceType: "slack", externalId: message.messageKey,
           externalParentId: message.threadTs ? `${message.channelId}:${message.threadTs}` : null,
           externalRevisionId: message.editedTs || null, sourceUrl: message.permalink || null,
           authorExternalId: message.userId || null, observedAt: message.timestampIso || null,
           ingestedAt: message.ingestedAt || now(), contentHash: message.contentHash,
-          normalizedText: message.text, connectorVersion: "slack-operational-signals-v1",
+          normalizedText: cleanedText, connectorVersion: "slack-operational-signals-v1",
           payload: { channelId: message.channelId, channelName: message.channelName, authorName: message.authorName, classification: message.operationalClassification, entities: message.extractedEntities },
         };
         if (db.sourceRecords[sourceId]) updated += 1; else created += 1;
@@ -106,7 +117,7 @@ export function createCueFoundationStore(options = {}) {
           id: intakeId, sourceRecordId: sourceId, status, category: domain,
           urgency: message.operationalClassification?.status === "blocked" ? "urgent" : "normal",
           impact: message.operationalClassification?.status === "blocked" ? "critical" : message.operationalClassification?.status === "at_risk" ? "material" : "minor",
-          summary: message.operationalClassification?.summary || message.text,
+          summary: cleanedSummary,
           matchedShowId: match?.showKey || null, matchConfidence: match?.score ?? null,
           matchReasons: match?.reasons || [], createdAt: db.intakeItems[intakeId]?.createdAt || now(), updatedAt: now(),
         };
@@ -115,7 +126,7 @@ export function createCueFoundationStore(options = {}) {
           db.matchCandidates[candidateId] = { id: candidateId, intakeItemId: intakeId, candidateEntityType: "show", candidateEntityId: candidate.showKey, score: Number(candidate.score || 0), reasons: candidate.reasons || [], rank: rank + 1, selected: ["auto_attached","manually_approved"].includes(candidate.matchState), matcherVersion: "slack-match-v1" };
         }
         const factId = id("fact", `${intakeId}:${domain}`);
-        db.candidateFacts[factId] = { id: factId, intakeItemId: intakeId, factType: `slack.${domain}.signal`, value: { text: message.text, categories: message.operationalClassification?.categories || [], entities: message.extractedEntities || {} }, confidence: match?.confidenceBand || match?.confidence || null, evidenceSpan: { sourceRecordId: sourceId, text: message.text }, extractionVersion: "slack-rules-v1" };
+        db.candidateFacts[factId] = { id: factId, intakeItemId: intakeId, factType: `slack.${domain}.signal`, value: { text: cleanedText, categories: message.operationalClassification?.categories || [], entities: message.extractedEntities || {} }, confidence: match?.confidenceBand || match?.confidence || null, evidenceSpan: { sourceRecordId: sourceId, text: cleanedText }, extractionVersion: "slack-rules-v1" };
         const cardId = id("card", intakeId);
         const cardType = cardTypeOf(message);
         const cardEligible = shouldCreateDecisionCard(message, status);
@@ -123,7 +134,16 @@ export function createCueFoundationStore(options = {}) {
           delete db.decisionCards[cardId];
         }
         if (!db.decisionCards[cardId] && cardEligible) {
-          db.decisionCards[cardId] = { id: cardId, intakeItemId: intakeId, showId: match?.showKey || null, status: "open", cardType, domain, headline: message.operationalClassification?.summary || message.text, explanation: cardType === "task_request" ? `CUE found a ${domain} request that needs an owner or disposition.` : cardType === "risk_review" ? `CUE found a ${domain} risk or unresolved condition that may affect readiness.` : `CUE needs a human to confirm this signal's show and operational treatment.`, recommendation: cardType === "task_request" ? "Create and assign the task, use as evidence, or reject it." : cardType === "risk_review" ? "Confirm the risk, owner and readiness impact." : match ? "Confirm the show match, then choose how CUE should treat the signal." : "Choose the correct show or mark this as not relevant.", urgency: db.intakeItems[intakeId].urgency, impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact, confidence: match?.confidenceBand || null, sourceRecordId: sourceId, createdAt: now(), updatedAt: now() };
+          db.decisionCards[cardId] = { id: cardId, intakeItemId: intakeId, showId: match?.showKey || null, status: "open", cardType, domain, headline: cleanedSummary, explanation: cardType === "task_request" ? `CUE found a ${domain} request that needs an owner or disposition.` : cardType === "risk_review" ? `CUE found a ${domain} risk or unresolved condition that may affect readiness.` : `CUE needs a human to confirm this signal's show and operational treatment.`, recommendation: cardType === "task_request" ? "Create and assign the task, use as evidence, or reject it." : cardType === "risk_review" ? "Confirm the risk, owner and readiness impact." : match ? "Confirm the show match, then choose how CUE should treat the signal." : "Choose the correct show or mark this as not relevant.", urgency: db.intakeItems[intakeId].urgency, impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact, confidence: match?.confidenceBand || null, sourceRecordId: sourceId, createdAt: now(), updatedAt: now() };
+        } else if (db.decisionCards[cardId]?.status === "open" && cardEligible) {
+          Object.assign(db.decisionCards[cardId], {
+            showId: match?.showKey || null,
+            cardType,
+            domain,
+            headline: cleanedSummary,
+            impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact,
+            updatedAt: now(),
+          });
         }
       }
       writeFile(filePath, db); return { created, updated, sourceRecordCount: Object.keys(db.sourceRecords).length, intakeCount: Object.keys(db.intakeItems).length, openDecisionCount: Object.values(db.decisionCards).filter(x => x.status === "open").length };
