@@ -20,7 +20,14 @@ import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
 import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
-import { buildFlexQuoteUrl, isFlexElementId, parseFlexQuoteUrl } from "./flex-quote-link.mjs";
+import {
+  buildFlexQuoteUrl,
+  inferFlexDocumentType,
+  isFlexElementId,
+  parseFlexQuoteUrl,
+  selectFlexDocumentCandidate,
+  selectPrimaryShowQuote,
+} from "./flex-quote-link.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -1583,7 +1590,7 @@ function extractSearchResultId(result) {
   );
 }
 
-async function findFlexQuoteByDocumentNumber(documentNumber) {
+async function findFlexQuoteByDocumentNumber(documentNumber, options = {}) {
   const normalizedDocumentNumber = String(documentNumber || "").trim();
 
   if (!normalizedDocumentNumber) {
@@ -1619,19 +1626,11 @@ async function findFlexQuoteByDocumentNumber(documentNumber) {
     }))
     .filter((candidate) => candidate.elementId);
 
-  // FLEX global search may return only name/id for the match. Prefer any result that explicitly
-  // carries the document number, otherwise use the first result returned for this exact search.
-  const exactMatch =
-    candidates.find(
-      (candidate) =>
-        String(candidate.documentNumber || "").trim().toLowerCase() ===
-        normalizedDocumentNumber.toLowerCase()
-    ) || candidates[0] || null;
-
-  if (!exactMatch) {
+  if (!candidates.length) {
     return {
       documentNumber: normalizedDocumentNumber,
       found: false,
+      ambiguous: false,
       elementId: null,
       name: null,
       matches: [],
@@ -1640,17 +1639,97 @@ async function findFlexQuoteByDocumentNumber(documentNumber) {
     };
   }
 
+  // FLEX document numbers are not globally unique across quotes, pull sheets,
+  // manifests, and other financial-document types. Verify every plausible hit
+  // against its own header and then use show identity to disambiguate it.
+  const wantedLower = normalizedDocumentNumber.toLowerCase();
+  const exactSearchHits = candidates.filter(candidate =>
+    String(candidate.documentNumber || "").trim().toLowerCase() === wantedLower
+  );
+  const candidatesToVerify = (exactSearchHits.length ? exactSearchHits : candidates).slice(0, 12);
+  const verified = [];
+  for (const candidate of candidatesToVerify) {
+    try {
+      const header = await fetchFlexHeaderData(candidate.elementId);
+      const context = buildShowContext(header.data, candidate.elementId);
+      if (String(context.documentNumber || "").trim().toLowerCase() !== wantedLower) continue;
+      let documentType = inferFlexDocumentType(`${candidate.type || ""} ${candidate.name || ""}`, "unknown");
+      let parentElementId = null;
+      if (documentType === "unknown") {
+        try {
+          const tree = await fetchFlexElementTree(candidate.elementId);
+          const treeNode = normalizeFlexElementTree(tree.data).find(node =>
+            String(node.elementId || "").toLowerCase() === String(candidate.elementId).toLowerCase()
+          );
+          if (treeNode) {
+            documentType = inferFlexDocumentType(`${treeNode.type || ""} ${treeNode.name || ""} ${treeNode.domainId || ""}`, "unknown");
+            parentElementId = treeNode.parentId || null;
+          }
+        } catch {
+          // Header verification remains valid; opaque type stays unknown and
+          // therefore cannot outrank an explicitly typed quote.
+        }
+      }
+      verified.push({
+        ...candidate,
+        showName: context.showName || candidate.name || null,
+        client: context.client || null,
+        documentNumber: context.documentNumber,
+        documentType,
+        parentElementId,
+        context,
+      });
+    } catch {
+      // Try the next candidate. A single inaccessible result must not cause a
+      // different document to be selected by position.
+    }
+  }
+
+  const selection = selectFlexDocumentCandidate(verified, {
+    showName: options.showName || options.name || null,
+    client: options.client || null,
+    documentType: options.documentType || null,
+  });
+  const exactMatch = selection.candidate;
+  if (!exactMatch) {
+    return {
+      documentNumber: normalizedDocumentNumber,
+      found: false,
+      ambiguous: selection.ambiguous,
+      elementId: null,
+      name: null,
+      matches: selection.ranked.map(candidate => ({
+        elementId: candidate.elementId,
+        name: candidate.showName || candidate.name,
+        documentNumber: candidate.documentNumber,
+        type: candidate.type,
+        documentType: candidate.documentType,
+        parentElementId: candidate.parentElementId || null,
+        identityScore: candidate.identityScore,
+      })),
+      requestUrl: searchResult.requestUrl,
+      rawCount: results.length,
+    };
+  }
+
   return {
     documentNumber: normalizedDocumentNumber,
     found: true,
+    ambiguous: false,
     elementId: exactMatch.elementId,
-    name: exactMatch.name,
+    name: exactMatch.showName || exactMatch.name,
     type: exactMatch.type,
-    matches: candidates.map((candidate) => ({
+    documentType: exactMatch.documentType,
+    parentElementId: exactMatch.parentElementId || null,
+    context: exactMatch.context,
+    matches: selection.ranked.map((candidate) => ({
       elementId: candidate.elementId,
-      name: candidate.name,
+      name: candidate.showName || candidate.name,
       documentNumber: candidate.documentNumber,
       type: candidate.type,
+      documentType: candidate.documentType,
+      parentElementId: candidate.parentElementId || null,
+      identityScore: candidate.identityScore,
     })),
     requestUrl: searchResult.requestUrl,
     rawCount: results.length,
@@ -1660,14 +1739,6 @@ async function findFlexQuoteByDocumentNumber(documentNumber) {
 function extractQuoteNumbersFromText(value) {
   const matches = String(value || "").match(/\b\d{2}-\d{3,6}\b/g) || [];
   return [...new Set(matches.map((item) => item.trim()))];
-}
-
-function inferFlexDocumentType(value, fallback = "unknown") {
-  const text = String(value || "").toLowerCase();
-  if (/pull\s*sheet|pullsheet/.test(text)) return "pull_sheet";
-  if (/event\s*folder/.test(text)) return "event_folder";
-  if (/\bquote\b|mmp\s*quote/.test(text)) return "quote";
-  return fallback;
 }
 
 function buildSlackCandidateFromActiveShow(show) {
@@ -1684,7 +1755,7 @@ function buildSlackCandidateFromActiveShow(show) {
       ? {
           documentNumber: primaryDocumentNumber,
           elementId: primaryElementId,
-          documentType: inferFlexDocumentType(show?.flex?.matchType, "quote"),
+          documentType: show?.flex?.primary?.documentType || inferFlexDocumentType(show?.flex?.matchType, "quote"),
           role: "primary_show_quote",
           name: show?.flex?.primary?.name || show?.flex?.showName || showName,
           parentElementId: null,
@@ -1694,7 +1765,7 @@ function buildSlackCandidateFromActiveShow(show) {
     ...flexDocuments.map((document) => ({
       documentNumber: document?.documentNumber || null,
       elementId: document?.elementId || null,
-      documentType: inferFlexDocumentType(`${document?.type || ""} ${document?.status || ""} ${document?.showName || ""}`, "quote"),
+      documentType: document?.documentType || inferFlexDocumentType(`${document?.type || ""} ${document?.status || ""} ${document?.showName || ""}`, "unknown"),
       role: String(document?.documentNumber || "") === primaryDocumentNumber ? "primary_show_quote" : "related",
       name: document?.showName || document?.name || null,
       parentElementId: document?.parentElementId || null,
@@ -7817,15 +7888,19 @@ const server = http.createServer(async (req, res) => {
       };
     }
 
-    async function resolveActiveShowFlexDocument(documentNumber) {
+    async function resolveActiveShowFlexDocument(documentNumber, show = {}) {
       try {
-        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber);
+        const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber, {
+          showName: show.name || show.showName || null,
+          client: show.activeShowsIndex?.client || show.client || null,
+        });
 
         if (!quoteLookup.found || !quoteLookup.elementId) {
           return {
             status: "Missing",
             approvalNeeded: true,
             documentNumber,
+            documentType: "unknown",
             elementId: null,
             showName: null,
             client: null,
@@ -7839,7 +7914,9 @@ const server = http.createServer(async (req, res) => {
             financials: null,
             counts: null,
             quoteLookup,
-            message: `No FLEX quote found for ${documentNumber}.`,
+            message: quoteLookup.ambiguous
+              ? `FLEX document ${documentNumber} is ambiguous across document types or shows.`
+              : `No verified FLEX document found for ${documentNumber}.`,
           };
         }
 
@@ -7851,6 +7928,8 @@ const server = http.createServer(async (req, res) => {
           status: "Verified",
           approvalNeeded: false,
           documentNumber,
+          documentType: quoteLookup.documentType || "unknown",
+          parentElementId: quoteLookup.parentElementId || null,
           elementId: quoteLookup.elementId,
           showName:
             detail.showContext?.showName || quoteLookup.name || null,
@@ -7871,6 +7950,7 @@ const server = http.createServer(async (req, res) => {
           status: "Error",
           approvalNeeded: true,
           documentNumber,
+          documentType: "unknown",
           elementId: null,
           showName: null,
           client: null,
@@ -7889,8 +7969,61 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    async function enrichActiveShowWithFlex(show) {
-      const documentNumbers = extractActiveShowDocumentNumbers(show);
+    async function resolveActiveShowFlexQuoteByName(show = {}) {
+      const showName = String(show.name || show.showName || "").trim();
+      if (!showName) return null;
+      try {
+        const search = await searchFlexQuotes(showName, {
+          quoteOnly: true,
+          includeInvoices: false,
+          limit: 8,
+          enrichLimit: 30,
+        });
+        const candidates = (search.matches || []).map(match => ({
+          ...match,
+          showName: match.name,
+          documentType: inferFlexDocumentType(`${match.type || ""} ${match.rawSearchName || ""}`, "unknown"),
+        }));
+        const selection = selectFlexDocumentCandidate(candidates, {
+          showName,
+          client: show.activeShowsIndex?.client || show.client || null,
+          documentType: "quote",
+        });
+        const selected = selection.candidate;
+        if (!selected || !selected.documentNumber || !selected.elementId) return null;
+        // Name similarity alone is not enough to turn an opaque financial
+        // document into the primary quote. FLEX must identify the result as a
+        // quote; otherwise the Command Center asks a human to link it.
+        if (selected.documentType !== "quote") return null;
+        const intake = await fetchFlexShowIntake(selected.elementId);
+        const detail = buildFlexDocumentDetail(intake);
+        return {
+          status: "Verified",
+          approvalNeeded: false,
+          documentNumber: selected.documentNumber,
+          documentType: "quote",
+          elementId: selected.elementId,
+          showName: detail.showContext?.showName || selected.showName || showName,
+          client: detail.showContext?.client || selected.client || null,
+          venue: detail.showContext?.venue || selected.venue || null,
+          plannedStartDate: detail.showContext?.plannedStartDate || selected.plannedStartDate || null,
+          plannedEndDate: detail.showContext?.plannedEndDate || null,
+          loadInDate: detail.showContext?.loadInDate || null,
+          loadOutDate: detail.showContext?.loadOutDate || null,
+          soldDepartments: getFlexSoldDepartments(detail),
+          totals: detail.summary?.totals || null,
+          financials: detail.summary?.financials || null,
+          counts: detail.counts || null,
+          quoteLookup: { found: true, source: "active_show_identity", search },
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    async function enrichActiveShowWithFlex(show, options = {}) {
+      let documentNumbers = extractActiveShowDocumentNumbers(show);
+      let identityResolvedDocument = null;
       const lastPullAt = new Date().toISOString();
 
       const eventFolderHint = getActiveShowEventFolderHint(show);
@@ -7962,6 +8095,13 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      if (!documentNumbers.length && options.resolveByName !== false) {
+        identityResolvedDocument = await resolveActiveShowFlexQuoteByName(show);
+        if (identityResolvedDocument?.documentNumber) {
+          documentNumbers = [identityResolvedDocument.documentNumber];
+        }
+      }
+
       if (!documentNumbers.length) {
         return {
           ...show,
@@ -7992,11 +8132,13 @@ const server = http.createServer(async (req, res) => {
         };
       }
 
-      const documents = await Promise.all(
-        documentNumbers.map((documentNumber) =>
-          resolveActiveShowFlexDocument(documentNumber)
-        )
-      );
+      const documents = identityResolvedDocument
+        ? [identityResolvedDocument]
+        : await Promise.all(
+            documentNumbers.map((documentNumber) =>
+              resolveActiveShowFlexDocument(documentNumber, show)
+            )
+          );
 
       const verifiedDocuments = documents.filter(
         (document) => document.status === "Verified"
@@ -8004,7 +8146,10 @@ const server = http.createServer(async (req, res) => {
       const unresolvedDocuments = documents.filter(
         (document) => document.status !== "Verified"
       );
-      const primary = verifiedDocuments[0] || documents[0];
+      const primary = selectPrimaryShowQuote(verifiedDocuments, {
+        showName: show.name || show.showName || null,
+        client: show.activeShowsIndex?.client || show.client || null,
+      });
       const soldDepartments = Array.from(
         new Set(
           verifiedDocuments.flatMap((document) => document.soldDepartments || [])
@@ -8016,6 +8161,8 @@ const server = http.createServer(async (req, res) => {
         ? unresolvedDocuments.some((document) => document.status === "Error")
           ? "Error"
           : "Missing"
+        : !primary
+          ? "Partial"
         : unresolvedDocuments.length > 0
           ? "Partial"
           : "Verified";
@@ -8029,7 +8176,9 @@ const server = http.createServer(async (req, res) => {
         : "";
 
       const flexSignal = verifiedDocuments.length
-        ? `FLEX ${status} - ${checkedText} quote${documentNumbers.length === 1 ? "" : "s"} verified. Primary: ${primary.documentNumber} / ${primary.elementId}. Combined sold scope: ${soldDepartments.join(", ") || "No departments found"}.${unresolvedText}`
+        ? primary
+          ? `FLEX ${status} - ${checkedText} document${documentNumbers.length === 1 ? "" : "s"} verified. Primary show quote: ${primary.documentNumber} / ${primary.elementId}. Combined sold scope: ${soldDepartments.join(", ") || "No departments found"}.${unresolvedText}`
+          : `FLEX Partial - ${checkedText} document${documentNumbers.length === 1 ? "" : "s"} verified, but no canonical parent quote was identified. Human confirmation required.${unresolvedText}`
         : `FLEX ${status} - ${documentNumbers.join(", ")} did not fully resolve. Treat trucking / Drive evidence as hints only.${unresolvedText}`;
 
       return {
@@ -8037,7 +8186,7 @@ const server = http.createServer(async (req, res) => {
         flex: {
           status,
           approvalNeeded,
-          documentNumber: primary?.documentNumber || documentNumbers[0] || null,
+          documentNumber: primary?.documentNumber || null,
           documentNumbers,
           elementId: primary?.elementId || null,
           showName: primary?.showName || show.name,
@@ -8052,6 +8201,14 @@ const server = http.createServer(async (req, res) => {
           financials: combined.financials,
           counts: combined.counts,
           documents,
+          primary: primary
+            ? {
+                documentNumber: primary.documentNumber,
+                elementId: primary.elementId,
+                name: primary.showName || show.name || null,
+                documentType: primary.documentType || "quote",
+              }
+            : null,
           verifiedDocumentCount: verifiedDocuments.length,
           unresolvedDocumentCount: unresolvedDocuments.length,
           lastPullAt,
@@ -8234,15 +8391,37 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Wire Slack matching candidates: Active Shows (+ Event Folder hints) and
-    // live FLEX quote fallback for exact document numbers.
+    let activeShowsEnrichmentCache = { signature: null, expiresAt: 0, shows: [] };
+    async function enrichActiveShowsOnce(shows, options = {}) {
+      const signature = JSON.stringify((shows || []).map(show => ({
+        id: show.id,
+        name: show.name,
+        documents: extractActiveShowDocumentNumbers(show),
+        client: show.activeShowsIndex?.client || show.client || null,
+      })).concat([{ resolveByName: options.resolveByName !== false }]));
+      if (activeShowsEnrichmentCache.signature === signature && activeShowsEnrichmentCache.expiresAt > Date.now()) {
+        return activeShowsEnrichmentCache.shows;
+      }
+      const enriched = await Promise.all((shows || []).map(show => enrichActiveShowWithFlex(show, options)));
+      activeShowsEnrichmentCache = {
+        signature,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        shows: enriched,
+      };
+      return enriched;
+    }
+
+    // Slack matching and the Active Shows screen must consume the same FLEX-
+    // enriched objects. Raw sheet rows contain names and document hints but do
+    // not contain the verified UUID/type hierarchy needed by Intake.
     slackMatchDeps.getCandidateShows = async () => {
       const source = await getActiveShowsRowsWithFallback();
-      const shows = [
+      const showsWithHints = [
         ...source.shows,
         ...buildMissingEventFolderHintShows(source.shows),
       ];
-      return shows.map(buildSlackCandidateFromActiveShow);
+      const enrichedShows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: false });
+      return enrichedShows.map(buildSlackCandidateFromActiveShow);
     };
     slackMatchDeps.resolveQuoteCandidate = resolveSlackCandidateFromFlexQuote;
 
@@ -8252,9 +8431,7 @@ const server = http.createServer(async (req, res) => {
         ...activeShowsSource.shows,
         ...buildMissingEventFolderHintShows(activeShowsSource.shows),
       ];
-      const shows = await Promise.all(
-        showsWithHints.map((show) => enrichActiveShowWithFlex(show))
-      );
+      const shows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: true });
 
       // One shared Slack cache read — no per-show Slack API calls.
       let slackStatus = null;
