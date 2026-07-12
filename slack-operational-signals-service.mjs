@@ -749,6 +749,20 @@ export function createSlackOperationalSignalsService(options = {}) {
       };
     }
 
+    // Hydrate people referenced inside messages as well as message authors so
+    // downstream Intake evidence can display human names instead of Slack IDs.
+    const mentionedUserIds = new Set(
+      messages.flatMap((message) =>
+        [...String(message.text || "").matchAll(/<@([A-Z0-9]+)>/gi)].map((match) => match[1])
+      )
+    );
+    for (const userId of mentionedUserIds) {
+      if (snap.users?.[userId]?.displayName) continue;
+      const displayName = await resolveAuthorName(userId, snap.users);
+      snap.users ||= {};
+      snap.users[userId] = { ...(snap.users[userId] || {}), displayName };
+    }
+
     const updated = [];
     for (const message of messages) {
       if (message.deleted) continue;
