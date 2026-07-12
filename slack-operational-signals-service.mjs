@@ -209,6 +209,47 @@ export function createSlackOperationalSignalsService(options = {}) {
     };
   }
 
+  function refreshManualApprovalMetadata(message, candidateShows) {
+    if (message?.manualDecision?.action !== "approve") return message;
+    const approvedShowKey = String(message.manualDecision.showKey || "").trim();
+    if (!approvedShowKey) return message;
+    const candidate = (candidateShows || []).find(show => String(show?.showKey || "") === approvedShowKey);
+    if (!candidate) return message;
+    const previous = (message.matches || []).find(match => String(match?.showKey || "") === approvedShowKey) || {};
+    const refreshedApprovedMatch = {
+      ...previous,
+      showKey: approvedShowKey,
+      showName: candidate.showName || candidate.name || previous.showName || approvedShowKey,
+      client: candidate.client || null,
+      venue: candidate.venue || null,
+      documentNumbers: candidate.documentNumbers || [],
+      primaryDocumentNumber: candidate.primaryDocumentNumber || null,
+      elementId: candidate.elementId || null,
+      documentRefs: candidate.documentRefs || [],
+      quoteElements: candidate.quoteElements || [],
+      plannedStartDate: candidate.plannedStartDate || null,
+      plannedEndDate: candidate.plannedEndDate || null,
+      loadInDate: candidate.loadInDate || null,
+      loadOutDate: candidate.loadOutDate || null,
+      departments: candidate.departments || [],
+      confidence: "high",
+      confidenceBand: "high",
+      score: 999,
+      reasons: ["Manually approved", "FLEX metadata refreshed from Active Shows"],
+      evidence: { ...(previous.evidence || {}), manual: true, metadataRefreshed: true },
+      matchState: "manually_approved",
+    };
+    return {
+      ...message,
+      matches: [
+        refreshedApprovedMatch,
+        ...(message.matches || []).filter(match => String(match?.showKey || "") !== approvedShowKey),
+      ],
+      matchState: "manually_approved",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   async function resolveAuthorName(userId, cacheUsers) {
     if (!userId) return "Unknown";
     if (cacheUsers?.[userId]?.displayName) return cacheUsers[userId].displayName;
@@ -359,9 +400,12 @@ export function createSlackOperationalSignalsService(options = {}) {
               existing?.manualDecision &&
               existing.contentHash === normalized.contentHash
             ) {
-              normalized.matches = existing.matches;
-              normalized.matchState = existing.matchState;
-              normalized.manualDecision = existing.manualDecision;
+              normalized = refreshManualApprovalMetadata({
+                ...normalized,
+                matches: existing.matches,
+                matchState: existing.matchState,
+                manualDecision: existing.manualDecision,
+              }, candidateShows);
             } else if (!normalized.deleted && isOperationallyRelevant(normalized)) {
               // Thread parent context
               if (normalized.threadTs) {
@@ -767,8 +811,10 @@ export function createSlackOperationalSignalsService(options = {}) {
     for (const message of messages) {
       if (message.deleted) continue;
       if (message.manualDecision && message.contentHash) {
-        // Keep manual decisions unless caller forces later.
-        updated.push(message);
+        // Preserve the human show decision while refreshing the selected
+        // Active Shows/FLEX metadata. Freezing the entire match left verified
+        // quote UUIDs and document hierarchy permanently stale.
+        updated.push(refreshManualApprovalMetadata(message, candidateShows));
         continue;
       }
       const next = applyMatches(message, candidateShows);
