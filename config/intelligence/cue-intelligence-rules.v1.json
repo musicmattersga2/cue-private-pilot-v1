@@ -1,0 +1,68 @@
+{
+  "catalog_version": "1.0.0",
+  "status": "pilot",
+  "finding_contract_version": 1,
+  "default_mode": "observe_only",
+  "rules": [
+    {
+      "rule_id": "INT-002",
+      "version": 1,
+      "domain": "intake",
+      "title": "Conflicting current facts",
+      "mode": "hybrid",
+      "required_inputs": ["active_fact_candidates"],
+      "default_severity": "needs_attention",
+      "owner_role": "project_manager",
+      "dedupe_key_template": "INT-002:{show_id}:{field_path}",
+      "resolution": "One value is accepted as current or the conflict is explicitly dismissed"
+    },
+    {
+      "rule_id": "LAB-001",
+      "version": 1,
+      "domain": "labor",
+      "title": "Required position unfilled",
+      "mode": "deterministic",
+      "required_inputs": ["show.status", "show.load_in_at", "staffing.positions"],
+      "default_severity": "watch",
+      "owner_role": "staffing",
+      "dedupe_key_template": "LAB-001:{show_id}:{position_id}",
+      "resolution": "Position is confirmed, removed, or the show is canceled"
+    },
+    {
+      "rule_id": "TRK-001",
+      "version": 1,
+      "domain": "trucking",
+      "title": "Required run unassigned",
+      "mode": "deterministic",
+      "required_inputs": ["show.ship_at", "trucking.runs"],
+      "default_severity": "needs_attention",
+      "owner_role": "trucking",
+      "dedupe_key_template": "TRK-001:{show_id}:{run_id}",
+      "resolution": "Required driver and vehicle assignments are confirmed or run is canceled"
+    },
+    {
+      "rule_id": "WH-001",
+      "version": 1,
+      "domain": "warehouse",
+      "title": "Pull progress behind milestone",
+      "mode": "deterministic",
+      "required_inputs": ["show.ship_at", "warehouse.pull_status", "warehouse.pull_progress"],
+      "default_severity": "watch",
+      "owner_role": "warehouse",
+      "dedupe_key_template": "WH-001:{show_id}",
+      "resolution": "Pull progress meets the current milestone or show no longer requires a pull"
+    },
+    {
+      "rule_id": "SCH-003",
+      "version": 1,
+      "domain": "schedule",
+      "title": "Date sequence invalid",
+      "mode": "deterministic",
+      "required_inputs": ["show.milestones"],
+      "default_severity": "critical",
+      "owner_role": "project_manager",
+      "dedupe_key_template": "SCH-003:{show_id}:{milestone_pair}",
+      "resolution": "Milestone sequence becomes valid or an approved exception is recorded"
+    }
+  ]
+}
