@@ -97,6 +97,52 @@ const multipleQuoteIntake = Object.values((await multipleQuoteStore.read()).inta
 assert.deepEqual(multipleQuoteIntake.flexDocumentNumbers, ["26-0821", "26-0822"], "all explicit quote evidence is preserved");
 assert.equal(multipleQuoteIntake.primaryFlexDocumentNumber, null, "multiple explicit quotes require human workstream confirmation");
 
+const typedDocumentStore = createCueFoundationStore({ filePath: path.join(dir, "typed-flex-documents.json") });
+const typedDocumentMessage = {
+  ...message,
+  messageKey: "CWAREHOUSE:1783821005.1003",
+  contentHash: "typed-flex-documents-h1",
+  text: "Live Nation Moonchild @ The Fox (26-0836) pull sheet is ready to prep.",
+  extractedEntities: { trucks: [], quotes: ["26-0836"] },
+  matches: [{
+    showKey: "live-nation-moonchild-the-fox",
+    showName: "Live Nation Moonchild @ The Fox",
+    documentNumbers: ["26-1846", "26-0836"],
+    primaryDocumentNumber: "26-1846",
+    elementId: "85141d01-8008-4d29-8fc2-1749159e35e0",
+    documentRefs: [
+      { documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", source: "active_shows_primary" },
+    ],
+    quoteElements: [],
+    score: 180,
+    confidenceBand: "high",
+    reasons: ["Exact normalized show name"],
+    matchState: "auto_attached",
+  }],
+};
+await typedDocumentStore.syncSlackSnapshot({ messages: { [typedDocumentMessage.messageKey]: typedDocumentMessage } });
+const typedDocumentIntake = Object.values((await typedDocumentStore.read()).intakeItems)[0];
+assert.equal(typedDocumentIntake.primaryFlexDocumentNumber, "26-1846", "canonical Active Shows quote remains the primary show quote");
+assert.deepEqual(typedDocumentIntake.sourceMentionedFlexDocuments, [{ documentNumber: "26-0836", documentType: "pull_sheet", role: "mentioned_source", elementId: null, source: "slack" }], "Slack-mentioned pull sheet is typed separately from the show quote");
+assert(typedDocumentIntake.flexDocumentRefs.some(ref => ref.documentNumber === "26-1846" && ref.role === "primary_show_quote" && ref.elementId), "canonical quote keeps its Intake Engine UUID");
+assert(typedDocumentIntake.flexDocumentRefs.some(ref => ref.documentNumber === "26-0836" && ref.documentType === "pull_sheet" && ref.role === "mentioned_source"), "pull sheet remains source evidence and never replaces the primary quote");
+
+const linkedPullSheet = await typedDocumentStore.linkFlexQuote({
+  documentNumber: "26-0836",
+  elementId: "95141d01-8008-4d29-8fc2-1749159e35e0",
+  documentType: "pull_sheet",
+  role: "linked",
+  intakeItemId: typedDocumentIntake.id,
+  actorId: "ops-manager",
+  flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#pull-sheet/95141d01-8008-4d29-8fc2-1749159e35e0/header",
+});
+assert(linkedPullSheet.ok, "operator can link the exact pull-sheet URL as supporting evidence");
+assert.equal(linkedPullSheet.intake.primaryFlexDocumentNumber, "26-1846", "linking a pull sheet never replaces the canonical primary show quote");
+assert(!linkedPullSheet.intake.flexQuoteElements.some(ref => ref.documentNumber === "26-0836" && ref.elementId === "95141d01-8008-4d29-8fc2-1749159e35e0"), "pull-sheet UUID is not misclassified as a quote UUID");
+
+await typedDocumentStore.linkFlexQuote({ documentNumber: "26-0836", elementId: "95141d01-8008-4d29-8fc2-1749159e35e0", intakeItemId: typedDocumentIntake.id, actorId: "system:flex-verified", source: "flex_header_verification" });
+assert.equal(await typedDocumentStore.getLearnedFlexLink("26-0836", typedDocumentIntake.id), null, "unsafe historical number-only mappings are quarantined from reuse");
+
 const qualityStore = createCueFoundationStore({ filePath: path.join(dir, "quality.json") });
 const birthday = { ...unmatched, messageKey: "CGENERAL:1783821006.0001", contentHash: "h7", text: "Happy birthday! Hope you have a blast.", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Happy birthday!", unresolved: false } };
 const guardrails = { ...message, messageKey: "CLOG:1783821007.0001", contentHash: "h8", text: "<@U47> We need two guardrails for LiteFlair.", operationalClassification: { categories: ["general_operations"], status: "at_risk", summary: "<@U47> We need two guardrails for LiteFlair.", unresolved: true } };
