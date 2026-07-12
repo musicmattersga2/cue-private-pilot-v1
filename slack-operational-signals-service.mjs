@@ -701,6 +701,11 @@ export function createSlackOperationalSignalsService(options = {}) {
     return store.getGeneralQueue();
   }
 
+  /** Internal bridge for the canonical CUE Foundation intake adapter. */
+  async function getSlackOperationalSnapshot() {
+    return store.read();
+  }
+
   async function approveSlackSignalMatch(signalId, showKey, showMeta = {}) {
     return store.approveMatch(signalId, showKey, showMeta);
   }
@@ -771,6 +776,7 @@ export function createSlackOperationalSignalsService(options = {}) {
     getSlackSignalsForShow,
     getSlackNeedsReviewQueue,
     getSlackGeneralOperationsQueue,
+    getSlackOperationalSnapshot,
     approveSlackSignalMatch,
     rejectSlackSignalMatch,
     getSlackSignalSyncStatus,
