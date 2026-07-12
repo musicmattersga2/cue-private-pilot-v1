@@ -41,7 +41,8 @@ const low = { ...unmatched, messageKey: "CGENERAL:1783821003.0001", contentHash:
 await lowStore.syncSlackSnapshot({ messages: { [low.messageKey]: low } });
 const lowDb = await lowStore.read();
 const lowIntake = Object.values(lowDb.intakeItems)[0];
-assert.equal(lowIntake.status, "needs_match", "low-confidence candidate is not a confirmed match");
+assert.equal(lowIntake.status, "routed", "low-confidence operational signal routes by scope instead of forcing a show match");
+assert.equal(lowIntake.scope, "warehouse_shop", "shop delivery signal routes to warehouse/shop");
 assert.equal(lowIntake.matchedShowId, null, "low-confidence candidate never attaches to a show");
 
 const orderingStore = createCueFoundationStore({ filePath: path.join(dir, "ordering.json") });
