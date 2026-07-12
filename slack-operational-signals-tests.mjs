@@ -846,8 +846,8 @@ console.log("\nalias / fuzzy / ambiguity matching");
     showName: "Live Nation Moonchild @ The Fox",
     documentNumbers: ["26-1846", "26-0836"],
     primaryDocumentNumber: "26-1846",
-    elementId: "85141d01-8008-4d29-8fc2-1749159e35e0",
-    documentRefs: [{ documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0" }],
+    elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
+    documentRefs: [{ documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00" }],
     source: "active_shows",
     daysOut: 5,
   };
