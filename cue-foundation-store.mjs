@@ -62,13 +62,20 @@ function primaryMatch(message) {
 }
 function isReviewable(message) {
   if (!message || message.deleted || message.matchState === "excluded_system") return false;
-  return Boolean(message.operationalClassification?.categories?.length);
+  const cats = message.operationalClassification?.categories || [];
+  if (!cats.length) return false;
+  const text = cleanText(message.text).toLowerCase();
+  if (/birthday|barcade|happy birthday|thanks for the wishes|tame impala|hope you have a blast/.test(text)) return false;
+  const operational = /flex|quote|pull\s*sheet|pack|prep|load|truck|trailer|driver|delivery|return|rental|cross.?rent|short|missing|equipment|audio|lighting|video|rigging|motor|cable|truss|steel|shackle|guardrail|hazer|earbud|galaxy|staffing|meeting|warehouse|dock|bol|shipment|pickup|client|venue|spec sheet|pixel map|inventory|bar.?code/i.test(text);
+  if (cats.length === 1 && cats[0] === "general_operations" && !operational) return false;
+  if (text.length < 18 && !operational) return false;
+  return true;
 }
 function domainOf(message) {
   const cats = message.operationalClassification?.categories || [];
-  const text = String(message.text || "");
-  if (cats.includes("equipment") && /missing items?|shortage|need .+ more|followspots?|hazer|galaxy|earbuds?|cat6|cables?/i.test(text)) return "equipment";
-  if (cats.includes("warehouse") && /pull(?:ed|ing|\s+sheet)?|prep|pack|loaded|warehouse/i.test(text)) return "warehouse";
+  const text = cleanText(message.text);
+  if (/missing items?|shortage|need .+ more|followspots?|hazer|galaxy|earbuds?|cat6|cables?|guardrails?|shackles?|pear rings?|truss|steel/i.test(text)) return "equipment";
+  if (/pull(?:ed|ing|\s+sheet)?|prep|pack|loaded|warehouse/i.test(text)) return "warehouse";
   if (cats.includes("trucking") || cats.includes("dock") || cats.includes("bol")) return "trucking";
   if (cats.includes("staffing")) return "staffing";
   if (cats.includes("warehouse")) return "warehouse";
@@ -119,13 +126,17 @@ export function createCueFoundationStore(options = {}) {
   async function syncSlackSnapshot(snapshot = {}) {
     return locked(async () => {
       const db = readFile(filePath); let created = 0; let updated = 0;
+      const activeIntakeIds = new Set();
       for (const message of Object.values(snapshot.messages || {})) {
         if (!isReviewable(message)) continue;
         const sourceId = id("src", `slack:${message.messageKey}:${message.contentHash}`);
         const intakeId = id("intake", sourceId);
+        activeIntakeIds.add(intakeId);
         const match = primaryMatch(message); const domain = domainOf(message);
-        const cleanedText = cleanText(message.text);
-        const cleanedSummary = cleanText(message.operationalClassification?.summary || message.text);
+        const mentionUsers = snapshot.users || {};
+        const resolveMentions = value => cleanText(value).replace(/<@([A-Z0-9]+)>/gi, (_, userId) => `@${mentionUsers[userId]?.displayName || mentionUsers[userId]?.realName || userId}`);
+        const cleanedText = resolveMentions(message.text);
+        const cleanedSummary = resolveMentions(message.operationalClassification?.summary || message.text);
         const sourceRecord = {
           id: sourceId, sourceType: "slack", externalId: message.messageKey,
           externalParentId: message.threadTs ? `${message.channelId}:${message.threadTs}` : null,
@@ -182,6 +193,17 @@ export function createCueFoundationStore(options = {}) {
             cardType: candidateNeedsReview ? "show_match_review" : cardType,
           });
         }
+      }
+      // Reconcile derived Intake: raw messages remain in the Slack source cache,
+      // while non-operational chatter is removed from the operational Intake layer.
+      for (const [intakeId, intake] of Object.entries(db.intakeItems)) {
+        const source = db.sourceRecords[intake.sourceRecordId];
+        if (source?.sourceType !== "slack" || activeIntakeIds.has(intakeId)) continue;
+        delete db.intakeItems[intakeId];
+        for (const [key, value] of Object.entries(db.matchCandidates)) if (value.intakeItemId === intakeId) delete db.matchCandidates[key];
+        for (const [key, value] of Object.entries(db.candidateFacts)) if (value.intakeItemId === intakeId) delete db.candidateFacts[key];
+        for (const [key, value] of Object.entries(db.proposedUpdates)) if (value.intakeItemId === intakeId) delete db.proposedUpdates[key];
+        for (const [key, value] of Object.entries(db.decisionCards)) if (value.intakeItemId === intakeId && value.status === "open") delete db.decisionCards[key];
       }
       writeFile(filePath, db); return { created, updated, sourceRecordCount: Object.keys(db.sourceRecords).length, intakeCount: Object.keys(db.intakeItems).length, openDecisionCount: Object.values(db.decisionCards).filter(x => x.status === "open").length };
     });
@@ -258,7 +280,7 @@ export function createCueFoundationStore(options = {}) {
       const intake = Object.values(db.intakeItems);
       const cards = Object.values(db.decisionCards);
       const count = (items, predicate) => items.filter(predicate).length;
-      return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), needsReview: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), evidenceOnly: count(intake,x=>["matched","needs_match"].includes(x.status) && !cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
+      return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), candidateSignals: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), evidenceOnly: count(intake,x=>!cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"&&x.cardType!=="show_match_review"), matchDecisions: count(cards,x=>x.status==="open"&&x.cardType==="show_match_review"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
     },
     getIntakeItem: async (intakeId) => { const db = readFile(filePath); const item = db.intakeItems[intakeId]; if (!item) return null; return { ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null, matches: Object.values(db.matchCandidates).filter(x => x.intakeItemId === intakeId), facts: Object.values(db.candidateFacts).filter(x => x.intakeItemId === intakeId), decisionCards: Object.values(db.decisionCards).filter(x => x.intakeItemId === intakeId) }; },
     getShowReadiness: async (showId) => readFile(filePath).readiness[showId] || { showId, overallStatus: "not_started", overallScore: 0, domainRollup: {}, milestoneRollup: {}, blockers: [], warnings: [], nextActions: [], rulesetVersion: "pilot-v1", evaluatedAt: now() },
