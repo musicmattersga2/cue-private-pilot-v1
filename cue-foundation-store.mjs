@@ -102,6 +102,13 @@ function cardTypeOf(message) {
   if (classification.status === "resolved" || /\bis\s+(?:getting\s+)?loaded\b|\bis ready\b|\bready to prep\b/i.test(text)) return "state_confirmation";
   return "signal_review";
 }
+function sourceFlexDocumentType(message) {
+  const text = cleanText(message?.text || "").toLowerCase();
+  if (/pull\s*sheet|pullsheet/.test(text)) return "pull_sheet";
+  if (/event\s*folder/.test(text)) return "event_folder";
+  if (/\bquote\b/.test(text)) return "quote";
+  return "unknown";
+}
 function shouldCreateDecisionCard(message, matchState) {
   const type = cardTypeOf(message);
   const match = primaryMatch(message);
@@ -173,17 +180,27 @@ export function createCueFoundationStore(options = {}) {
         db.sourceRecords[sourceId] = sourceRecord;
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
         const candidateNeedsReview = match?.matchState === "needs_review";
-        const learnedForIntake = Object.values(db.learnedFlexLinks || {}).filter((item) => (item.intakeItemIds || []).includes(intakeId));
+        const learnedForIntake = Object.values(db.learnedFlexLinks || {}).filter((item) => (item.intakeItemIds || []).includes(intakeId) && item.source !== "flex_header_verification" && item.status !== "quarantined");
         const exactMessageQuotes = [...new Set((message.extractedEntities?.quotes || []).map(String).filter(Boolean))];
+        const mentionedDocumentType = sourceFlexDocumentType(message);
         // A quote number written in the source message is direct evidence. Keep
         // it even when the proposed Active Shows record has incomplete or
         // different workstream metadata. This does not confirm the show match.
         const flexDocumentNumbers = [...new Set([...exactMessageQuotes, ...(match?.documentNumbers || []).map(String).filter(Boolean), ...learnedForIntake.map(item => item.documentNumber)])];
-        const primaryFlexDocumentNumber = learnedForIntake.at(-1)?.documentNumber || (exactMessageQuotes.length === 1 ? exactMessageQuotes[0] : null) || (exactMessageQuotes.length === 0 && flexDocumentNumbers.length === 1 ? flexDocumentNumbers[0] : null);
-        const flexQuoteElements = [
-          ...learnedForIntake.map(item => ({ documentNumber: item.documentNumber, elementId: item.elementId })),
-          ...(match?.quoteElements || []),
-        ].filter((item, index, items) => item.documentNumber && index === items.findIndex(candidate => candidate.documentNumber === item.documentNumber));
+        const primaryFlexDocumentNumber = learnedForIntake.find(item => item.role === "primary_show_quote")?.documentNumber || match?.primaryDocumentNumber || learnedForIntake.at(-1)?.documentNumber || (exactMessageQuotes.length === 1 ? exactMessageQuotes[0] : null) || (exactMessageQuotes.length === 0 && flexDocumentNumbers.length === 1 ? flexDocumentNumbers[0] : null);
+        const sourceMentionedFlexDocuments = exactMessageQuotes.map(documentNumber => ({ documentNumber, documentType: mentionedDocumentType, role: "mentioned_source", elementId: null, source: "slack" }));
+        const flexDocumentRefs = [
+          ...(match?.documentRefs || []),
+          ...learnedForIntake.map(item => ({ documentNumber: item.documentNumber, elementId: item.elementId, documentType: item.documentType || "unknown", role: item.role || "linked", flexUrl: item.flexUrl || null, source: item.source || "command_center" })),
+          ...sourceMentionedFlexDocuments,
+        ]
+          .filter(ref => ref?.documentNumber)
+          .map(ref => ({ ...ref, role: ref.documentNumber === primaryFlexDocumentNumber && ref.role !== "mentioned_source" ? "primary_show_quote" : ref.role || "related" }))
+          .filter((ref, index, refs) => {
+            if (ref.role === "mentioned_source") return index === refs.findIndex(candidate => candidate.documentNumber === ref.documentNumber && candidate.role === "mentioned_source");
+            return index === refs.findIndex(candidate => candidate.documentNumber === ref.documentNumber && candidate.documentType === ref.documentType && candidate.role !== "mentioned_source");
+          });
+        const flexQuoteElements = flexDocumentRefs.map(ref => ({ documentNumber: ref.documentNumber, elementId: ref.elementId || null, documentType: ref.documentType || "unknown" }));
         const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : scope === "show_specific" ? "needs_match" : "routed";
         db.intakeItems[intakeId] = {
           id: intakeId, sourceRecordId: sourceId, status, category: domain, scope,
@@ -195,6 +212,8 @@ export function createCueFoundationStore(options = {}) {
           matchedShowName: match?.showName || null,
           flexDocumentNumbers,
           primaryFlexDocumentNumber,
+          sourceMentionedFlexDocuments,
+          flexDocumentRefs,
           flexElementId: match?.elementId || null,
           flexQuoteElements,
           matchConfidence: match?.score ?? null,
@@ -202,7 +221,7 @@ export function createCueFoundationStore(options = {}) {
         };
         for (const [rank, candidate] of (message.matches || []).entries()) {
           const candidateId = id("match", `${intakeId}:${candidate.showKey}`);
-          db.matchCandidates[candidateId] = { id: candidateId, intakeItemId: intakeId, candidateEntityType: "show", candidateEntityId: candidate.showKey, candidateEntityName: candidate.showName || null, documentNumbers: candidate.documentNumbers || [], elementId: candidate.elementId || null, quoteElements: candidate.quoteElements || [], score: Number(candidate.score || 0), reasons: candidate.reasons || [], rank: rank + 1, selected: ["auto_attached","manually_approved"].includes(candidate.matchState), matcherVersion: "slack-match-v1" };
+          db.matchCandidates[candidateId] = { id: candidateId, intakeItemId: intakeId, candidateEntityType: "show", candidateEntityId: candidate.showKey, candidateEntityName: candidate.showName || null, documentNumbers: candidate.documentNumbers || [], primaryDocumentNumber: candidate.primaryDocumentNumber || null, elementId: candidate.elementId || null, documentRefs: candidate.documentRefs || [], quoteElements: candidate.quoteElements || [], score: Number(candidate.score || 0), reasons: candidate.reasons || [], rank: rank + 1, selected: ["auto_attached","manually_approved"].includes(candidate.matchState), matcherVersion: "slack-match-v1" };
         }
         const factId = id("fact", `${intakeId}:${domain}`);
         db.candidateFacts[factId] = { id: factId, intakeItemId: intakeId, factType: `slack.${domain}.signal`, value: { text: cleanedText, categories: message.operationalClassification?.categories || [], entities: message.extractedEntities || {} }, confidence: match?.confidenceBand || match?.confidence || null, evidenceSpan: { sourceRecordId: sourceId, text: cleanedText }, extractionVersion: "slack-rules-v1" };
@@ -301,21 +320,32 @@ export function createCueFoundationStore(options = {}) {
       const documentNumber = cleanText(input.documentNumber || "");
       const elementId = cleanText(input.elementId || "");
       const actorId = cleanText(input.actorId || "");
+      const documentType = cleanText(input.documentType || "unknown") || "unknown";
+      const role = cleanText(input.role || "linked") || "linked";
       if (!/^\d{2}-\d{3,6}$/.test(documentNumber)) return { ok: false, status: 400, error: "A valid FLEX document number is required." };
       if (!/^[0-9a-f-]{36}$/i.test(elementId)) return { ok: false, status: 400, error: "A valid FLEX element ID is required." };
       if (!actorId) return { ok: false, status: 400, error: "actorId is required." };
-      const previous = db.learnedFlexLinks[documentNumber] || {};
+      const storageKey = `${documentNumber}:${input.intakeItemId || elementId}`;
+      const previous = db.learnedFlexLinks[storageKey] || {};
       const intakeItemIds = [...new Set([...(previous.intakeItemIds || []), input.intakeItemId].filter(Boolean))];
-      const learned = { documentNumber, elementId, flexUrl: input.flexUrl || null, actorId, rationale: input.rationale || null, source: input.source || "command_center", intakeItemIds, confirmedAt: now() };
-      db.learnedFlexLinks[documentNumber] = learned;
+      const learned = { documentNumber, elementId, documentType, role, flexUrl: input.flexUrl || null, actorId, rationale: input.rationale || null, source: input.source || "command_center", intakeItemIds, confirmedAt: now() };
+      db.learnedFlexLinks[storageKey] = learned;
       const intake = input.intakeItemId ? db.intakeItems[input.intakeItemId] : null;
       if (intake) {
         intake.flexDocumentNumbers = [...new Set([...(intake.flexDocumentNumbers || []), documentNumber])];
-        intake.primaryFlexDocumentNumber = documentNumber;
-        intake.flexQuoteElements = [
-          ...(intake.flexQuoteElements || []).filter((item) => item.documentNumber !== documentNumber),
-          { documentNumber, elementId },
+        const shouldBecomePrimary = role === "primary_show_quote"
+          || (!intake.primaryFlexDocumentNumber && documentType === "quote");
+        if (shouldBecomePrimary) intake.primaryFlexDocumentNumber = documentNumber;
+        intake.flexDocumentRefs = [
+          ...(intake.flexDocumentRefs || []).filter((item) => !(item.documentNumber === documentNumber && item.documentType === documentType && item.role !== "mentioned_source")),
+          { documentNumber, elementId, documentType, role, flexUrl: input.flexUrl || null, source: input.source || "command_center" },
         ];
+        if (documentType === "quote") {
+          intake.flexQuoteElements = [
+            ...(intake.flexQuoteElements || []).filter((item) => item.documentNumber !== documentNumber),
+            { documentNumber, elementId },
+          ];
+        }
         intake.updatedAt = now();
       }
       const eventId = id("event", `flex-link:${documentNumber}:${elementId}:${actorId}`);
@@ -354,7 +384,10 @@ export function createCueFoundationStore(options = {}) {
     getIntakeItem: async (intakeId) => { const db = readFile(filePath); const item = db.intakeItems[intakeId]; if (!item) return null; return { ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null, matches: Object.values(db.matchCandidates).filter(x => x.intakeItemId === intakeId), facts: Object.values(db.candidateFacts).filter(x => x.intakeItemId === intakeId), decisionCards: Object.values(db.decisionCards).filter(x => x.intakeItemId === intakeId) }; },
     getShowReadiness: async (showId) => readFile(filePath).readiness[showId] || { showId, overallStatus: "not_started", overallScore: 0, domainRollup: {}, milestoneRollup: {}, blockers: [], warnings: [], nextActions: [], rulesetVersion: "pilot-v1", evaluatedAt: now() },
     getShowState: async (showId) => readFile(filePath).showState[showId] || null,
-    getLearnedFlexLink: async (documentNumber) => readFile(filePath).learnedFlexLinks[String(documentNumber || "").trim()] || null,
+    getLearnedFlexLink: async (documentNumber, intakeItemId = null) => {
+      const db = readFile(filePath);
+      return Object.values(db.learnedFlexLinks || {}).find(item => item.documentNumber === String(documentNumber || "").trim() && item.source !== "flex_header_verification" && item.status !== "quarantined" && (!intakeItemId || (item.intakeItemIds || []).includes(intakeItemId))) || null;
+    },
     linkFlexQuote,
     decide,
   };
