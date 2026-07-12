@@ -38,7 +38,7 @@ function id(prefix, value) {
   return `${prefix}_${hash}`;
 }
 function blank() {
-  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {} };
+  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {} };
 }
 function readFile(filePath) {
   if (!fs.existsSync(filePath)) return blank();
@@ -198,9 +198,28 @@ export function createCueFoundationStore(options = {}) {
       if (db.decisions[decisionId]) return { ok: true, idempotent: true, decision: db.decisions[decisionId], readiness: db.readiness[card.showId] || null };
       const decision = { id: decisionId, decisionCardId: cardId, action: input.action, actorId: input.actorId, rationale: input.rationale || null, parameters: input.parameters || {}, decidedAt: now() };
       db.decisions[decisionId] = decision; card.status = input.action === "snooze" ? "waiting" : "decided"; card.updatedAt = now();
-      const intake = db.intakeItems[card.intakeItemId]; if (intake) { intake.status = input.action === "snooze" ? "snoozed" : "decided"; intake.decidedAt = now(); }
+      const intake = db.intakeItems[card.intakeItemId];
+      if (intake) { intake.status = input.action === "snooze" ? "snoozed" : "decided"; intake.decidedAt = now(); }
+      if (["link_show", "choose_another_show"].includes(input.action)) {
+        const selectedShowId = String(input.parameters?.showId || card.candidateShowId || "").trim();
+        if (!selectedShowId) return { ok: false, status: 400, error: "showId is required for a show match decision." };
+        card.showId = selectedShowId;
+        card.candidateShowId = null;
+        if (intake) {
+          intake.matchedShowId = selectedShowId;
+          intake.candidateShowId = null;
+          intake.status = "matched";
+          intake.matchConfidence = 999;
+          intake.matchReasons = ["Manually confirmed in Command Center"];
+        }
+        const alias = cleanText(input.parameters?.alias || "");
+        if (alias) {
+          const key = alias.toLowerCase();
+          db.learnedAliases[key] = { alias, showId: selectedShowId, confirmedBy: input.actorId, confirmedAt: now(), sourceRecordId: card.sourceRecordId };
+        }
+      }
       let event = null;
-      if (["accept_update","supporting_evidence","create_task","create_issue","create_risk"].includes(input.action)) {
+      if (["accept_update","supporting_evidence","create_task","create_issue","create_risk","link_show","choose_another_show"].includes(input.action)) {
         const eventId = id("event", decisionId); event = { id: eventId, eventType: input.action === "accept_update" ? `${card.domain}.signal.accepted` : `intake.${input.action}.recorded`, showId: card.showId, domain: card.domain, entityType: "intake_signal", entityId: card.intakeItemId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: "user", actorId: input.actorId, sourceType: "slack", sourceRecordId: card.sourceRecordId, intakeItemId: card.intakeItemId, decisionId, newValue: { action: input.action, parameters: input.parameters || {} }, idempotencyKey: decisionId };
         db.events[eventId] = event;
       }
@@ -219,7 +238,28 @@ export function createCueFoundationStore(options = {}) {
     filePath,
     read: async () => readFile(filePath),
     syncSlackSnapshot,
-    listDecisionCards: async ({ showId = null, status = null } = {}) => Object.values(readFile(filePath).decisionCards).filter(x => (!showId || x.showId === showId) && (!status || x.status === status)).sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))),
+    listDecisionCards: async ({ showId = null, status = null } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.decisionCards)
+        .filter(x => (!showId || x.showId === showId || x.candidateShowId === showId) && (!status || x.status === status))
+        .map(card => ({ ...card, intake: db.intakeItems[card.intakeItemId] || null, sourceRecord: db.sourceRecords[card.sourceRecordId] || null, matchCandidates: Object.values(db.matchCandidates).filter(x => x.intakeItemId === card.intakeItemId).sort((a,b) => b.score - a.score).slice(0,5) }))
+        .sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    },
+    listIntakeItems: async ({ status = null, limit = 200 } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.intakeItems)
+        .filter(x => !status || x.status === status)
+        .map(item => ({ ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null }))
+        .sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 200, 500)));
+    },
+    getSummary: async () => {
+      const db = readFile(filePath);
+      const intake = Object.values(db.intakeItems);
+      const cards = Object.values(db.decisionCards);
+      const count = (items, predicate) => items.filter(predicate).length;
+      return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), needsReview: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), evidenceOnly: count(intake,x=>["matched","needs_match"].includes(x.status) && !cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
+    },
     getIntakeItem: async (intakeId) => { const db = readFile(filePath); const item = db.intakeItems[intakeId]; if (!item) return null; return { ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null, matches: Object.values(db.matchCandidates).filter(x => x.intakeItemId === intakeId), facts: Object.values(db.candidateFacts).filter(x => x.intakeItemId === intakeId), decisionCards: Object.values(db.decisionCards).filter(x => x.intakeItemId === intakeId) }; },
     getShowReadiness: async (showId) => readFile(filePath).readiness[showId] || { showId, overallStatus: "not_started", overallScore: 0, domainRollup: {}, milestoneRollup: {}, blockers: [], warnings: [], nextActions: [], rulesetVersion: "pilot-v1", evaluatedAt: now() },
     getShowState: async (showId) => readFile(filePath).showState[showId] || null,
