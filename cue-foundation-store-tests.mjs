@@ -24,3 +24,8 @@ assert.equal(result.readiness.overallStatus, "at_risk", "accepted requirement is
 const retry = await store.decide(cards[0].id, { action: "accept_update", actorId: "brian-kee", idempotencyKey: "accept-1" });
 assert(retry.ok && retry.idempotent, "decision retry idempotent");
 console.log(JSON.stringify({ ok: true, first, cardId: cards[0].id, eventType: result.event.eventType, readiness: result.readiness.overallStatus }, null, 2));
+
+const routineStore = createCueFoundationStore({ filePath: path.join(dir, "routine.json") });
+const routine = { ...message, messageKey: "CLOG:1783821001.0001", contentHash: "h2", text: "5301 is loaded with Frost motors.", operationalClassification: { categories: ["trucking", "warehouse", "equipment", "resolution"], status: "resolved", summary: "5301 is loaded with Frost motors.", unresolved: false }, matchState: "needs_review" };
+const routineResult = await routineStore.syncSlackSnapshot({ messages: { [routine.messageKey]: routine } });
+assert.equal(routineResult.openDecisionCount, 0, "routine state confirmation does not clutter decisions");
