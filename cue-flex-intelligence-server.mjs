@@ -19,6 +19,7 @@ import {
 import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs";
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
+import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -8575,7 +8576,60 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/sync") {
       const telemetry = await slackOperationalSignalsService.syncSlackOperationalSignals();
-      sendJson(res, 200, { ok: true, telemetry });
+      const snapshot = await slackOperationalSignalsService.getSlackOperationalSnapshot();
+      const foundation = await defaultCueFoundationStore.syncSlackSnapshot(snapshot);
+      sendJson(res, 200, { ok: true, telemetry, foundation });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/slack/sync") {
+      const snapshot = await slackOperationalSignalsService.getSlackOperationalSnapshot();
+      const foundation = await defaultCueFoundationStore.syncSlackSnapshot(snapshot);
+      sendJson(res, 200, { ok: true, foundation });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/decision-cards") {
+      const showId = String(url.searchParams.get("showId") || "").trim() || null;
+      const status = String(url.searchParams.get("status") || "").trim() || null;
+      const items = await defaultCueFoundationStore.listDecisionCards({ showId, status });
+      sendJson(res, 200, { count: items.length, items: items.slice(0, 200) });
+      return;
+    }
+
+    if (req.method === "POST" && /^\/api\/foundation\/decision-cards\/[^/]+\/decide$/.test(url.pathname)) {
+      const cardId = decodeURIComponent(url.pathname.split("/")[4] || "");
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const result = await defaultCueFoundationStore.decide(cardId, {
+        action: String(body.action || "").trim(),
+        actorId: String(body.actorId || "").trim(),
+        rationale: body.rationale || null,
+        parameters: body.parameters || {},
+        idempotencyKey: String(body.idempotencyKey || "").trim() || null,
+      });
+      sendJson(res, result.ok ? 200 : result.status || 400, result);
+      return;
+    }
+
+    if (req.method === "GET" && /^\/api\/foundation\/intake\/[^/]+$/.test(url.pathname)) {
+      const intakeId = decodeURIComponent(url.pathname.split("/")[4] || "");
+      const item = await defaultCueFoundationStore.getIntakeItem(intakeId);
+      sendJson(res, item ? 200 : 404, item || { error: "Intake item not found." });
+      return;
+    }
+
+    if (req.method === "GET" && /^\/api\/foundation\/shows\/[^/]+\/readiness$/.test(url.pathname)) {
+      const showId = decodeURIComponent(url.pathname.split("/")[4] || "");
+      const readiness = await defaultCueFoundationStore.getShowReadiness(showId);
+      sendJson(res, 200, readiness);
+      return;
+    }
+
+    if (req.method === "GET" && /^\/api\/foundation\/shows\/[^/]+\/state$/.test(url.pathname)) {
+      const showId = decodeURIComponent(url.pathname.split("/")[4] || "");
+      const state = await defaultCueFoundationStore.getShowState(showId);
+      sendJson(res, state ? 200 : 404, state || { error: "Current show state not found." });
       return;
     }
 
@@ -9243,6 +9297,5 @@ server.listen(PORT, async () => {
     }
   }
 });
-
 
 
