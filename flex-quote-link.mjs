@@ -24,6 +24,24 @@ export function buildFlexQuoteUrl(elementId, options = {}) {
   return `${url.toString()}#fin-doc/${encodeURIComponent(id)}/doc-view/${encodeURIComponent(viewId)}/header`;
 }
 
+export function parseFlexQuoteUrl(value, options = {}) {
+  let url;
+  try { url = new URL(String(value || "").trim()); }
+  catch { throw new Error("Enter a valid FLEX quote URL."); }
+  const allowedBase = new URL(
+    options.webBaseUrl || process.env.FLEX_WEB_BASE_URL || DEFAULT_FLEX_WEB_BASE_URL
+  );
+  const normalizePath = path => `${String(path || "").replace(/\/+$/, "")}/`;
+  if (url.protocol !== "https:" || url.host !== allowedBase.host || normalizePath(url.pathname) !== normalizePath(allowedBase.pathname)) {
+    throw new Error(`FLEX quote URL must use the authorized ${allowedBase.host}${allowedBase.pathname} location.`);
+  }
+  const match = url.hash.match(/^#fin-doc\/([0-9a-f-]{36})\/doc-view\/([0-9a-f-]{36})\/header$/i);
+  if (!match || !isFlexElementId(match[1]) || !isFlexElementId(match[2])) {
+    throw new Error("FLEX quote URL does not contain a valid financial-document element.");
+  }
+  return { elementId: match[1], quoteViewId: match[2], normalizedUrl: buildFlexQuoteUrl(match[1], { webBaseUrl: allowedBase.toString(), quoteViewId: match[2] }) };
+}
+
 export const FLEX_QUOTE_LINK_DEFAULTS = {
   webBaseUrl: DEFAULT_FLEX_WEB_BASE_URL,
   quoteViewId: DEFAULT_FLEX_QUOTE_VIEW_ID,
