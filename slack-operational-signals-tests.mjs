@@ -612,6 +612,33 @@ console.log("\nservice: material edit rematches rejected signals");
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+console.log("\nservice: manual approval refreshes FLEX metadata");
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-signals-manual-refresh-"));
+  const filePath = path.join(dir, "store.json");
+  const service = createSlackOperationalSignalsService({ filePath, channelIds: [], token: "" });
+  const liteFlairMessage = normalizeSlackMessage(
+    { ts: "1710000250.000100", text: "I added 2 x MDG Hazers to LiteFlair", user: "U9" },
+    { channelId: "C_OPS", channelName: "lighting", authorName: "Pat" }
+  );
+  await service.store.upsertMessages([liteFlairMessage]);
+  await service.approveSlackSignalMatch(liteFlairMessage.messageKey, "liteflair-shoot", { showName: "LiteFlair Shoot" });
+  await service.rematchAll([{
+    showKey: "liteflair-shoot",
+    showName: "LiteFlair Shoot",
+    documentNumbers: ["26-1790"],
+    primaryDocumentNumber: "26-1790",
+    elementId: "33333333-3333-4333-8333-333333333333",
+    documentRefs: [{ documentNumber: "26-1790", documentType: "quote", role: "primary_show_quote", elementId: "33333333-3333-4333-8333-333333333333" }],
+    quoteElements: [{ documentNumber: "26-1790", elementId: "33333333-3333-4333-8333-333333333333", documentType: "quote" }],
+  }], { expandQuotes: false });
+  const refreshed = await service.store.getMessage(liteFlairMessage.messageKey);
+  assert(refreshed.manualDecision?.showKey === "liteflair-shoot", "manual show approval survives metadata refresh");
+  assert(refreshed.matches?.[0]?.primaryDocumentNumber === "26-1790", "manual match receives the current primary FLEX quote");
+  assert(refreshed.matches?.[0]?.elementId === "33333333-3333-4333-8333-333333333333", "manual match receives the verified FLEX UUID");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log("\nservice: fixture cache ignored when fixture mode off");
 {
   const prev = process.env.SLACK_OPERATIONAL_FIXTURE_MODE;
