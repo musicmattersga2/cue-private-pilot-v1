@@ -69,12 +69,13 @@ assert.equal(matchDb.learnedAliases["chastain paul"].showId, "paul-simon", "conf
 const qualityStore = createCueFoundationStore({ filePath: path.join(dir, "quality.json") });
 const birthday = { ...unmatched, messageKey: "CGENERAL:1783821006.0001", contentHash: "h7", text: "Happy birthday! Hope you have a blast.", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Happy birthday!", unresolved: false } };
 const guardrails = { ...message, messageKey: "CLOG:1783821007.0001", contentHash: "h8", text: "<@U47> We need two guardrails for LiteFlair.", operationalClassification: { categories: ["general_operations"], status: "at_risk", summary: "<@U47> We need two guardrails for LiteFlair.", unresolved: true } };
-await qualityStore.syncSlackSnapshot({ users: { U47: { displayName: "Aaron" } }, messages: { [birthday.messageKey]: birthday, [guardrails.messageKey]: guardrails } });
+const authorDirectoryMessage = { ...unmatched, messageKey: "CGENERAL:1783821008.0001", contentHash: "h9", userId: "U47", authorName: "Aaron", text: "Kewl", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Kewl", unresolved: false } };
+await qualityStore.syncSlackSnapshot({ messages: { [birthday.messageKey]: birthday, [guardrails.messageKey]: guardrails, [authorDirectoryMessage.messageKey]: authorDirectoryMessage } });
 const qualityDb = await qualityStore.read();
 assert.equal(Object.keys(qualityDb.intakeItems).length, 1, "social chatter excluded from operational Intake");
 const qualityIntake = Object.values(qualityDb.intakeItems)[0];
 assert.equal(qualityIntake.category, "equipment", "equipment language overrides broad cached category");
-assert.match(qualityIntake.summary, /@Aaron/, "Slack user mention resolved for human-readable evidence");
+assert.match(qualityIntake.summary, /@Aaron/, "Slack mention resolves from cached author directory when users.info data is absent");
 await qualityStore.syncSlackSnapshot({ messages: { [birthday.messageKey]: birthday } });
 const reconciledDb = await qualityStore.read();
 assert.equal(Object.keys(reconciledDb.intakeItems).length, 0, "stale derived Intake is reconciled when no longer operational");
