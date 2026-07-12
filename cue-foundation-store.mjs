@@ -138,14 +138,26 @@ export function createCueFoundationStore(options = {}) {
     return locked(async () => {
       const db = readFile(filePath); let created = 0; let updated = 0;
       const activeIntakeIds = new Set();
+      // Slack may deny users.info for mentioned people even though those same
+      // people have authored messages already in the local cache. Build one
+      // deterministic directory from both sources before normalizing evidence.
+      const mentionUsers = { ...(snapshot.users || {}) };
+      for (const cachedMessage of Object.values(snapshot.messages || {})) {
+        const userId = String(cachedMessage?.userId || "").trim();
+        const authorName = cleanText(cachedMessage?.authorName || "");
+        if (!userId || !authorName || authorName === userId || /^unknown$/i.test(authorName)) continue;
+        mentionUsers[userId] = {
+          ...(mentionUsers[userId] || {}),
+          displayName: mentionUsers[userId]?.displayName || authorName,
+        };
+      }
       for (const message of Object.values(snapshot.messages || {})) {
         if (!isReviewable(message)) continue;
         const sourceId = id("src", `slack:${message.messageKey}:${message.contentHash}`);
         const intakeId = id("intake", sourceId);
         activeIntakeIds.add(intakeId);
         const match = primaryMatch(message); const domain = domainOf(message); const scope = scopeOf(message, match, domain);
-        const mentionUsers = snapshot.users || {};
-        const resolveMentions = value => cleanText(value).replace(/<@([A-Z0-9]+)>/gi, (_, userId) => `@${mentionUsers[userId]?.displayName || mentionUsers[userId]?.realName || userId}`);
+        const resolveMentions = value => cleanText(value).replace(/<@([A-Z0-9]+)>/gi, (_, userId) => `@${mentionUsers[userId]?.displayName || mentionUsers[userId]?.realName || "Slack user"}`);
         const cleanedText = resolveMentions(message.text);
         const cleanedSummary = resolveMentions(message.operationalClassification?.summary || message.text);
         const sourceRecord = {
