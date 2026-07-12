@@ -20,7 +20,7 @@ import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
 import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
-import { buildFlexQuoteUrl, isFlexElementId } from "./flex-quote-link.mjs";
+import { buildFlexQuoteUrl, isFlexElementId, parseFlexQuoteUrl } from "./flex-quote-link.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -1811,6 +1811,32 @@ async function resolveSlackCandidateFromFlexQuote(documentNumber) {
     elementId: verified.elementId,
     quoteVerified: true,
   };
+}
+
+async function resolveFlexQuoteElementForLink(documentNumber) {
+  const wanted = String(documentNumber || "").trim();
+  if (!wanted) return null;
+  const searchResult = await fetchFlexSearch(wanted);
+  const seen = new Set();
+  const candidates = normalizeFlexSearchResults(searchResult.data)
+    .map((result) => ({
+      elementId: extractSearchResultId(result),
+      name: result?.name || result?.displayName || result?.preferredDisplayString || result?.text || result?.label || null,
+    }))
+    .filter((candidate) => candidate.elementId && !seen.has(candidate.elementId) && seen.add(candidate.elementId))
+    .slice(0, 8);
+  const verified = [];
+  for (const candidate of candidates) {
+    try {
+      const intake = await fetchFlexShowIntake(candidate.elementId);
+      const ctx = intake?.showContext || {};
+      if (String(ctx.documentNumber || "").trim().toLowerCase() !== wanted.toLowerCase()) continue;
+      verified.push({ elementId: candidate.elementId, showName: ctx.showName || candidate.name || wanted, ctx });
+    } catch {
+      // Search results can contain inaccessible or stale elements; keep checking.
+    }
+  }
+  return verified.length === 1 ? verified[0] : null;
 }
 
 function flattenFlexRows(rows, parentSection = null, depth = 0) {
@@ -8611,17 +8637,35 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/flex/quote/open") {
       const documentNumber = String(url.searchParams.get("documentNumber") || "").trim();
+      const intakeItemId = String(url.searchParams.get("intakeItemId") || "").trim();
       let elementId = String(url.searchParams.get("elementId") || "").trim();
       if (!elementId && documentNumber) {
-        const resolved = await resolveSlackCandidateFromFlexQuote(documentNumber);
+        const learned = await defaultCueFoundationStore.getLearnedFlexLink(documentNumber);
+        elementId = String(learned?.elementId || "").trim();
+      }
+      if (!elementId && documentNumber) {
+        const resolved = await resolveFlexQuoteElementForLink(documentNumber);
         elementId = String(resolved?.elementId || "").trim();
+        if (isFlexElementId(elementId)) {
+          await defaultCueFoundationStore.linkFlexQuote({
+            documentNumber,
+            elementId,
+            intakeItemId: intakeItemId || null,
+            flexUrl: buildFlexQuoteUrl(elementId),
+            actorId: "system:flex-verified",
+            rationale: "Unique exact FLEX header verification",
+            source: "flex_header_verification",
+          });
+        }
       }
       if (!isFlexElementId(elementId)) {
-        sendJson(res, 404, {
-          error: documentNumber
-            ? `CUE could not resolve FLEX quote ${documentNumber} to a verified element.`
-            : "A FLEX document number or valid element ID is required.",
+        const params = new URLSearchParams({ linkFlexQuote: documentNumber });
+        if (intakeItemId) params.set("intakeItemId", intakeItemId);
+        res.writeHead(302, {
+          Location: `/command-center?${params}`,
+          "Cache-Control": "no-store",
         });
+        res.end();
         return;
       }
       res.writeHead(302, {
@@ -8629,6 +8673,42 @@ const server = http.createServer(async (req, res) => {
         "Cache-Control": "no-store",
       });
       res.end();
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/flex-links") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const documentNumber = String(body.documentNumber || "").trim();
+      let parsed;
+      try {
+        parsed = parseFlexQuoteUrl(body.flexUrl);
+      } catch (error) {
+        sendJson(res, 400, { error: error.message });
+        return;
+      }
+      let verifiedIntake;
+      try {
+        verifiedIntake = await fetchFlexShowIntake(parsed.elementId);
+      } catch {
+        sendJson(res, 400, { error: "CUE could not verify that FLEX quote. Confirm the URL and try again." });
+        return;
+      }
+      const verifiedDocumentNumber = String(verifiedIntake?.showContext?.documentNumber || "").trim();
+      if (!documentNumber || verifiedDocumentNumber.toLowerCase() !== documentNumber.toLowerCase()) {
+        sendJson(res, 400, { error: `That FLEX URL belongs to ${verifiedDocumentNumber || "a different document"}, not ${documentNumber || "the requested quote"}.` });
+        return;
+      }
+      const result = await defaultCueFoundationStore.linkFlexQuote({
+        documentNumber,
+        elementId: parsed.elementId,
+        intakeItemId: String(body.intakeItemId || "").trim() || null,
+        flexUrl: parsed.normalizedUrl,
+        actorId: String(body.actorId || "command-center-user").trim(),
+        rationale: body.rationale || null,
+        source: "command_center",
+      });
+      sendJson(res, result.ok ? 200 : result.status || 400, { ...result, openUrl: parsed.normalizedUrl });
       return;
     }
 
