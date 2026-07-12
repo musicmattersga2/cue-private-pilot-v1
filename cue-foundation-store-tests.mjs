@@ -11,7 +11,7 @@ const message = {
   text: "Sound Haven may need a third box truck. Please confirm.", contentHash: "h1", timestampIso: "2026-07-12T01:50:00.000Z", ingestedAt: "2026-07-12T01:51:00.000Z",
   operationalClassification: { categories: ["trucking","unresolved_issue"], status: "needs_review", summary: "Possible third box truck", unresolved: true },
   extractedEntities: { trucks: [], quotes: [] }, matchState: "needs_review",
-  matches: [{ showKey: "sound-haven", showName: "Sound Haven", score: 76, confidenceBand: "medium", reasons: ["Show alias", "Date proximity"], matchState: "needs_review" }],
+  matches: [{ showKey: "sound-haven", showName: "Sound Haven", score: 110, confidenceBand: "high", reasons: ["Exact show alias", "Date proximity"], matchState: "auto_attached" }],
 };
 const first = await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
 assert.equal(first.intakeCount, 1); assert.equal(first.openDecisionCount, 1);
@@ -35,3 +35,11 @@ const unmatched = { ...message, messageKey: "CGENERAL:1783821002.0001", contentH
 const unmatchedResult = await unmatchedStore.syncSlackSnapshot({ messages: { [unmatched.messageKey]: unmatched } });
 assert.equal(unmatchedResult.intakeCount, 1, "unmatched operational signal retained in Intake");
 assert.equal(unmatchedResult.openDecisionCount, 0, "unmatched chatter does not flood My Decisions");
+
+const lowStore = createCueFoundationStore({ filePath: path.join(dir, "low.json") });
+const low = { ...unmatched, messageKey: "CGENERAL:1783821003.0001", contentHash: "h4", matches: [{ showKey: "fifa-final", showName: "FIFA Final", score: 25, confidenceBand: "low", matchState: "general_queue", reasons: ["Department alignment", "Active/upcoming"] }] };
+await lowStore.syncSlackSnapshot({ messages: { [low.messageKey]: low } });
+const lowDb = await lowStore.read();
+const lowIntake = Object.values(lowDb.intakeItems)[0];
+assert.equal(lowIntake.status, "needs_match", "low-confidence candidate is not a confirmed match");
+assert.equal(lowIntake.matchedShowId, null, "low-confidence candidate never attaches to a show");
