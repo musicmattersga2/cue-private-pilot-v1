@@ -38,6 +38,16 @@ const moonchildPullSheet = selectFlexDocumentCandidate(duplicateNumberCandidates
 assert.equal(moonchildPullSheet.candidate?.documentType, "pull_sheet", "show identity disambiguates the Moonchild pull sheet from an unrelated quote with the same number");
 assert.equal(selectFlexDocumentCandidate(duplicateNumberCandidates).candidate, null, "a duplicate FLEX number is never guessed without show identity");
 
+const sameShowHierarchyCandidates = [
+  { elementId: moonchildQuoteId, documentNumber: "26-1846", documentType: "quote", showName: "Live Nation Moonchild @ The Fox", client: "Live Nation" },
+  { elementId: "22222222-2222-4222-8222-222222222222", documentNumber: "26-0836", documentType: "pull_sheet", showName: "Live Nation Moonchild @ The Fox", client: "Live Nation" },
+];
+assert.equal(
+  selectFlexDocumentCandidate(sameShowHierarchyCandidates, { showName: "Live Nation Moonchild @ The Fox", client: "Live Nation", documentType: "quote" }).candidate?.documentNumber,
+  "26-1846",
+  "an explicit parent-quote lookup filters out same-show child pull sheets before ambiguity scoring"
+);
+
 const moonchildPrimary = selectPrimaryShowQuote([
   { status: "Verified", elementId: "22222222-2222-4222-8222-222222222222", documentNumber: "26-0836", documentType: "pull_sheet", showName: "Live Nation Moonchild @ The Fox" },
   { status: "Verified", elementId: moonchildQuoteId, documentNumber: "26-1846", documentType: "quote", showName: "Live Nation Moonchild @ The Fox", client: "Live Nation" },
@@ -48,6 +58,13 @@ const opaqueMoonchildPrimary = selectPrimaryShowQuote([
   { status: "Verified", elementId: moonchildQuoteId, parentElementId: null, documentNumber: "26-1846", documentType: "unknown", showName: "Live Nation Moonchild @ The Fox" },
 ], { showName: "Live Nation Moonchild @ The Fox" });
 assert.equal(opaqueMoonchildPrimary?.documentNumber, "26-1846", "tree parent identity breaks ties when FLEX returns opaque document type codes");
+assert.equal(
+  selectPrimaryShowQuote([
+    { status: "Verified", elementId: "22222222-2222-4222-8222-222222222222", parentElementId: moonchildQuoteId, documentNumber: "26-0836", documentType: "unknown", showName: "Live Nation Moonchild @ The Fox" },
+  ], { showName: "Live Nation Moonchild @ The Fox" }),
+  null,
+  "an opaque child pull sheet is never promoted to the canonical show quote"
+);
 
 const liteFlairPrimary = selectPrimaryShowQuote([
   { status: "Verified", elementId: "33333333-3333-4333-8333-333333333333", documentNumber: "26-1790", documentType: "quote", showName: "LiteFlair Shoot" },

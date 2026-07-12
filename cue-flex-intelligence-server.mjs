@@ -4918,6 +4918,12 @@ async function searchFlexQuotes(query, options = {}) {
         categorySubtotalFormatted: formatUsd(summary?.financials?.categorySubtotal || 0),
         rawSearchName: candidate.name,
         type: candidate.type,
+        documentType: inferFlexDocumentType(
+          `${showContext.documentType || ""} ${showContext.definitionName || ""} ${candidate.type || ""} ${candidate.name || ""}`,
+          "unknown"
+        ),
+        definitionName: showContext.definitionName || null,
+        definitionId: showContext.definitionId || null,
       });
     } catch (error) {
       matches.push({
@@ -8000,7 +8006,10 @@ const server = http.createServer(async (req, res) => {
         const candidates = (search.matches || []).map(match => ({
           ...match,
           showName: match.name,
-          documentType: inferFlexDocumentType(`${match.type || ""} ${match.rawSearchName || ""}`, "unknown"),
+          documentType: match.documentType || inferFlexDocumentType(
+            `${match.definitionName || ""} ${match.type || ""} ${match.rawSearchName || ""}`,
+            "unknown"
+          ),
         }));
         const selection = selectFlexDocumentCandidate(candidates, {
           showName,
@@ -8150,7 +8159,7 @@ const server = http.createServer(async (req, res) => {
         };
       }
 
-      const documents = identityResolvedDocument
+      let documents = identityResolvedDocument
         ? [identityResolvedDocument]
         : await Promise.all(
             documentNumbers.map((documentNumber) =>
@@ -8158,16 +8167,44 @@ const server = http.createServer(async (req, res) => {
             )
           );
 
-      const verifiedDocuments = documents.filter(
+      let verifiedDocuments = documents.filter(
         (document) => document.status === "Verified"
       );
-      const unresolvedDocuments = documents.filter(
+      let unresolvedDocuments = documents.filter(
         (document) => document.status !== "Verified"
       );
-      const primary = selectPrimaryShowQuote(verifiedDocuments, {
+      const expectedShowIdentity = {
         showName: show.name || show.showName || null,
         client: show.activeShowsIndex?.client || show.client || null,
-      });
+      };
+      let primary = selectPrimaryShowQuote(verifiedDocuments, expectedShowIdentity);
+
+      // A row can contain only a child pull sheet (Moonchild 26-0836 is the
+      // real-world example) or an opaque FLEX workstream.  In that case the
+      // document number proves the workstream, not the canonical show quote.
+      // Search once by the Active Show identity and add the verified parent
+      // quote without discarding the child evidence.
+      if (
+        options.resolveByName !== false &&
+        (!primary || primary.documentType !== "quote")
+      ) {
+        const canonicalQuote = await resolveActiveShowFlexQuoteByName(show);
+        if (canonicalQuote?.documentType === "quote") {
+          const existingIndex = documents.findIndex(
+            document => String(document?.elementId || "").toLowerCase() === String(canonicalQuote.elementId || "").toLowerCase()
+          );
+          // Name resolution may rediscover the same UUID that a number lookup
+          // returned with an opaque type.  Upgrade that record in place instead
+          // of treating it as a duplicate and leaving LiteFlair unresolved.
+          documents = existingIndex >= 0
+            ? documents.map((document, index) => index === existingIndex ? { ...document, ...canonicalQuote } : document)
+            : [...documents, canonicalQuote];
+          documentNumbers = [...new Set([...documentNumbers, canonicalQuote.documentNumber].filter(Boolean))];
+          verifiedDocuments = documents.filter(document => document.status === "Verified");
+          unresolvedDocuments = documents.filter(document => document.status !== "Verified");
+          primary = selectPrimaryShowQuote(verifiedDocuments, expectedShowIdentity);
+        }
+      }
       const soldDepartments = Array.from(
         new Set(
           verifiedDocuments.flatMap((document) => document.soldDepartments || [])
@@ -8175,11 +8212,12 @@ const server = http.createServer(async (req, res) => {
       );
       const combined = buildCombinedFlexTotals(verifiedDocuments);
 
+      const hasCanonicalQuote = primary?.documentType === "quote";
       const status = verifiedDocuments.length === 0
         ? unresolvedDocuments.some((document) => document.status === "Error")
           ? "Error"
           : "Missing"
-        : !primary
+        : !hasCanonicalQuote
           ? "Partial"
         : unresolvedDocuments.length > 0
           ? "Partial"
@@ -8194,7 +8232,7 @@ const server = http.createServer(async (req, res) => {
         : "";
 
       const flexSignal = verifiedDocuments.length
-        ? primary
+        ? hasCanonicalQuote
           ? `FLEX ${status} - ${checkedText} document${documentNumbers.length === 1 ? "" : "s"} verified. Primary show quote: ${primary.documentNumber} / ${primary.elementId}. Combined sold scope: ${soldDepartments.join(", ") || "No departments found"}.${unresolvedText}`
           : `FLEX Partial - ${checkedText} document${documentNumbers.length === 1 ? "" : "s"} verified, but no canonical parent quote was identified. Human confirmation required.${unresolvedText}`
         : `FLEX ${status} - ${documentNumbers.join(", ")} did not fully resolve. Treat trucking / Drive evidence as hints only.${unresolvedText}`;
@@ -8204,9 +8242,9 @@ const server = http.createServer(async (req, res) => {
         flex: {
           status,
           approvalNeeded,
-          documentNumber: primary?.documentNumber || null,
+          documentNumber: hasCanonicalQuote ? primary.documentNumber : null,
           documentNumbers,
-          elementId: primary?.elementId || null,
+          elementId: hasCanonicalQuote ? primary.elementId : null,
           showName: primary?.showName || show.name,
           client: primary?.client || null,
           venue: primary?.venue || null,
@@ -8219,7 +8257,7 @@ const server = http.createServer(async (req, res) => {
           financials: combined.financials,
           counts: combined.counts,
           documents,
-          primary: primary
+          primary: hasCanonicalQuote
             ? {
                 documentNumber: primary.documentNumber,
                 elementId: primary.elementId,
@@ -8438,7 +8476,7 @@ const server = http.createServer(async (req, res) => {
         ...source.shows,
         ...buildMissingEventFolderHintShows(source.shows),
       ];
-      const enrichedShows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: false });
+      const enrichedShows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: true });
       return enrichedShows.map(buildSlackCandidateFromActiveShow);
     };
     slackMatchDeps.resolveQuoteCandidate = resolveSlackCandidateFromFlexQuote;

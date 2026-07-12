@@ -96,7 +96,16 @@ export function scoreFlexDocumentIdentity(candidate = {}, expected = {}) {
 export function selectFlexDocumentCandidate(candidates = [], expected = {}) {
   const available = (Array.isArray(candidates) ? candidates : []).filter(candidate => candidate?.elementId);
   if (!available.length) return { candidate: null, ambiguous: false, ranked: [] };
-  const ranked = available
+  // When the caller explicitly requests a quote (or another known FLEX type),
+  // type is a constraint rather than a small scoring hint.  A quote and its
+  // child pull sheet normally share the same show/client identity, so scoring
+  // every type together creates a false ambiguity even after FLEX identified
+  // the document definitions correctly.
+  const typed = expected.documentType
+    ? available.filter(candidate => candidate.documentType === expected.documentType)
+    : [];
+  const pool = typed.length ? typed : available;
+  const ranked = pool
     .map(candidate => ({ ...candidate, identityScore: scoreFlexDocumentIdentity(candidate, expected) }))
     .sort((a, b) => b.identityScore - a.identityScore);
   if (ranked.length === 1) return { candidate: ranked[0], ambiguous: false, ranked };
@@ -110,7 +119,15 @@ export function selectFlexDocumentCandidate(candidates = [], expected = {}) {
 export function selectPrimaryShowQuote(documents = [], expected = {}) {
   const verified = (Array.isArray(documents) ? documents : []).filter(document => document?.status === "Verified");
   const quotes = verified.filter(document => document.documentType === "quote");
-  const pool = quotes.length ? quotes : verified.filter(document => document.documentType === "unknown");
+  // An opaque child document must never become the show's canonical quote just
+  // because it is the only FLEX document we have seen so far.  Pull sheets can
+  // reuse a quote-like number and FLEX sometimes returns a generic definition
+  // for them.  Only a verified quote, or an opaque root document with no known
+  // parent, is eligible here.  The caller may still search by show identity to
+  // replace that tentative root with an explicitly typed quote.
+  const pool = quotes.length
+    ? quotes
+    : verified.filter(document => document.documentType === "unknown" && !document.parentElementId);
   if (!pool.length) return null;
   return [...pool]
     .map(document => ({
