@@ -173,6 +173,7 @@ export function createCueFoundationStore(options = {}) {
         db.sourceRecords[sourceId] = sourceRecord;
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
         const candidateNeedsReview = match?.matchState === "needs_review";
+        const flexDocumentNumbers = [...new Set((match?.documentNumbers || []).map(String).filter(Boolean))];
         const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : scope === "show_specific" ? "needs_match" : "routed";
         db.intakeItems[intakeId] = {
           id: intakeId, sourceRecordId: sourceId, status, category: domain, scope,
@@ -181,12 +182,16 @@ export function createCueFoundationStore(options = {}) {
           summary: cleanedSummary,
           matchedShowId: confirmedMatch ? match.showKey : null,
           candidateShowId: candidateNeedsReview ? match.showKey : null,
+          matchedShowName: match?.showName || null,
+          flexDocumentNumbers,
+          flexElementId: match?.elementId || null,
+          flexQuoteElements: match?.quoteElements || [],
           matchConfidence: match?.score ?? null,
           matchReasons: match?.reasons || [], createdAt: db.intakeItems[intakeId]?.createdAt || now(), updatedAt: now(),
         };
         for (const [rank, candidate] of (message.matches || []).entries()) {
           const candidateId = id("match", `${intakeId}:${candidate.showKey}`);
-          db.matchCandidates[candidateId] = { id: candidateId, intakeItemId: intakeId, candidateEntityType: "show", candidateEntityId: candidate.showKey, score: Number(candidate.score || 0), reasons: candidate.reasons || [], rank: rank + 1, selected: ["auto_attached","manually_approved"].includes(candidate.matchState), matcherVersion: "slack-match-v1" };
+          db.matchCandidates[candidateId] = { id: candidateId, intakeItemId: intakeId, candidateEntityType: "show", candidateEntityId: candidate.showKey, candidateEntityName: candidate.showName || null, documentNumbers: candidate.documentNumbers || [], elementId: candidate.elementId || null, quoteElements: candidate.quoteElements || [], score: Number(candidate.score || 0), reasons: candidate.reasons || [], rank: rank + 1, selected: ["auto_attached","manually_approved"].includes(candidate.matchState), matcherVersion: "slack-match-v1" };
         }
         const factId = id("fact", `${intakeId}:${domain}`);
         db.candidateFacts[factId] = { id: factId, intakeItemId: intakeId, factType: `slack.${domain}.signal`, value: { text: cleanedText, categories: message.operationalClassification?.categories || [], entities: message.extractedEntities || {} }, confidence: match?.confidenceBand || match?.confidence || null, evidenceSpan: { sourceRecordId: sourceId, text: cleanedText }, extractionVersion: "slack-rules-v1" };
