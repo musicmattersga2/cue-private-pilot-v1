@@ -40,12 +40,30 @@ function isReviewable(message) {
 }
 function domainOf(message) {
   const cats = message.operationalClassification?.categories || [];
+  const text = String(message.text || "");
+  if (cats.includes("equipment") && /missing items?|shortage|need .+ more|followspots?|hazer|galaxy|earbuds?|cat6|cables?/i.test(text)) return "equipment";
+  if (cats.includes("warehouse") && /pull(?:ed|ing|\s+sheet)?|prep|pack|loaded|warehouse/i.test(text)) return "warehouse";
   if (cats.includes("trucking") || cats.includes("dock") || cats.includes("bol")) return "trucking";
   if (cats.includes("staffing")) return "staffing";
   if (cats.includes("warehouse")) return "warehouse";
   if (cats.includes("equipment")) return "equipment";
   if (cats.includes("schedule")) return "schedule";
   return "operations";
+}
+function cardTypeOf(message) {
+  const text = String(message.text || "");
+  const classification = message.operationalClassification || {};
+  if (/\b(?:could|can|would)\s+(?:i|we|you)|\bplease\b|\bmake sure\b|\bneed someone\b/i.test(text)) return "task_request";
+  if (classification.status === "blocked" || classification.status === "at_risk" || /missing items?|shortage|waiting on|may need|maybe|tbd/i.test(text)) return "risk_review";
+  if (classification.status === "resolved" || /\bis\s+(?:getting\s+)?loaded\b|\bis ready\b|\bready to prep\b/i.test(text)) return "state_confirmation";
+  return "signal_review";
+}
+function shouldCreateDecisionCard(message, matchState) {
+  const type = cardTypeOf(message);
+  // Routine affirmative state is preserved as Intake/evidence. It becomes a
+  // decision only when CUE genuinely cannot determine the show.
+  if (type === "state_confirmation") return !primaryMatch(message);
+  return matchState === "needs_review" || ["task_request", "risk_review"].includes(type);
 }
 function readinessStatusFor(openCards, events) {
   const statuses = openCards.map((x) => x.impact);
@@ -99,8 +117,13 @@ export function createCueFoundationStore(options = {}) {
         const factId = id("fact", `${intakeId}:${domain}`);
         db.candidateFacts[factId] = { id: factId, intakeItemId: intakeId, factType: `slack.${domain}.signal`, value: { text: message.text, categories: message.operationalClassification?.categories || [], entities: message.extractedEntities || {} }, confidence: match?.confidenceBand || match?.confidence || null, evidenceSpan: { sourceRecordId: sourceId, text: message.text }, extractionVersion: "slack-rules-v1" };
         const cardId = id("card", intakeId);
-        if (!db.decisionCards[cardId] && status === "needs_review") {
-          db.decisionCards[cardId] = { id: cardId, intakeItemId: intakeId, showId: match?.showKey || null, status: "open", cardType: "signal_review", domain, headline: message.operationalClassification?.summary || message.text, explanation: `CUE found a ${domain} signal in Slack and needs a human to confirm its show and operational treatment.`, recommendation: match ? "Confirm the show match, then choose how CUE should treat the signal." : "Choose the correct show or mark this as not relevant.", urgency: db.intakeItems[intakeId].urgency, impact: db.intakeItems[intakeId].impact, confidence: match?.confidenceBand || null, sourceRecordId: sourceId, createdAt: now(), updatedAt: now() };
+        const cardType = cardTypeOf(message);
+        const cardEligible = shouldCreateDecisionCard(message, status);
+        if (!cardEligible && db.decisionCards[cardId]?.status === "open") {
+          delete db.decisionCards[cardId];
+        }
+        if (!db.decisionCards[cardId] && cardEligible) {
+          db.decisionCards[cardId] = { id: cardId, intakeItemId: intakeId, showId: match?.showKey || null, status: "open", cardType, domain, headline: message.operationalClassification?.summary || message.text, explanation: cardType === "task_request" ? `CUE found a ${domain} request that needs an owner or disposition.` : cardType === "risk_review" ? `CUE found a ${domain} risk or unresolved condition that may affect readiness.` : `CUE needs a human to confirm this signal's show and operational treatment.`, recommendation: cardType === "task_request" ? "Create and assign the task, use as evidence, or reject it." : cardType === "risk_review" ? "Confirm the risk, owner and readiness impact." : match ? "Confirm the show match, then choose how CUE should treat the signal." : "Choose the correct show or mark this as not relevant.", urgency: db.intakeItems[intakeId].urgency, impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact, confidence: match?.confidenceBand || null, sourceRecordId: sourceId, createdAt: now(), updatedAt: now() };
         }
       }
       writeFile(filePath, db); return { created, updated, sourceRecordCount: Object.keys(db.sourceRecords).length, intakeCount: Object.keys(db.intakeItems).length, openDecisionCount: Object.values(db.decisionCards).filter(x => x.status === "open").length };
