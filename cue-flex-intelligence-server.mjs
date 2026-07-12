@@ -24,6 +24,7 @@ import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
 const ASK_FLEX_HTML_FILE = path.resolve("./ask-flex.html");
+const COMMAND_CENTER_HTML_FILE = path.resolve("./command-center.html");
 const CUE_PILOT_PASSWORD = process.env.CUE_PILOT_PASSWORD || "";
 const CUE_PILOT_SESSION_SECRET =
   process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
@@ -8412,6 +8413,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/command-center") {
+      let html = fs.readFileSync(COMMAND_CENTER_HTML_FILE, "utf8");
+      html = html.replaceAll("__CUE_BUILD_LABEL__", CUE_BUILD_LABEL);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(html);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/flex-line-items") {
       const elementId = url.searchParams.get("elementId");
 
@@ -8594,6 +8603,20 @@ const server = http.createServer(async (req, res) => {
       const status = String(url.searchParams.get("status") || "").trim() || null;
       const items = await defaultCueFoundationStore.listDecisionCards({ showId, status });
       sendJson(res, 200, { count: items.length, items: items.slice(0, 200) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/summary") {
+      const summary = await defaultCueFoundationStore.getSummary();
+      sendJson(res, 200, summary);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/intake") {
+      const status = String(url.searchParams.get("status") || "").trim() || null;
+      const limit = Number(url.searchParams.get("limit") || 200);
+      const items = await defaultCueFoundationStore.listIntakeItems({ status, limit });
+      sendJson(res, 200, { count: items.length, items });
       return;
     }
 
@@ -9297,5 +9320,4 @@ server.listen(PORT, async () => {
     }
   }
 });
-
 
