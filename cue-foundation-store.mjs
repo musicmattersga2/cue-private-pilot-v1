@@ -83,6 +83,17 @@ function domainOf(message) {
   if (cats.includes("schedule")) return "schedule";
   return "operations";
 }
+function scopeOf(message, match, domain) {
+  const text = cleanText(message.text).toLowerCase();
+  const score = Number(match?.score || 0);
+  if (["auto_attached", "manually_approved", "needs_review"].includes(match?.matchState) || (match?.showKey && score >= 45)) return "show_specific";
+  if (domain === "staffing" || /staffing meeting|crew call|labor coordinator|availability/.test(text)) return "staffing";
+  if (/vendor|supplier|source|buy|purchase|does anyone know a company|cross.?rent|subrent/.test(text)) return "procurement_vendor";
+  if (/inventory|in stock|bar.?code|longest length|how many|flex does not have dims|weights and dims/.test(text)) return "inventory";
+  if (/warehouse|at the shop|shop now|receive the delivery|pack(?:ed|ing)?|prep(?:ped|ping)?|pull sheet/.test(text)) return "warehouse_shop";
+  if (domain === "trucking" || /truck|driver|delivery|shipment|pickup|return|on the road|logistics/.test(text)) return "trucking_logistics";
+  return "company_operations";
+}
 function cardTypeOf(message) {
   const text = String(message.text || "");
   const classification = message.operationalClassification || {};
@@ -132,7 +143,7 @@ export function createCueFoundationStore(options = {}) {
         const sourceId = id("src", `slack:${message.messageKey}:${message.contentHash}`);
         const intakeId = id("intake", sourceId);
         activeIntakeIds.add(intakeId);
-        const match = primaryMatch(message); const domain = domainOf(message);
+        const match = primaryMatch(message); const domain = domainOf(message); const scope = scopeOf(message, match, domain);
         const mentionUsers = snapshot.users || {};
         const resolveMentions = value => cleanText(value).replace(/<@([A-Z0-9]+)>/gi, (_, userId) => `@${mentionUsers[userId]?.displayName || mentionUsers[userId]?.realName || userId}`);
         const cleanedText = resolveMentions(message.text);
@@ -150,9 +161,9 @@ export function createCueFoundationStore(options = {}) {
         db.sourceRecords[sourceId] = sourceRecord;
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
         const candidateNeedsReview = match?.matchState === "needs_review";
-        const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : "needs_match";
+        const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : scope === "show_specific" ? "needs_match" : "routed";
         db.intakeItems[intakeId] = {
-          id: intakeId, sourceRecordId: sourceId, status, category: domain,
+          id: intakeId, sourceRecordId: sourceId, status, category: domain, scope,
           urgency: message.operationalClassification?.status === "blocked" ? "urgent" : "normal",
           impact: message.operationalClassification?.status === "blocked" ? "critical" : message.operationalClassification?.status === "at_risk" ? "material" : "minor",
           summary: cleanedSummary,
@@ -280,7 +291,7 @@ export function createCueFoundationStore(options = {}) {
       const intake = Object.values(db.intakeItems);
       const cards = Object.values(db.decisionCards);
       const count = (items, predicate) => items.filter(predicate).length;
-      return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), candidateSignals: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), evidenceOnly: count(intake,x=>!cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"&&x.cardType!=="show_match_review"), matchDecisions: count(cards,x=>x.status==="open"&&x.cardType==="show_match_review"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
+      return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), candidateSignals: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), routedEvidence: count(intake,x=>x.status==="routed"), evidenceOnly: count(intake,x=>!cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"&&x.cardType!=="show_match_review"), matchDecisions: count(cards,x=>x.status==="open"&&x.cardType==="show_match_review"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
     },
     getIntakeItem: async (intakeId) => { const db = readFile(filePath); const item = db.intakeItems[intakeId]; if (!item) return null; return { ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null, matches: Object.values(db.matchCandidates).filter(x => x.intakeItemId === intakeId), facts: Object.values(db.candidateFacts).filter(x => x.intakeItemId === intakeId), decisionCards: Object.values(db.decisionCards).filter(x => x.intakeItemId === intakeId) }; },
     getShowReadiness: async (showId) => readFile(filePath).readiness[showId] || { showId, overallStatus: "not_started", overallScore: 0, domainRollup: {}, milestoneRollup: {}, blockers: [], warnings: [], nextActions: [], rulesetVersion: "pilot-v1", evaluatedAt: now() },
