@@ -437,12 +437,34 @@ export function createSlackOperationalSignalsService(options = {}) {
           telemetry.messagesUpdated += writeResult.updated || 0;
           telemetry.duplicatesSkipped += writeResult.duplicatesSkipped || 0;
           telemetry.channelsSucceeded += 1;
+          telemetry.channelResults = telemetry.channelResults || [];
+          telemetry.channelResults.push({
+            channelId,
+            channelName,
+            success: true,
+            messagesFetched: rawMessages.length,
+            inserted: writeResult.inserted || 0,
+            updated: writeResult.updated || 0,
+            duplicatesSkipped: writeResult.duplicatesSkipped || 0,
+            error: null,
+          });
         } catch (error) {
           telemetry.status = "partial";
           telemetry.errors.push({
             channelId,
             message: asString(error?.message || error),
             code: error?.code || null,
+          });
+          telemetry.channelResults = telemetry.channelResults || [];
+          telemetry.channelResults.push({
+            channelId,
+            channelName: storeSnap.channels?.[channelId]?.channelName || channelId,
+            success: false,
+            messagesFetched: 0,
+            inserted: 0,
+            updated: 0,
+            duplicatesSkipped: 0,
+            error: asString(error?.message || error),
           });
           await store.setChannelError(channelId, asString(error?.message || error));
           // Do not advance cursor on failure.
