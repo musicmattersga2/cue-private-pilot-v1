@@ -51,7 +51,15 @@ function writeFile(filePath, data) {
   fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: now() }, null, 2));
   fs.renameSync(tmp, filePath);
 }
-function primaryMatch(message) { return (message.matches || [])[0] || null; }
+function primaryMatch(message) {
+  const rank = { manually_approved: 0, auto_attached: 1, needs_review: 2, general_queue: 3, manually_rejected: 4 };
+  return [...(message.matches || [])]
+    .sort((a, b) => {
+      const stateDelta = (rank[a?.matchState] ?? 9) - (rank[b?.matchState] ?? 9);
+      if (stateDelta !== 0) return stateDelta;
+      return Number(b?.score || 0) - Number(a?.score || 0);
+    })[0] || null;
+}
 function isReviewable(message) {
   if (!message || message.deleted || message.matchState === "excluded_system") return false;
   return Boolean(message.operationalClassification?.categories?.length);
