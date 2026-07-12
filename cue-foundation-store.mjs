@@ -16,7 +16,13 @@ let writeChain = Promise.resolve();
 
 function now() { return new Date().toISOString(); }
 function cleanText(value) {
-  return String(value ?? "")
+  const original = String(value ?? "");
+  let decoded = original;
+  if (/[Ââ]/.test(original)) {
+    const candidate = Buffer.from(original, "latin1").toString("utf8");
+    if (!candidate.includes("�")) decoded = candidate;
+  }
+  return decoded
     .replace(/â€™|â/g, "'")
     .replace(/â|â/g, '"')
     .replace(/â|â/g, "-")
@@ -73,16 +79,17 @@ function cardTypeOf(message) {
 function shouldCreateDecisionCard(message, matchState) {
   const type = cardTypeOf(message);
   const match = primaryMatch(message);
+  const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
+  const candidateNeedsReview = match?.matchState === "needs_review";
   // General/unmatched communication remains searchable Intake evidence. It
   // must not flood the show-focused My Decisions queue.
-  if (!match?.showKey) return false;
+  if (!match?.showKey || (!confirmedMatch && !candidateNeedsReview)) return false;
   // Routine affirmative state is evidence/current-state input, not a decision.
   if (type === "state_confirmation") return false;
   // Ambiguous show candidates require a human match decision.
-  if (match.matchState === "needs_review" || matchState === "needs_review") return true;
+  if (candidateNeedsReview) return true;
   // High-confidence matched requests/risks still require operational treatment.
-  return ["task_request", "risk_review"].includes(type) &&
-    ["auto_attached", "manually_approved"].includes(match.matchState);
+  return ["task_request", "risk_review"].includes(type) && confirmedMatch;
 }
 function readinessStatusFor(openCards, events) {
   const statuses = openCards.map((x) => x.impact);
@@ -122,13 +129,17 @@ export function createCueFoundationStore(options = {}) {
         };
         if (db.sourceRecords[sourceId]) updated += 1; else created += 1;
         db.sourceRecords[sourceId] = sourceRecord;
-        const status = match?.matchState === "needs_review" || !match ? "needs_review" : "matched";
+        const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
+        const candidateNeedsReview = match?.matchState === "needs_review";
+        const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : "needs_match";
         db.intakeItems[intakeId] = {
           id: intakeId, sourceRecordId: sourceId, status, category: domain,
           urgency: message.operationalClassification?.status === "blocked" ? "urgent" : "normal",
           impact: message.operationalClassification?.status === "blocked" ? "critical" : message.operationalClassification?.status === "at_risk" ? "material" : "minor",
           summary: cleanedSummary,
-          matchedShowId: match?.showKey || null, matchConfidence: match?.score ?? null,
+          matchedShowId: confirmedMatch ? match.showKey : null,
+          candidateShowId: candidateNeedsReview ? match.showKey : null,
+          matchConfidence: match?.score ?? null,
           matchReasons: match?.reasons || [], createdAt: db.intakeItems[intakeId]?.createdAt || now(), updatedAt: now(),
         };
         for (const [rank, candidate] of (message.matches || []).entries()) {
@@ -147,12 +158,20 @@ export function createCueFoundationStore(options = {}) {
           db.decisionCards[cardId] = { id: cardId, intakeItemId: intakeId, showId: match?.showKey || null, status: "open", cardType, domain, headline: cleanedSummary, explanation: cardType === "task_request" ? `CUE found a ${domain} request that needs an owner or disposition.` : cardType === "risk_review" ? `CUE found a ${domain} risk or unresolved condition that may affect readiness.` : `CUE needs a human to confirm this signal's show and operational treatment.`, recommendation: cardType === "task_request" ? "Create and assign the task, use as evidence, or reject it." : cardType === "risk_review" ? "Confirm the risk, owner and readiness impact." : match ? "Confirm the show match, then choose how CUE should treat the signal." : "Choose the correct show or mark this as not relevant.", urgency: db.intakeItems[intakeId].urgency, impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact, confidence: match?.confidenceBand || null, sourceRecordId: sourceId, createdAt: now(), updatedAt: now() };
         } else if (db.decisionCards[cardId]?.status === "open" && cardEligible) {
           Object.assign(db.decisionCards[cardId], {
-            showId: match?.showKey || null,
-            cardType,
+            showId: confirmedMatch ? match.showKey : null,
+            candidateShowId: candidateNeedsReview ? match.showKey : null,
+            cardType: candidateNeedsReview ? "show_match_review" : cardType,
             domain,
             headline: cleanedSummary,
             impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact,
             updatedAt: now(),
+          });
+        }
+        if (db.decisionCards[cardId]?.status === "open" && cardEligible) {
+          Object.assign(db.decisionCards[cardId], {
+            showId: confirmedMatch ? match.showKey : null,
+            candidateShowId: candidateNeedsReview ? match.showKey : null,
+            cardType: candidateNeedsReview ? "show_match_review" : cardType,
           });
         }
       }
