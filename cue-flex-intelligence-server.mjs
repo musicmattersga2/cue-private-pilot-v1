@@ -596,6 +596,9 @@ function buildShowContext(headerData, elementId) {
   return {
     elementId,
     documentNumber: extractHeaderValue(headerData, "documentNumber"),
+    documentType: extractHeaderValue(headerData, "documentType") || extractHeaderValue(headerData, "elementType"),
+    definitionName: extractHeaderValue(headerData, "definitionName") || extractHeaderValue(headerData, "elementDefinitionName"),
+    definitionId: extractHeaderValue(headerData, "definitionId") || extractHeaderValue(headerData, "elementDefinitionId"),
     showName: extractHeaderValue(headerData, "name"),
     client: extractHeaderValue(headerData, "clientId"),
     venue: extractHeaderValue(headerData, "venueId"),
@@ -702,6 +705,9 @@ function looksLikeFlexTreeElementNode(node) {
       "objectId",
       "objectID",
       "nodeId",
+      "entityId",
+      "financialDocumentId",
+      "element.id",
     ])
   );
   const hasDoc = Boolean(
@@ -752,6 +758,9 @@ function normalizeFlexElementTree(treeData) {
         "objectId",
         "objectID",
         "nodeId",
+        "entityId",
+        "financialDocumentId",
+        "element.id",
       ]);
       const documentNumber = pickFirstString(value, [
         "documentNumber",
@@ -778,6 +787,12 @@ function normalizeFlexElementTree(treeData) {
           "type.name",
           "domainId",
           "domain",
+          "definitionName",
+          "elementDefinitionName",
+          "definitionId",
+          "elementDefinitionId",
+          "elementDefinition.name",
+          "elementDefinition.id",
         ]) || null;
       const parentId =
         pickFirstString(value, [
@@ -786,6 +801,8 @@ function normalizeFlexElementTree(treeData) {
           "parentUUID",
           "parent.id",
           "parent.elementId",
+          "parentElement.id",
+          "parent.element.id",
         ]) ||
         parentHint ||
         null;
@@ -1653,22 +1670,23 @@ async function findFlexQuoteByDocumentNumber(documentNumber, options = {}) {
       const header = await fetchFlexHeaderData(candidate.elementId);
       const context = buildShowContext(header.data, candidate.elementId);
       if (String(context.documentNumber || "").trim().toLowerCase() !== wantedLower) continue;
-      let documentType = inferFlexDocumentType(`${candidate.type || ""} ${candidate.name || ""}`, "unknown");
+      let documentType = inferFlexDocumentType(`${context.documentType || ""} ${context.definitionName || ""} ${candidate.type || ""} ${candidate.name || ""}`, "unknown");
       let parentElementId = null;
-      if (documentType === "unknown") {
-        try {
-          const tree = await fetchFlexElementTree(candidate.elementId);
-          const treeNode = normalizeFlexElementTree(tree.data).find(node =>
-            String(node.elementId || "").toLowerCase() === String(candidate.elementId).toLowerCase()
-          );
-          if (treeNode) {
-            documentType = inferFlexDocumentType(`${treeNode.type || ""} ${treeNode.name || ""} ${treeNode.domainId || ""}`, "unknown");
-            parentElementId = treeNode.parentId || null;
-          }
-        } catch {
-          // Header verification remains valid; opaque type stays unknown and
-          // therefore cannot outrank an explicitly typed quote.
+      try {
+        const tree = await fetchFlexElementTree(candidate.elementId);
+        const treeNode = normalizeFlexElementTree(tree.data).find(node =>
+          String(node.elementId || "").toLowerCase() === String(candidate.elementId).toLowerCase()
+        );
+        if (treeNode) {
+          const treeDocumentType = inferFlexDocumentType(`${treeNode.type || ""} ${treeNode.name || ""} ${treeNode.domainId || ""}`, "unknown");
+          // The element tree describes the node's actual role. It must override
+          // generic search categories such as "financial document" or a
+          // misleading quote-family label applied to child pull sheets.
+          if (treeDocumentType !== "unknown") documentType = treeDocumentType;
+          parentElementId = treeNode.parentId || null;
         }
+      } catch {
+        // Header verification remains valid; opaque type stays conservative.
       }
       verified.push({
         ...candidate,
