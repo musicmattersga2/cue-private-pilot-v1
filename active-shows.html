@@ -119,7 +119,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
       gap: 16px;
-      padding: 20px 24px 28px;
+      padding: 0;
     }
 
     .card {
@@ -129,7 +129,7 @@
       padding: 16px;
       cursor: pointer;
       transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
-      min-height: 310px;
+      min-height: 0;
       display: flex;
       flex-direction: column;
     }
@@ -244,78 +244,6 @@
       color: var(--muted);
       font-size: 12px;
     }
-    .key-info {
-      margin-top: 12px;
-      display: grid;
-      gap: 6px;
-      font-size: 13px;
-    }
-
-    .key-info-row {
-      display: grid;
-      grid-template-columns: 76px 1fr;
-      gap: 8px;
-      align-items: baseline;
-    }
-
-    .key-info-k {
-      color: var(--muted);
-      text-transform: uppercase;
-      font-size: 10px;
-      letter-spacing: 0.06em;
-    }
-
-    .key-info-v {
-      color: #f3f7ff;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .modal-meta-grid {
-      margin-top: 10px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      max-width: 1650px;
-    }
-
-    .modal-meta-item {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 7px;
-      min-width: 0;
-      max-width: 320px;
-      padding: 7px 10px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.055);
-      border: 1px solid rgba(255, 255, 255, 0.10);
-    }
-
-    .modal-meta-item.wide {
-      max-width: 420px;
-    }
-
-    .modal-meta-item .k {
-      color: var(--muted);
-      font-size: 9px;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      white-space: nowrap;
-    }
-
-    .modal-meta-item .v {
-      color: #f3f7ff;
-      font-size: 13px;
-      font-weight: 800;
-      line-height: 1.1;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-
     .open-link {
       color: var(--cyan);
       font-weight: 700;
@@ -346,38 +274,19 @@
       font-weight: 800;
     }
 
-    .trucking-panel {
-      margin-top: 14px;
-      padding: 12px;
-      border-radius: 12px;
-      border: 1px solid rgba(255, 224, 112, 0.30);
-      background: rgba(255, 224, 112, 0.07);
-    }
 
-    .trucking-panel h3 {
-      margin: 0 0 8px 0;
-      font-size: 14px;
-      color: #ffe070;
-    }
 
-    .action-queue-panel {
-      margin-top: 14px;
-      padding: 12px;
-      border-radius: 12px;
-      border: 1px solid rgba(255, 139, 139, 0.22);
-      background: rgba(255, 139, 139, 0.055);
-    }
 
-    .action-queue-panel h3 {
-      margin: 0 0 8px 0;
-      font-size: 14px;
-      color: #ffb1b1;
-    }
+
+
+
+
 
     .action-list {
-      display: grid;
-      gap: 9px;
-      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
     }
 
     .action-item {
@@ -615,18 +524,14 @@
 
     .modal-body {
       overflow: auto;
-      padding: 22px 24px 36px;
-      display: grid;
-      grid-template-columns: minmax(320px, 0.9fr) minmax(480px, 1.4fr);
-      gap: 18px;
-      align-items: start;
+      padding: 18px 22px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: stretch;
     }
 
     @media (max-width: 1100px) {
-      .modal-body {
-        grid-template-columns: 1fr;
-      }
-
       .modal {
         inset: 10px;
       }
@@ -640,14 +545,78 @@
     .detail-panel {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 16px;
+      border-radius: 14px;
+      padding: 14px 16px;
     }
 
     .detail-panel h3 {
-      margin: 0 0 10px;
+      margin: 0 0 8px;
       color: var(--cyan);
-      font-size: 16px;
+      font-size: 15px;
+    }
+
+    .detail-panel.ops-brief .value {
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .detail-panel.balanced {
+      min-height: 100%;
+    }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 7px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .action-row .pill {
+      margin: 0;
+      padding: 3px 7px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .action-row-title {
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1.3;
+      color: #fff;
+    }
+
+    .action-row-meta {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .card-clamp {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.35;
+      font-size: 13px;
+    }
+
+    .card.calm .label {
+      margin-top: 8px;
+      margin-bottom: 2px;
+      font-size: 11px;
+    }
+
+    .card.calm .value {
+      font-size: 13px;
     }
 
     .workstream-row {
@@ -723,30 +692,13 @@
       font-weight: 800;
     }
 
-    .finding-panel {
-      margin-top: 14px;
-      padding: 12px;
-      border-radius: 12px;
-      border: 1px solid rgba(0, 230, 118, 0.30);
-      background: rgba(0, 230, 118, 0.07);
-    }
 
-    .finding-panel h3 {
-      margin: 0 0 8px 0;
-      font-size: 14px;
-      color: #8dffae;
-    }
 
-    .finding-panel ul {
-      margin: 8px 0 0 18px;
-      padding: 0;
-      font-size: 13px;
-      line-height: 1.45;
-    }
 
-    .finding-panel li {
-      margin-bottom: 6px;
-    }
+
+
+
+
 
     details.raw-flex-details {
       margin-top: 14px;
@@ -823,24 +775,219 @@
     .error { color: var(--red); }
     .success { color: #8dffae; }
     .muted { color: var(--muted); }
+
+    .view-toggle {
+      display: inline-flex;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 10px;
+      background: #121824;
+      border: 1px solid #2a3444;
+    }
+
+    .view-toggle button {
+      padding: 8px 12px;
+      font-size: 12px;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+    }
+
+    .view-toggle button.active {
+      background: #243044;
+      color: var(--text);
+    }
+
+    .shows-scroll {
+      max-height: calc(100vh - 170px);
+      overflow: auto;
+      padding: 16px 24px 28px;
+    }
+
+    .grid {
+      padding: 0;
+    }
+
+    .card {
+      min-height: 0;
+    }
+
+    .card.calm h2 {
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+
+    .card-meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .dept-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0 4px;
+    }
+
+    .dept-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: #243044;
+      color: #c9d4e3;
+      border: 1px solid #334155;
+    }
+
+    .row-table-wrap {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      overflow: auto;
+    }
+
+    .row-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 980px;
+      font-size: 13px;
+    }
+
+    .row-table th,
+    .row-table td {
+      padding: 12px 14px;
+      text-align: left;
+      border-bottom: 1px solid #2a3444;
+      vertical-align: top;
+    }
+
+    .row-table th {
+      position: sticky;
+      top: 0;
+      background: #151a24;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      z-index: 1;
+    }
+
+    .row-table tr.show-row {
+      cursor: pointer;
+    }
+
+    .row-table tr.show-row:hover {
+      background: #202839;
+    }
+
+    .row-show-name {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .detail-section {
+      margin-bottom: 0;
+    }
+
+    .detail-section h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+
+    .detail-collapse {
+      margin-top: 0;
+      border: 1px solid #2a3444;
+      border-radius: 12px;
+      background: var(--panel2);
+      padding: 0 12px;
+    }
+
+    .detail-collapse > summary {
+      cursor: pointer;
+      padding: 10px 4px;
+      color: var(--cyan);
+      font-weight: bold;
+      list-style: none;
+    }
+
+    .detail-collapse > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .detail-collapse[open] > summary {
+      border-bottom: 1px solid #2a3444;
+      margin-bottom: 10px;
+    }
+
+    .presentation-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .presentation-stat .k {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .presentation-stat .v {
+      margin-top: 4px;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .detail-two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 0;
+      align-items: stretch;
+    }
+
+    @media (max-width: 980px) {
+      .detail-two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .debug-collapse summary {
+      color: var(--muted) !important;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>CUE Active Shows</h1>
-      <div class="subtitle">Phase 1: key dates + venue bubbles · Query FLEX from the card · click a show to go deeper · Trucking comes next</div>
+      <div class="subtitle">Show readiness across FLEX, trucking, and ops — scan rows or cards, open a show for detail</div>
     </div>
 
     <div class="header-actions">
+      <div class="view-toggle" role="group" aria-label="Active Shows view">
+        <button type="button" id="viewRowBtn" class="active" onclick="setActiveShowsView('row')">Row View</button>
+        <button type="button" id="viewCardBtn" onclick="setActiveShowsView('card')">Card View</button>
+      </div>
       <button onclick="loadShows()">Load Active Shows</button>
       <button onclick="syncShows()" class="secondary">Sync FLEX / Trucking</button>
     </div>
   </header>
 
   <div id="status">Page loaded. Ready.</div>
-  <div class="dashboard-note">Dashboard cards show only the most important readiness info. Click a card for full show detail.</div>
-  <div id="shows" class="grid"></div>
+  <div class="dashboard-note">CUE builds a shared show readiness object from FLEX, Drive, Trucking, Slack, and the Active Shows Index. This page renders a human-readable presentation of that object.</div>
+  <div id="shows" class="shows-scroll"></div>
 
   <div id="modalBackdrop" class="modal-backdrop" onclick="closeShowDetail()"></div>
   <section id="showModal" class="modal" aria-modal="true" role="dialog">
@@ -883,6 +1030,16 @@
 
     let activeShows = [];
     let selectedShowId = null;
+    let activeShowsView = "row";
+
+    function setActiveShowsView(view) {
+      activeShowsView = view === "card" ? "card" : "row";
+      const rowBtn = document.getElementById("viewRowBtn");
+      const cardBtn = document.getElementById("viewCardBtn");
+      if (rowBtn) rowBtn.classList.toggle("active", activeShowsView === "row");
+      if (cardBtn) cardBtn.classList.toggle("active", activeShowsView === "card");
+      renderShows(activeShows);
+    }
 
     function statusClass(status) {
       const text = String(status || "").toLowerCase();
@@ -912,23 +1069,41 @@
       return "cyan";
     }
 
+    function formatSlackSummaryLine(show) {
+      const slack = show.slackOperationalSignals;
+      if (!slack) return "Unavailable";
+      const top = Array.isArray(slack.signals) ? slack.signals[0] : null;
+      return [
+        slack.status || "unavailable",
+        slack.fixtureMode || slack.sourceLabel ? "fixture/test data" : null,
+        slack.stale ? "stale" : null,
+        `unresolved ${slack.unresolvedCount ?? 0}`,
+        `review ${slack.needsReviewCount ?? 0}`,
+        top ? top.summary || top.originalMessage : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    }
+
+    function slackNeedsAttention(show) {
+      const slack = show.slackOperationalSignals;
+      if (!slack) return false;
+      const status = String(slack.status || "").toLowerCase();
+      if (["blocked", "at_risk", "needs_review"].includes(status)) return true;
+      return (
+        Number(slack.unresolvedCount || 0) > 0 ||
+        Number(slack.needsReviewCount || 0) > 0
+      );
+    }
+
     function renderSlackCardSummary(show) {
       const slack = show.slackOperationalSignals;
       if (!slack) {
         return `<div class="label">Slack</div><div class="value muted">Unavailable</div>`;
       }
-      const top = Array.isArray(slack.signals) ? slack.signals[0] : null;
-      const line = [
-        `status=${slack.status || "unavailable"}`,
-        slack.fixtureMode || slack.sourceLabel ? "source=fixture/test data" : null,
-        slack.stale ? "cache=stale" : null,
-        `unresolved=${slack.unresolvedCount ?? 0}`,
-        `review=${slack.needsReviewCount ?? 0}`,
-        top ? top.summary || top.originalMessage : null,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      return `<div class="label">Slack</div><div class="value">${escapeHtml(line)}</div>`;
+      return `<div class="label">Slack</div><div class="value">${escapeHtml(
+        formatSlackSummaryLine(show)
+      )}</div>`;
     }
 
     function renderSlackDetailSection(show) {
@@ -1145,67 +1320,7 @@
       };
     }
 
-    function renderKeyInfoRows(show, mode = "card") {
-      const info = getShowKeyInfo(show);
 
-      if (mode === "card") {
-        return `
-          <div class="key-info">
-            <div class="key-info-row">
-              <div class="key-info-k">Start</div>
-              <div class="key-info-v">${escapeHtml(info.start)}</div>
-            </div>
-            <div class="key-info-row">
-              <div class="key-info-k">End</div>
-              <div class="key-info-v">${escapeHtml(info.end)}</div>
-            </div>
-            <div class="key-info-row">
-              <div class="key-info-k">Venue</div>
-              <div class="key-info-v">${escapeHtml(info.venue)}</div>
-            </div>
-          </div>
-        `;
-      }
-
-      const flexProgress = formatFlexHeaderLabel(show);
-
-      return `
-        <div class="modal-meta-grid">
-          <div class="modal-meta-item">
-            <div class="k">Start</div>
-            <div class="v">${escapeHtml(info.start)}</div>
-          </div>
-          <div class="modal-meta-item">
-            <div class="k">End</div>
-            <div class="v">${escapeHtml(info.end)}</div>
-          </div>
-          <div class="modal-meta-item wide">
-            <div class="k">Venue</div>
-            <div class="v" title="${escapeHtml(info.venue)}">${escapeHtml(info.venue)}</div>
-          </div>
-          <div class="modal-meta-item wide">
-            <div class="k">Client</div>
-            <div class="v" title="${escapeHtml(info.client)}">${escapeHtml(info.client)}</div>
-          </div>
-          <div class="modal-meta-item">
-            <div class="k">Load In</div>
-            <div class="v">${escapeHtml(info.loadIn)}</div>
-          </div>
-          <div class="modal-meta-item">
-            <div class="k">Load Out</div>
-            <div class="v">${escapeHtml(info.loadOut)}</div>
-          </div>
-          <div class="modal-meta-item">
-            <div class="k">PM</div>
-            <div class="v">${escapeHtml(info.pm)}</div>
-          </div>
-          <div class="modal-meta-item">
-            <div class="k">FLEX</div>
-            <div class="v">${escapeHtml(flexProgress)}</div>
-          </div>
-        </div>
-      `;
-    }
 
     function getFlexHints(show) {
       if (
@@ -1220,33 +1335,83 @@
     }
 
     function isEventFolderFlex(show) {
-      return (
-        show?.flex?.matchType === "event_folder" ||
-        show?.flex?.status === "Event Folder"
-      );
+      const matchType = String(show?.flex?.matchType || "").toLowerCase().trim();
+      const status = String(show?.flex?.status || "").toLowerCase().trim();
+      if (matchType === "event_folder" || status === "event folder") return true;
+      // Defensive: healthy Event Folder payload without matchType still counts.
+      // Require rollup/childQuotes — never promote ordinary quote documents alone.
+      if (
+        show?.flex?.eventFolder?.elementId &&
+        !show?.flex?.eventFolderError &&
+        (Number(show?.flex?.rollup?.quoteCount) > 0 ||
+          Number(show?.flex?.verifiedDocumentCount) > 0 ||
+          (Array.isArray(show?.flex?.childQuotes) && show.flex.childQuotes.length > 0))
+      ) {
+        return true;
+      }
+      return false;
     }
 
     function isEventFolderLinked(show) {
       return (
         isEventFolderFlex(show) ||
-        show?.flex?.matchType === "event_folder_error" ||
+        String(show?.flex?.matchType || "").toLowerCase() === "event_folder_error" ||
         Boolean(show?.eventFolderHintInjected) ||
         Boolean(show?.flex?.eventFolder?.elementId)
       );
     }
 
+    function getEventFolderChildQuotes(show) {
+      if (Array.isArray(show?.flex?.childQuotes) && show.flex.childQuotes.length) {
+        return show.flex.childQuotes;
+      }
+      if (Array.isArray(show?.flex?.documents) && show.flex.documents.length) {
+        const parentElementId =
+          show?.flex?.eventFolder?.elementId || show?.flex?.elementId || null;
+        const parentDoc = String(
+          show?.flex?.eventFolder?.documentNumber ||
+            show?.flex?.documentNumber ||
+            ""
+        ).trim();
+        return show.flex.documents.filter((doc) => {
+          const status = String(doc?.status || "").toLowerCase();
+          if (status === "event folder child") return true;
+          if (status === "event folder") return false;
+          if (
+            parentElementId &&
+            doc?.elementId &&
+            String(doc.elementId) === String(parentElementId)
+          ) {
+            return false;
+          }
+          const docNumber = String(doc?.documentNumber || "").trim();
+          if (parentDoc && docNumber && docNumber === parentDoc) return false;
+          // Fall back only for numbered child docs, not bare elementId-only rows.
+          return Boolean(docNumber);
+        });
+      }
+      return [];
+    }
+
+    function getEventFolderChildCount(show) {
+      const rollupCount = Number(show?.flex?.rollup?.quoteCount);
+      if (Number.isFinite(rollupCount) && rollupCount > 0) return rollupCount;
+
+      const verifiedCount = Number(show?.flex?.verifiedDocumentCount);
+      if (Number.isFinite(verifiedCount) && verifiedCount > 0) return verifiedCount;
+
+      // Always use filtered children — never raw documents.length (avoids parent double-count).
+      return getEventFolderChildQuotes(show).length;
+    }
+
     function formatFlexHeaderLabel(show) {
       if (isEventFolderFlex(show)) {
-        const count =
-          show.flex?.rollup?.quoteCount ??
-          getEventFolderChildQuotes(show).length ??
-          show.flex?.verifiedDocumentCount ??
-          0;
+        const count = getEventFolderChildCount(show);
         return count
           ? `FLEX Event Folder · ${count} quotes`
           : "FLEX Event Folder";
       }
-      if (show?.flex?.matchType === "event_folder_error") {
+      if (String(show?.flex?.matchType || "").toLowerCase() === "event_folder_error") {
         return "FLEX Event Folder (refresh needed)";
       }
       const hints = getFlexHints(show);
@@ -1255,21 +1420,7 @@
       return "FLEX source not linked yet";
     }
 
-    function formatFlexCardProgress(show, fallbackProgress) {
-      if (isEventFolderFlex(show)) {
-        const count =
-          show.flex?.rollup?.quoteCount ??
-          getEventFolderChildQuotes(show).length ??
-          show.flex?.verifiedDocumentCount ??
-          0;
-        return `Event Folder · ${count} quotes`;
-      }
-      if (show?.flex?.matchType === "event_folder_error") {
-        return "Event Folder · refresh needed";
-      }
-      if (!getFlexHints(show).length) return "FLEX source not linked yet";
-      return fallbackProgress;
-    }
+
 
     function showHasMmTruckingScope(show) {
       return getEventFolderChildQuotes(show).some(
@@ -1300,49 +1451,552 @@
       return false;
     }
 
-    function getEventFolderChildQuotes(show) {
-      if (Array.isArray(show?.flex?.childQuotes) && show.flex.childQuotes.length) {
-        return show.flex.childQuotes;
+    /**
+     * Show Readiness Presentation
+     * ---------------------------
+     * Translates the shared Active Shows / FLEX / Trucking / Slack readiness object
+     * into calm production language for Row View, Card View, and the detail modal.
+     *
+     * FLEX Intake Engine note (future):
+     * Event Folder rollups + child quote sold scope (department, productFamily,
+     * fulfillmentModel, vendorManaged, musicMattersTruckingRequired, tags) should
+     * later feed the FLEX Intake Engine to pre-populate staffing, trucking,
+     * warehouse, and vendor-managed delivery scope. This presentation keeps that
+     * intake-ready data available on `intake` without implementing pre-population yet.
+     */
+    function buildShowReadinessPresentation(show) {
+      const info = getShowKeyInfo(show);
+      const children = getEventFolderChildQuotes(show);
+      const departments = Array.from(
+        new Set(
+          [
+            ...(Array.isArray(show?.flex?.rollup?.departments)
+              ? show.flex.rollup.departments
+              : []),
+            ...(Array.isArray(show?.flex?.soldDepartments)
+              ? show.flex.soldDepartments
+              : []),
+            ...children
+              .map((child) => child.department || child.primaryDepartment)
+              .filter(Boolean),
+          ].map((item) => String(item).trim()).filter(Boolean)
+        )
+      );
+
+      const daysOut =
+        show?.activeShowsIndex?.daysOut ||
+        (String(show?.timing || "").match(/(\d+)\s*days?\s*out/i) || [])[1] ||
+        null;
+      const dateLabel = [
+        show?.timing || null,
+        info.start !== "TBD" || info.end !== "TBD"
+          ? `${info.start} → ${info.end}`
+          : null,
+        daysOut != null ? `${daysOut} days out` : null,
+      ]
+        .filter(Boolean)
+        .filter((item, index, arr) => arr.indexOf(item) === index)
+        .slice(0, 2)
+        .join(" · ") || "Date TBD";
+
+      const client =
+        show?.activeShowsIndex?.client ||
+        show?.client ||
+        (info.client !== "Client TBD" ? info.client : null) ||
+        "Client TBD";
+      const venue =
+        show?.venue ||
+        (info.venue !== "Venue TBD" ? info.venue : null) ||
+        "Venue TBD";
+      const clientVenueLabel = `${client} · ${venue}`;
+
+      const rawStatus = String(show?.readinessStatus || "").toLowerCase();
+      let readinessLabel = "Needs Review";
+      let readinessTone = "magenta";
+      if (/past|complete|closed|done/.test(rawStatus)) {
+        readinessLabel = "Past Show";
+        readinessTone = "cyan";
+      } else if (/green|ready|clear|aligned/.test(rawStatus)) {
+        readinessLabel = "Ready";
+        readinessTone = "green";
+      } else if (/red|blocked|day-of|conflict|urgent/.test(rawStatus)) {
+        readinessLabel = "Blocked";
+        readinessTone = "red";
+      } else if (/source|missing|unknown|check/.test(rawStatus)) {
+        readinessLabel = "Source Check";
+        readinessTone = "yellow";
+      } else if (/magenta|review|follow|confirm|open/.test(rawStatus)) {
+        readinessLabel = "Needs Review";
+        readinessTone = "magenta";
       }
-      if (Array.isArray(show?.flex?.documents)) {
-        return show.flex.documents.filter(
-          (doc) => doc?.status === "Event Folder Child" || doc?.documentNumber
-        );
+
+      const hints = getFlexHints(show);
+      let flexSourceLabel = "FLEX source not linked yet";
+      let flexSummary = "Link a FLEX quote or Event Folder to confirm sold scope.";
+      if (isEventFolderFlex(show)) {
+        const folder = show.flex?.eventFolder || show.flex?.primary || {};
+        const parent = [
+          folder.documentNumber || show.flex?.documentNumber || "",
+          folder.name || show.flex?.showName || show.name || "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const count = getEventFolderChildCount(show);
+        flexSourceLabel = "FLEX Source: Event Folder";
+        flexSummary = `${parent || "Event Folder"} verified · ${count} child workstreams`;
+      } else if (String(show?.flex?.matchType || "").toLowerCase() === "event_folder_error") {
+        flexSourceLabel = "FLEX Source: Event Folder";
+        flexSummary = "Could not refresh FLEX Event Folder";
+      } else if (hints.length === 1) {
+        flexSourceLabel = "FLEX Source: Single Quote";
+        flexSummary = `${hints[0]}${
+          flexWorkstreamLabels[hints[0]] ? ` · ${flexWorkstreamLabels[hints[0]]}` : ""
+        }`;
+      } else if (hints.length > 1) {
+        flexSourceLabel = "FLEX Source: Multiple Quotes";
+        flexSummary = `${hints.length} quote workstreams linked`;
+      } else if (String(show?.flex?.status || "").toLowerCase() === "verified") {
+        flexSourceLabel = "FLEX Source: Single Quote";
+        flexSummary = show.flex?.documentNumber || "Verified FLEX quote";
       }
-      return [];
+
+      const truckingSyncLine = renderTruckingHomeLine(show);
+      let truckingLabel = "Trucking not checked yet";
+      if (truckingSyncLine) {
+        truckingLabel = truckingSyncLine
+          .replace(/^Trucking:\s*/i, "")
+          .replace(/\bno runs found yet\b/i, "No Music Matters trucking action found");
+        if (/info\/lpo still open/i.test(truckingSyncLine)) {
+          truckingLabel = truckingSyncLine.includes("NEED DRIVER")
+            ? truckingSyncLine
+            : `Info/LPO Open · ${truckingSyncLine}`;
+        }
+        if (/drivers mapped|info\/lpo sent/i.test(truckingSyncLine) && !/open|need driver|maybe/i.test(truckingSyncLine)) {
+          truckingLabel = "Trucking ready";
+        }
+      } else if (isEventFolderLinked(show)) {
+        truckingLabel = "Trucking not evaluated / no Weekly Runs rows found";
+      } else if (show?.trucking) {
+        const rawTruck = String(show.trucking);
+        if (/no trucking|no runs|not found/i.test(rawTruck)) {
+          truckingLabel = "No Music Matters trucking action found";
+        } else if (/info|lpo/i.test(rawTruck) && /false|open/i.test(rawTruck)) {
+          truckingLabel = "Info/LPO Open";
+        } else {
+          truckingLabel = rawTruck.length > 90 ? `${rawTruck.slice(0, 87)}…` : rawTruck;
+        }
+      }
+
+      const hasVendorManaged = children.some((child) => child.vendorManaged === true);
+      const warehouseLabel = hasVendorManaged
+        ? "Vendor Managed"
+        : departments.some((dept) => /warehouse|audio|lighting|led|video/i.test(dept))
+          ? "Warehouse scope from FLEX departments"
+          : "Warehouse not evaluated yet";
+
+      const staffingLabel = "Staffing not evaluated yet";
+
+      const rawTopIssue = String(show?.topIssue || "").trim() || "No top issue mapped yet.";
+      let topIssue = shortenProductionText(rawTopIssue, 120);
+      if (/key docs|subfolders|last modified|active shows index/i.test(rawTopIssue)) {
+        topIssue = shortenProductionText(rawTopIssue.split(/[.;|]/)[0] || rawTopIssue, 100);
+      }
+      let nextAction = shortenProductionText(
+        String(show?.nextAction || "").trim() || "Review show readiness and confirm owners.",
+        100
+      );
+      if (isEventFolderFlex(show) && /event folder|child quote|workstream/i.test(nextAction)) {
+        nextAction = "Review child workstreams";
+      } else if (isEventFolderFlex(show) && (!show?.nextAction || /confirm child/i.test(show.nextAction))) {
+        nextAction = "Review child workstreams";
+      }
+
+      const badges = [];
+      badges.push({ label: readinessLabel, tone: readinessTone });
+      badges.push({
+        label: isEventFolderFlex(show)
+          ? "Event Folder"
+          : hints.length > 1
+            ? "Multi-quote"
+            : hints.length === 1
+              ? "Single Quote"
+              : "Source Check",
+        tone: isEventFolderLinked(show) || hints.length ? "cyan" : "yellow",
+      });
+      if (hasVendorManaged) {
+        badges.push({ label: "Vendor Managed", tone: "cyan" });
+      }
+      departments.slice(0, 5).forEach((dept) => {
+        badges.push({ label: dept, tone: "cyan" });
+      });
+
+      const openActions = [];
+      if (nextAction) {
+        openActions.push({
+          label: nextAction,
+          owner: "PM",
+          tone: readinessTone,
+        });
+      }
+      try {
+        const truckingActions = buildTruckingActionQueue(show).slice(0, 3);
+        for (const action of truckingActions) {
+          openActions.push({
+            label: action.title,
+            owner: action.owner || "Brian Kee / PM",
+            tone: action.severity || "yellow",
+            detail: action.action,
+          });
+        }
+      } catch {
+        // Trucking queue may be unavailable before sync.
+      }
+
+      const sourceNotes = [];
+      if (show?.flexSignal) sourceNotes.push(String(show.flexSignal));
+      if (show?.changeSignal) sourceNotes.push(String(show.changeSignal));
+      if (show?.slackOperationalSignals?.status) {
+        sourceNotes.push(`Slack: ${show.slackOperationalSignals.status}`);
+      }
+      if (show?.eventFolderHintInjected) {
+        sourceNotes.push("Event Folder linked via manual Active Shows hint.");
+      }
+
+      return {
+        title: show?.name || "Unnamed Show",
+        subtitle: show?.priority ? `${show.priority} priority` : "Priority TBD",
+        dateLabel,
+        clientVenueLabel,
+        readinessLabel,
+        readinessTone,
+        flexSourceLabel,
+        flexSummary,
+        departments,
+        topIssue,
+        nextAction,
+        truckingLabel,
+        warehouseLabel,
+        staffingLabel,
+        badges,
+        openActions,
+        sourceNotes,
+        // Intake-ready payload preserved for FLEX Intake Engine / sheet / Ask FLEX later.
+        intake: {
+          showId: show?.id || null,
+          eventFolder: show?.flex?.eventFolder || null,
+          childQuotes: children,
+          documentNumbers: hints,
+          departments,
+          vendorManagedChildCount: children.filter((child) => child.vendorManaged === true)
+            .length,
+          musicMattersTruckingRequiredCount: children.filter(
+            (child) => child.musicMattersTruckingRequired === true
+          ).length,
+          flexStatus: show?.flex?.status || null,
+          truckingSummary: show?.truckingSync?.summary || null,
+          slackStatus: show?.slackOperationalSignals?.status || null,
+        },
+      };
     }
 
-    function renderEventFolderCardSummary(show) {
-      if (!isEventFolderFlex(show)) return "";
 
-      const folder = show.flex.eventFolder || show.flex.primary || {};
-      const rollup = show.flex.rollup || {};
-      const childCount =
-        rollup.quoteCount ??
-        getEventFolderChildQuotes(show).length ??
-        0;
-      const departments =
-        (Array.isArray(rollup.departments) && rollup.departments.length
-          ? rollup.departments
-          : show.flex.soldDepartments) || [];
-      const parent = [
-        folder.documentNumber || show.flex.documentNumber || "",
-        folder.name || show.flex.showName || show.name || "",
+
+    function renderDepartmentBadges(departments, limit = 6) {
+      if (!departments?.length) return "";
+      return `
+        <div class="dept-badges">
+          ${departments
+            .slice(0, limit)
+            .map((dept) => `<span class="dept-badge">${escapeHtml(dept)}</span>`)
+            .join("")}
+        </div>
+      `;
+    }
+
+    function shortenProductionText(value, max = 110) {
+      const text = String(value || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!text) return "";
+      if (text.length <= max) return text;
+      return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+    }
+
+    function collectFlexRefreshErrors(show) {
+      const notes = [];
+      if (show?.flex?.eventFolderError) notes.push(String(show.flex.eventFolderError));
+      if (show?.flex?.message && String(show?.flex?.matchType || "").toLowerCase() === "event_folder_error") {
+        notes.push(String(show.flex.message));
+      }
+      if (show?.eventFolderDetailsError) notes.push(String(show.eventFolderDetailsError));
+      return notes;
+    }
+
+    function hasFlexRefreshProblem(show) {
+      // Healthy Event Folder is linked — never treat as refresh failure in normal UI.
+      if (isEventFolderFlex(show) && !show?.flex?.eventFolderError) {
+        return false;
+      }
+      if (show?.flex?.eventFolderError) return true;
+      if (String(show?.flex?.matchType || "").toLowerCase() === "event_folder_error") {
+        return true;
+      }
+      const notes = collectFlexRefreshErrors(show).join(" ");
+      if (!notes) return false;
+      return /429|rate.?limit|tree enrichment|could not refresh|enrichment failed|econn|timeout/i.test(
+        notes
+      );
+    }
+
+    /**
+     * Detail modal brief — calm production language, no repeated paragraphs.
+     * Keeps intake-ready data available via presentation.intake / debugNotes.
+     */
+    function buildShowDetailBrief(show, presentation) {
+      const prep = presentation || buildShowReadinessPresentation(show);
+      const info = getShowKeyInfo(show);
+      const hints = getFlexHints(show);
+      const pulledCount = getPulledFlexData(show).length;
+      const children = getEventFolderChildQuotes(show);
+      const childCount = getEventFolderChildCount(show);
+      const eventFolder = isEventFolderFlex(show);
+      const flexErrors = collectFlexRefreshErrors(show);
+      const flexRefreshProblem = hasFlexRefreshProblem(show);
+
+      const topIssueShort = shortenProductionText(prep.topIssue, 100);
+      const nextActionShort = shortenProductionText(prep.nextAction, 90);
+
+      let oneLineSummary = "";
+      if (flexRefreshProblem) {
+        oneLineSummary =
+          "Some FLEX details could not be refreshed. Try again later.";
+      } else if (eventFolder) {
+        oneLineSummary = shortenProductionText(
+          `FLEX Event Folder · ${childCount} child workstreams. Next: ${nextActionShort}`,
+          140
+        );
+      } else if (hints.length > 1) {
+        oneLineSummary = shortenProductionText(
+          `${pulledCount} of ${hints.length} quotes pulled. Next: ${nextActionShort}`,
+          140
+        );
+      } else if (hints.length === 1) {
+        oneLineSummary = shortenProductionText(
+          `${prep.flexSummary}. Next: ${nextActionShort}`,
+          140
+        );
+      } else {
+        oneLineSummary = shortenProductionText(
+          `${topIssueShort || "FLEX source not linked yet"}. Next: ${nextActionShort}`,
+          140
+        );
+      }
+
+      const topActions = [];
+      const seen = new Set();
+      const pushAction = (title, owner, action, tone) => {
+        const key = String(title || "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!key || seen.has(key) || topActions.length >= 4) return;
+        seen.add(key);
+        const shortTitle = shortenProductionText(title, 72);
+        const shortAction = shortenProductionText(action || "", 110);
+        const same =
+          shortAction &&
+          shortAction.toLowerCase() === shortTitle.toLowerCase();
+        topActions.push({
+          title: shortTitle,
+          owner: owner || "PM",
+          action: same ? "" : shortAction,
+          tone: tone || "cyan",
+        });
+      };
+
+      if (nextActionShort) {
+        pushAction(nextActionShort, "PM", "", prep.readinessTone);
+      }
+
+      try {
+        for (const item of buildTruckingActionQueue(show)) {
+          if (item.severity === "green") continue;
+          pushAction(item.title, item.owner, item.action, item.severity);
+        }
+      } catch {
+        // ignore
+      }
+
+      // Only show refresh action when Event Folder actually failed.
+      if (flexRefreshProblem && !eventFolder) {
+        pushAction(
+          "Refresh FLEX details",
+          "PM",
+          "Some FLEX details could not be refreshed. Try again later.",
+          "yellow"
+        );
+      } else if (eventFolder && show?.flex?.eventFolderError) {
+        pushAction(
+          "Refresh FLEX Event Folder",
+          "PM",
+          "Some FLEX details could not be refreshed. Try again later.",
+          "yellow"
+        );
+      }
+
+      const folder = show?.flex?.eventFolder || show?.flex?.primary || {};
+      const parentLabel = [
+        folder.documentNumber || show?.flex?.documentNumber || "",
+        folder.name || show?.flex?.showName || show?.name || "",
       ]
         .filter(Boolean)
         .join(" ");
 
-      return `
-        <div class="label">FLEX Match Type</div>
-        <div class="value">Event Folder</div>
-        <div class="label">Parent</div>
-        <div class="value">${escapeHtml(parent || "—")}</div>
-        <div class="label">Child Quotes</div>
-        <div class="value">${escapeHtml(String(childCount))}</div>
-        <div class="label">Departments</div>
-        <div class="value">${escapeHtml(departments.join(", ") || "—")}</div>
-      `;
+      let pulledLabel = "FLEX source not linked yet";
+      if (eventFolder) {
+        pulledLabel = `${childCount} child quotes`;
+      } else if (hints.length) {
+        pulledLabel = `${pulledCount} of ${hints.length} pulled`;
+      }
+
+      const summary = show?.truckingSync?.summary || null;
+      let truckingTopAction = null;
+      try {
+        truckingTopAction =
+          buildTruckingActionQueue(show).find((item) => item.severity !== "green") ||
+          null;
+      } catch {
+        truckingTopAction = null;
+      }
+
+      let truckingStatusLabel = prep.truckingLabel;
+      if (summary) {
+        const parts = [];
+        const runs = Number(summary.rowsFound || 0);
+        if (!runs) {
+          truckingStatusLabel = isEventFolderLinked(show)
+            ? "Trucking not evaluated / no Weekly Runs rows found"
+            : "No Music Matters trucking action found";
+        } else {
+          parts.push(`${runs} run${runs === 1 ? "" : "s"}`);
+          if (Number(summary.needDriverRows || 0) > 0) {
+            parts.push("Driver Needed");
+          }
+          if (
+            Number(summary.infoSentFalse || 0) > 0 ||
+            Number(summary.lpoSentFalse || 0) > 0
+          ) {
+            parts.push("Info/LPO Open");
+          }
+          if (Number(summary.maybeTruckRows || 0) > 0) {
+            parts.push("Maybe Truck");
+          }
+          if (parts.length === 1) parts.push("Trucking ready");
+          truckingStatusLabel = parts.join(" · ");
+        }
+      }
+
+      const sourceNotes = [];
+      const pushNote = (note) => {
+        const short = shortenProductionText(note, 100);
+        if (!short) return;
+        if (sourceNotes.includes(short) || sourceNotes.length >= 3) return;
+        if (/active shows index|key docs \/ subfolders/i.test(short)) return;
+        sourceNotes.push(short);
+      };
+      if (show?.changeSignal) pushNote(show.changeSignal);
+      if (eventFolder) pushNote(`Event Folder ${parentLabel || ""} · ${childCount} child quotes`.trim());
+      if (show?.slackOperationalSignals?.status) {
+        pushNote(`Slack: ${show.slackOperationalSignals.status}`);
+      }
+
+      const debugNotes = [];
+      if (show?.flexSignal) debugNotes.push(String(show.flexSignal));
+      if (show?.topIssue) debugNotes.push(`Raw top issue: ${show.topIssue}`);
+      if (show?.nextAction) debugNotes.push(`Raw next action: ${show.nextAction}`);
+      for (const err of flexErrors) debugNotes.push(`FLEX error: ${err}`);
+      const pulls = show?.flexPulls || {};
+      for (const [quote, pull] of Object.entries(pulls)) {
+        if (pull?.error) debugNotes.push(`Quote pull ${quote}: ${pull.error}`);
+      }
+      if (show?.truckingSync?.summary?.status) {
+        debugNotes.push(`Trucking sync status: ${show.truckingSync.summary.status}`);
+      }
+      if (show?.truckingSync?.error) {
+        debugNotes.push(`Trucking sync error: ${show.truckingSync.error}`);
+      }
+
+      return {
+        headlineStatus: prep.readinessLabel,
+        readinessTone: prep.readinessTone,
+        oneLineSummary,
+        topActions,
+        chips: {
+          flex: eventFolder
+            ? "FLEX Source: Event Folder"
+            : prep.flexSourceLabel.startsWith("FLEX Source:")
+              ? prep.flexSourceLabel
+              : `FLEX Source: ${prep.flexSourceLabel.replace(/^FLEX:\s*/i, "")}`,
+          trucking: shortenProductionText(truckingStatusLabel, 42),
+          warehouse: shortenProductionText(prep.warehouseLabel, 36),
+          staffing: shortenProductionText(prep.staffingLabel, 36),
+          source: flexRefreshProblem
+            ? "Source Check"
+            : eventFolder || hints.length
+              ? "Source Linked"
+              : "Source Check",
+        },
+        flexBrief: {
+          sourceLabel: eventFolder
+            ? "FLEX Source: Event Folder"
+            : prep.flexSourceLabel,
+          summary: eventFolder
+            ? `${parentLabel || "Event Folder"} verified · ${childCount} child workstreams`
+            : prep.flexSummary,
+          pulledLabel,
+          linkedCount: hints.length,
+          pulledCount,
+          departments: prep.departments.length
+            ? prep.departments
+            : Array.isArray(show?.flex?.rollup?.departments)
+              ? show.flex.rollup.departments
+              : Array.isArray(show?.flex?.soldDepartments)
+                ? show.flex.soldDepartments
+                : [],
+          parentLabel: eventFolder ? parentLabel || null : parentLabel || null,
+          childCount: eventFolder ? childCount : children.length,
+          refreshWarning: flexRefreshProblem
+            ? "Some FLEX details could not be refreshed. Try again later."
+            : null,
+        },
+        truckingBrief: {
+          label: truckingStatusLabel,
+          runs: summary ? Number(summary.rowsFound || 0) : null,
+          driverNeeded: summary ? Number(summary.needDriverRows || 0) : null,
+          infoOpen: summary ? Number(summary.infoSentFalse || 0) : null,
+          lpoOpen: summary ? Number(summary.lpoSentFalse || 0) : null,
+          maybeTruck: summary ? Number(summary.maybeTruckRows || 0) : null,
+          topAction: truckingTopAction
+            ? {
+                title: shortenProductionText(truckingTopAction.title, 72),
+                owner: truckingTopAction.owner,
+                action: shortenProductionText(truckingTopAction.action, 110),
+                tone: truckingTopAction.severity,
+              }
+            : null,
+          checked: Boolean(summary),
+        },
+        warehouseBrief: prep.warehouseLabel,
+        staffingBrief: prep.staffingLabel,
+        pmLabel: info.pm || "PM TBD",
+        dateLabel: prep.dateLabel,
+        clientVenueLabel: prep.clientVenueLabel,
+        sourceNotes,
+        debugNotes,
+      };
     }
+
+
 
     function renderEventFolderChildMeta(child) {
       const bits = [];
@@ -1361,9 +2015,10 @@
       return bits.join(" · ");
     }
 
-    function renderEventFolderDetailSection(show) {
+    function renderEventFolderDetailSection(show, options = {}) {
       if (!isEventFolderLinked(show)) return "";
 
+      const compact = Boolean(options.compact);
       const folder = show.flex?.eventFolder || show.flex?.primary || {};
       const rollup = show.flex?.rollup || {};
       const children = getEventFolderChildQuotes(show);
@@ -1379,11 +2034,17 @@
         .join(" ");
       const elementId = folder.elementId || show.flex?.elementId || "";
       const loading = Boolean(show.eventFolderDetailsLoading);
-      const refreshError =
-        show.flex?.eventFolderError ||
-        (show.flex?.matchType === "event_folder_error"
+      const refreshError = show.flex?.eventFolderError
+        ? String(show.flex.eventFolderError)
+        : String(show.flex?.matchType || "").toLowerCase() === "event_folder_error"
           ? show.flex?.message || "Could not refresh FLEX Event Folder."
-          : null);
+          : null;
+      const userFacingRefreshError =
+        refreshError && !isEventFolderFlex(show)
+          ? "Some FLEX details could not be refreshed. Try again later."
+          : refreshError && show.flex?.eventFolderError
+            ? "Some FLEX details could not be refreshed. Try again later."
+            : null;
 
       const rows = children
         .map((child) => {
@@ -1415,71 +2076,75 @@
         })
         .join("");
 
+      const tableHtml = children.length
+        ? `<table class="mini-table">
+            <thead>
+              <tr>
+                <th>Quote #</th>
+                <th>Workstream / Name</th>
+                <th>Department</th>
+                <th>Product Family / Fulfillment</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`
+        : `<div class="value muted">${
+            userFacingRefreshError
+              ? "Child quotes unavailable until FLEX refresh succeeds."
+              : "No child quotes attached yet."
+          }</div>`;
+
+      const pullButton = `
+        <div style="margin-top:10px">
+          <button
+            class="small ${loading ? "querying" : ""}"
+            ${loading || !elementId ? "disabled" : ""}
+            onclick="event.stopPropagation(); pullEventFolderChildDetails('${escapeHtml(
+              show.id
+            )}')"
+          >
+            ${loading ? "Pulling Child Details…" : "Pull Child Quote Details"}
+          </button>
+        </div>
+        ${
+          show.eventFolderDetailsError
+            ? `<div class="value" style="color:var(--red);margin-top:8px">${escapeHtml(
+                show.eventFolderDetailsError
+              )}</div>`
+            : ""
+        }
+      `;
+
+      if (compact) {
+        return `
+          <div style="margin-top:8px">
+            ${tableHtml}
+            ${pullButton}
+          </div>
+        `;
+      }
+
       return `
         <div class="detail-panel" style="margin-top:14px">
           <h3>FLEX Event Folder</h3>
           ${
             isEventFolderFlex(show)
               ? `<div class="value"><span class="pill cyan">FLEX Event Folder</span> verified</div>`
-              : `<div class="value" style="color:var(--yellow)">Could not refresh FLEX Event Folder.</div>`
-          }
-          ${
-            refreshError
-              ? `<div class="value muted" style="margin-top:6px">${escapeHtml(
-                  refreshError
+              : `<div class="value" style="color:var(--yellow)">${escapeHtml(
+                  userFacingRefreshError || "Could not refresh FLEX Event Folder."
                 )}</div>`
-              : ""
           }
           <div class="label">Parent</div>
           <div class="value">${escapeHtml(parentLabel || "—")}</div>
-          <div class="label">Parent Element ID</div>
-          <div class="value muted">${escapeHtml(elementId || "—")}</div>
           <div class="label">Child Quote Count</div>
           <div class="value">${escapeHtml(
-            String(rollup.quoteCount ?? children.length ?? 0)
+            String(getEventFolderChildCount(show))
           )}</div>
           <div class="label">Departments</div>
           <div class="value">${escapeHtml(departments.join(", ") || "—")}</div>
-
           <div class="label" style="margin-top:12px">Child Quotes</div>
-          ${
-            children.length
-              ? `<table class="mini-table">
-                  <thead>
-                    <tr>
-                      <th>Quote #</th>
-                      <th>Workstream / Name</th>
-                      <th>Department</th>
-                      <th>Product Family / Fulfillment</th>
-                    </tr>
-                  </thead>
-                  <tbody>${rows}</tbody>
-                </table>`
-              : `<div class="value muted">${
-                  refreshError
-                    ? "Child quotes unavailable until Event Folder refresh succeeds."
-                    : "No child quotes attached yet."
-                }</div>`
-          }
-
-          <div style="margin-top:12px">
-            <button
-              class="small ${loading ? "querying" : ""}"
-              ${loading || !elementId ? "disabled" : ""}
-              onclick="event.stopPropagation(); pullEventFolderChildDetails('${escapeHtml(
-                show.id
-              )}')"
-            >
-              ${loading ? "Pulling Child Details…" : "Pull Child Quote Details"}
-            </button>
-          </div>
-          ${
-            show.eventFolderDetailsError
-              ? `<div class="value" style="color:var(--red);margin-top:8px">${escapeHtml(
-                  show.eventFolderDetailsError
-                )}</div>`
-              : ""
-          }
+          ${tableHtml}
+          ${pullButton}
         </div>
       `;
     }
@@ -1688,11 +2353,7 @@
       };
     }
 
-    function getShowScore(show) {
-      if (show.readinessScore != null) return Number(show.readinessScore);
-      if (show.score != null) return Number(show.score);
-      return null;
-    }
+
 
     function isShowAskingFlex(show) {
       if (show.flexQuerying) return true;
@@ -1712,23 +2373,7 @@
       `;
     }
 
-    function renderReadinessScore(scoreResult) {
-      const score = Number(scoreResult?.score || 0);
-      const color = scoreColor(score);
 
-      return `
-        <div class="score-wrap">
-          <div class="score-row">
-            <span>Phase 1 Readiness Score</span>
-            <span class="score-number">${escapeHtml(score)}/100</span>
-          </div>
-          <div class="score-track">
-            <div class="score-fill ${color}" style="width:${escapeHtml(score)}%"></div>
-          </div>
-          <div class="score-note">FLEX-only score. Trucking confidence is added in Phase 2.</div>
-        </div>
-      `;
-    }
 
     function buildPhaseOneStatusRecommendation(show, data) {
       const showContext = data?.showContext || {};
@@ -1892,48 +2537,9 @@
       };
     }
 
-    function renderPhaseOneStatus(show, data) {
-      const recommendation = buildPhaseOneStatusRecommendation(show, data);
 
-      const reasonItems = recommendation.reasons
-        .map((reason) => `<li>${escapeHtml(reason)}</li>`)
-        .join("");
 
-      return `
-        <div class="label">Phase 1 Status Recommendation</div>
-        <div class="value">
-          <span class="pill ${statusClass(recommendation.status)}">${escapeHtml(recommendation.status)}</span>
-          <span class="pill cyan">Confidence: ${escapeHtml(recommendation.confidence)}</span>
-        </div>
-        ${renderReadinessScore(recommendation)}
-        <ul>${reasonItems}</ul>
-      `;
-    }
 
-    function renderCueReadinessFinding(show, data) {
-      const finding = buildCueReadinessFinding(show, data);
-
-      const findingItems = finding.findings
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("");
-
-      const actionItems = finding.actions.length
-        ? finding.actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
-        : `<li>No extra action generated yet.</li>`;
-
-      return `
-        <div class="finding-panel">
-          <h3>CUE Readiness Finding</h3>
-          ${renderPhaseOneStatus(show, data)}
-
-          <div class="label">What CUE sees</div>
-          <ul>${findingItems}</ul>
-
-          <div class="label">Recommended next moves</div>
-          <ul>${actionItems}</ul>
-        </div>
-      `;
-    }
 
     function renderWorkstreamChips(show) {
       const hints = getFlexHints(show);
@@ -1970,7 +2576,11 @@
 
       return hints
         .map((documentNumber) => {
-          return `<button class="small" onclick="event.stopPropagation(); pullFlexForShow('${show.id}', '${documentNumber}')">Pull FLEX ${documentNumber}</button>`;
+          return `<button class="small" data-pull-flex-show="${escapeHtml(
+            show.id
+          )}" data-pull-flex-doc="${escapeHtml(
+            documentNumber
+          )}">Pull FLEX ${escapeHtml(documentNumber)}</button>`;
         })
         .join(" ");
     }
@@ -2057,61 +2667,7 @@
       `;
     }
 
-    function renderShowLevelFinding(show) {
-      const pulls = getPulledFlexData(show);
-      if (!pulls.length) return "";
 
-      const rollup = buildShowRollup(show);
-      const hints = getFlexHints(show);
-      const completion = hints.length ? `${pulls.length} of ${hints.length}` : `${pulls.length}`;
-
-      const findings = [];
-      const actions = [];
-
-      findings.push(`FLEX pulled ${completion} known quote/workstream${hints.length === 1 ? "" : "s"}.`);
-
-      if (rollup.departments.length) {
-        findings.push(`Combined sold scope includes ${rollup.departments.join(", ")}.`);
-      }
-
-      if (rollup.transportationLines > 0) {
-        findings.push(`Transportation appears on ${rollup.transportationLines} pulled FLEX line${rollup.transportationLines === 1 ? "" : "s"}.`);
-        actions.push("Phase 2: compare transportation against Weekly Runs.");
-      }
-
-      if (rollup.laborLines > 0) {
-        findings.push(`Labor appears on ${rollup.laborLines} pulled FLEX line${rollup.laborLines === 1 ? "" : "s"}.`);
-        actions.push("Confirm staffing ownership/coverage after FLEX mapping is complete.");
-      }
-
-      if (show.id === "fifa-final-piedmont") {
-        actions.push("Keep workstreams separated by quote before treating FIFA as one readiness result.");
-      }
-
-      if (show.id === "summer-x-games-nola") {
-        actions.push("Keep audio, lighting, LED, and cameras separated before trucking comparison.");
-      }
-
-      if (show.id === "production-design-associates") {
-        findings.push("FLEX confirms date/source conflict: active FLEX work is earlier than folder/index date.");
-        actions.push("Resolve folder date/source conflict before clearing RED status.");
-      }
-
-      const findingItems = findings.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
-      const actionItems = actions.length
-        ? actions.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
-        : `<li>Ready for Phase 2 trucking comparison.</li>`;
-
-      return `
-        <div class="finding-panel">
-          <h3>Show-Level CUE Readiness</h3>
-          <div class="label">What CUE sees</div>
-          <ul>${findingItems}</ul>
-          <div class="label">Recommended next moves</div>
-          <ul>${actionItems}</ul>
-        </div>
-      `;
-    }
 
     function renderRawFlexDetails(show) {
       if (!show.flexPulls) return "";
@@ -2231,56 +2787,136 @@
 
       statusEl.textContent = `Loaded ${shows.length} active shows.`;
 
+      if (activeShowsView === "row") {
+        renderShowsRowView(shows);
+        return;
+      }
+
+      renderShowsCardView(shows);
+    }
+
+    function renderShowsRowView(shows) {
+      const wrap = document.createElement("div");
+      wrap.className = "row-table-wrap";
+
+      const rows = shows
+        .map((show) => {
+          const presentation = buildShowReadinessPresentation(show);
+          const querying = isShowAskingFlex(show);
+          return `
+            <tr class="show-row" data-open-show="${escapeHtml(show.id)}">
+              <td>
+                <div class="row-show-name">${escapeHtml(presentation.title)}</div>
+                <div class="muted">${escapeHtml(presentation.subtitle)}</div>
+              </td>
+              <td>${escapeHtml(presentation.dateLabel)}</td>
+              <td>${escapeHtml(presentation.clientVenueLabel)}</td>
+              <td>
+                <div>${escapeHtml(presentation.flexSourceLabel.replace(/^FLEX Source:\s*/i, ""))}</div>
+                <div class="muted">${escapeHtml(presentation.flexSummary)}</div>
+              </td>
+              <td><span class="pill ${escapeHtml(presentation.readinessTone)}">${escapeHtml(
+                presentation.readinessLabel
+              )}</span></td>
+              <td>${escapeHtml(presentation.truckingLabel)}</td>
+              <td>
+                <div class="${slackNeedsAttention(show) ? "" : "muted"}">${escapeHtml(
+                  shortenProductionText(formatSlackSummaryLine(show), 96)
+                )}</div>
+              </td>
+              <td>
+                <div>${escapeHtml(presentation.nextAction)}</div>
+                <div class="row-actions" style="margin-top:8px">
+                  <button class="small ${querying ? "querying" : ""}" data-query-flex="${escapeHtml(
+                    show.id
+                  )}">${querying ? "Asking FLEX…" : "Query FLEX"}</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        })
+        .join("");
+
+      wrap.innerHTML = `
+        <table class="row-table">
+          <thead>
+            <tr>
+              <th>Show</th>
+              <th>Date / Days Out</th>
+              <th>Client / Venue</th>
+              <th>FLEX Source</th>
+              <th>Readiness</th>
+              <th>Trucking</th>
+              <th>Slack</th>
+              <th>Top Action</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      showsEl.appendChild(wrap);
+    }
+
+    function renderShowsCardView(shows) {
+      const grid = document.createElement("div");
+      grid.className = "grid";
+
       shows.forEach((show) => {
         const div = document.createElement("div");
-        div.className = `card ${isShowAskingFlex(show) ? "flex-busy" : ""}`;
+        div.className = `card calm ${isShowAskingFlex(show) ? "flex-busy" : ""}`;
         div.dataset.openShow = show.id;
 
-        const score = getShowScore(show);
-        const hints = getFlexHints(show);
-        const pulledCount = getPulledFlexData(show).length;
-        const flexProgress = hints.length
-          ? `${pulledCount}/${hints.length} FLEX`
-          : "FLEX source not linked yet";
-        const truckingLine = renderTruckingHomeLine(show);
-        const scoreHtml = score != null ? renderReadinessScore({ score }) : "";
+        const presentation = buildShowReadinessPresentation(show);
 
         div.innerHTML = `
-          <h2>${escapeHtml(show.name || "Unnamed Show")}</h2>
-          <div>${escapeHtml(show.timing || "Timing TBD")} · ${escapeHtml(show.priority || "Priority TBD")}</div>
+          <h2>${escapeHtml(presentation.title)}</h2>
+          <div class="card-meta">${escapeHtml(presentation.dateLabel)}</div>
+          <div class="card-meta">${escapeHtml(presentation.clientVenueLabel)}</div>
 
           <div>
-            <span class="pill ${statusClass(show.readinessStatus)}">${escapeHtml(show.readinessStatus || "UNKNOWN")}</span>
-            <span class="pill cyan">${escapeHtml(show.changeSignal || "No recent change")}</span>
+            <span class="pill ${escapeHtml(presentation.readinessTone)}">${escapeHtml(
+              presentation.readinessLabel
+            )}</span>
+            <span class="pill cyan">${escapeHtml(
+              presentation.flexSourceLabel.replace(/^FLEX Source:\s*/i, "FLEX: ")
+            )}</span>
           </div>
 
-          ${scoreHtml}
-          ${renderKeyInfoRows(show, "card")}
+          ${renderDepartmentBadges(presentation.departments, 5)}
           ${renderFlexAskingIndicator(show)}
 
           <div class="label">Top Issue</div>
-          <div class="value">${escapeHtml(show.topIssue || "")}</div>
+          <div class="value card-clamp">${escapeHtml(
+            shortenProductionText(presentation.topIssue, 110)
+          )}</div>
 
           <div class="label">Next Action</div>
-          <div class="value">${escapeHtml(show.nextAction || "")}</div>
+          <div class="value card-clamp">${escapeHtml(
+            shortenProductionText(presentation.nextAction, 90)
+          )}</div>
 
-          ${truckingLine ? `<div class="label">Trucking</div><div class="value">${escapeHtml(truckingLine)}</div>` : ""}
-          ${renderEventFolderCardSummary(show)}
+          <div class="label">Trucking</div>
+          <div class="value card-clamp">${escapeHtml(
+            shortenProductionText(presentation.truckingLabel, 90)
+          )}</div>
+
           ${renderSlackCardSummary(show)}
 
           <div class="card-footer">
-            <span class="progress">${escapeHtml(
-              formatFlexCardProgress(show, flexProgress)
-            )}</span>
+            <span class="progress">${escapeHtml(presentation.flexSummary)}</span>
             <span>
-              <button class="small ${isShowAskingFlex(show) ? "querying" : ""}" data-query-flex="${escapeHtml(show.id)}">${isShowAskingFlex(show) ? "Asking FLEX…" : "Query FLEX"}</button>
+              <button class="small ${isShowAskingFlex(show) ? "querying" : ""}" data-query-flex="${escapeHtml(
+                show.id
+              )}">${isShowAskingFlex(show) ? "Asking FLEX…" : "Query FLEX"}</button>
               <span class="open-link">Open show →</span>
             </span>
           </div>
         `;
 
-        showsEl.appendChild(div);
+        grid.appendChild(div);
       });
+
+      showsEl.appendChild(grid);
     }
 
     function getPulledQuoteNumbers(show) {
@@ -2811,177 +3447,11 @@
       return actions;
     }
 
-    function countUrgentTruckingActions(show) {
-      const actions = buildTruckingActionQueue(show);
-      return actions.filter((action) => action.severity === "red").length;
-    }
 
-    function renderTruckingActionQueue(show) {
-      if (!show.truckingSync?.summary) return "";
 
-      const actions = buildTruckingActionQueue(show);
-      const urgentCount = actions.filter((action) => action.severity === "red").length;
-      const needsAttentionCount = actions.filter((action) => action.severity === "magenta").length;
 
-      const items = actions.map((item) => {
-        return `
-          <div class="action-item">
-            <div class="action-top">
-              <div class="action-title">${escapeHtml(item.title)}</div>
-              <span class="pill severity-${escapeHtml(item.severity)}">${escapeHtml(item.severity.toUpperCase())}</span>
-            </div>
-            <div class="action-meta"><strong>Owner:</strong> ${escapeHtml(item.owner)}</div>
-            <div class="action-meta"><strong>Action:</strong> ${escapeHtml(item.action)}</div>
-            <div class="action-meta"><strong>Why it matters:</strong> ${escapeHtml(item.why)}</div>
-          </div>
-        `;
-      }).join("");
 
-      return `
-        <div class="action-queue-panel">
-          <h3>Trucking Action Queue</h3>
-          <div>
-            <span class="pill ${urgentCount ? "red" : needsAttentionCount ? "magenta" : "green"}">
-              ${escapeHtml(urgentCount)} urgent · ${escapeHtml(needsAttentionCount)} needs attention
-            </span>
-          </div>
-          <div class="action-list">${items}</div>
-        </div>
-      `;
-    }
 
-    function renderTruckingPanel(show) {
-      if (show.truckingQuerying) {
-        return `
-          <div class="trucking-panel">
-            <h3>Trucking Sync</h3>
-            <div class="flex-asking">
-              <span class="flex-spinner"></span>
-              <span>Reading Weekly Runs…</span>
-            </div>
-          </div>
-        `;
-      }
-
-      const data = show.truckingSync;
-      if (!data) return "";
-
-      if (data.error) {
-        return `
-          <div class="trucking-panel">
-            <h3>Trucking Sync</h3>
-            <div class="value error">${escapeHtml(data.error)}</div>
-          </div>
-        `;
-      }
-
-      const summary = data.summary || {};
-      const rows = Array.isArray(data.safeRows) ? data.safeRows : [];
-
-      const findingItems = (summary.findings || [])
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("");
-
-      const actionItems = (summary.actions || [])
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("");
-
-      const rowHtml = rows.slice(0, 12).map((row) => {
-        return `
-          <tr>
-            <td>${escapeHtml(row.quote)}</td>
-            <td>${escapeHtml(row.date)}</td>
-            <td>${escapeHtml(row.when)}</td>
-            <td>${escapeHtml(row.runName)}</td>
-            <td>${escapeHtml(displayDriver(row))}</td>
-            <td>${escapeHtml(row.truck || "TBD")}</td>
-            <td>${escapeHtml(row.trailer || "TBD")}</td>
-            <td>${escapeHtml(yesNo(row.infoSent))}</td>
-            <td>${escapeHtml(yesNo(row.lpoSent))}</td>
-            <td>${escapeHtml(row.notes || "")}</td>
-          </tr>
-        `;
-      }).join("");
-
-      return `
-        <div class="trucking-panel">
-          <h3>Phase 2 Trucking Summary</h3>
-          <div>
-            <span class="pill ${statusClass(summary.status)}">${escapeHtml(summary.status || "UNKNOWN")}</span>
-            <span class="pill cyan">${escapeHtml(data.source || "trucking")}</span>
-            ${data.usedFallback ? '<span class="pill yellow">Fallback data</span>' : ''}
-          </div>
-          ${data.usedFallback ? `<div class="value muted">Live sheet read failed locally: ${escapeHtml(data.fallbackReason || "unknown reason")}</div>` : ''}
-          ${renderTruckingConfidenceScore(data, show)}
-
-          <div class="value muted">Plain-English signal: do we have runs, drivers/trucks, paperwork, and unresolved maybe-truck items?</div>
-
-          <div class="trucking-grid">
-            <div class="trucking-stat">
-              <div class="k">Runs Found</div>
-              <div class="v">${escapeHtml(summary.rowsFound || 0)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">Quotes Matched</div>
-              <div class="v">${escapeHtml((summary.quoteNumbersMatched || []).length)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">Info Not Sent</div>
-              <div class="v">${escapeHtml(summary.infoSentFalse || 0)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">LPO Not Sent</div>
-              <div class="v">${escapeHtml(summary.lpoSentFalse || 0)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">Driver Confirmed</div>
-              <div class="v">${escapeHtml(summary.driverConfirmedTrue || 0)} / ${escapeHtml(summary.driverConfirmedFalse || 0)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">Maybe Truck</div>
-              <div class="v">${escapeHtml(summary.maybeTruckRows || 0)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">NEED DRIVER</div>
-              <div class="v">${escapeHtml(summary.needDriverRows || 0)}</div>
-            </div>
-            <div class="trucking-stat">
-              <div class="k">Dates</div>
-              <div class="v">${escapeHtml((summary.dates || []).join(", ") || "TBD")}</div>
-            </div>
-          </div>
-
-          <div class="label">CUE Trucking Finding</div>
-          <ul>${findingItems || "<li>No trucking findings yet.</li>"}</ul>
-
-          <div class="label">Recommended next moves</div>
-          <ul>${actionItems || "<li>No trucking action needed yet.</li>"}</ul>
-
-          <details class="raw-flex-details">
-            <summary>Show trucking rows</summary>
-            <div class="raw-flex-inner">
-              <table class="trucking-row-table">
-                <thead>
-                  <tr>
-                    <th>Quote</th>
-                    <th>Date</th>
-                    <th>When</th>
-                    <th>Run</th>
-                    <th>Driver</th>
-                    <th>Truck</th>
-                    <th>Trailer</th>
-                    <th>Info</th>
-                    <th>LPO</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>${rowHtml}</tbody>
-              </table>
-            </div>
-          </details>
-        </div>
-      `;
-    }
 
     async function queryTruckingForShow(showId) {
       const index = activeShows.findIndex((show) => show.id === showId);
@@ -3040,29 +3510,258 @@
       }
     }
 
+    function renderTruckingRowsOnly(show) {
+      const data = show.truckingSync;
+      if (!data?.safeRows?.length) {
+        return `<div class="value muted">No trucking rows loaded yet. Use Query Trucking.</div>`;
+      }
+      const rowHtml = data.safeRows.slice(0, 12).map((row) => {
+        return `
+          <tr>
+            <td>${escapeHtml(row.quote)}</td>
+            <td>${escapeHtml(row.date)}</td>
+            <td>${escapeHtml(row.when)}</td>
+            <td>${escapeHtml(row.runName)}</td>
+            <td>${escapeHtml(displayDriver(row))}</td>
+            <td>${escapeHtml(row.truck || "TBD")}</td>
+            <td>${escapeHtml(yesNo(row.infoSent))}</td>
+            <td>${escapeHtml(yesNo(row.lpoSent))}</td>
+          </tr>
+        `;
+      }).join("");
+      return `
+        <table class="trucking-row-table">
+          <thead>
+            <tr>
+              <th>Quote</th>
+              <th>Date</th>
+              <th>When</th>
+              <th>Run</th>
+              <th>Driver</th>
+              <th>Truck</th>
+              <th>Info</th>
+              <th>LPO</th>
+            </tr>
+          </thead>
+          <tbody>${rowHtml}</tbody>
+        </table>
+      `;
+    }
+
     function renderShowDetail(show) {
-      const hints = getFlexHints(show);
-      const hintText = isEventFolderFlex(show)
-        ? `Event Folder child quotes: ${hints.join("; ") || "linked"}`
-        : hints.length
-          ? hints.join("; ")
-          : isEventFolderLinked(show)
-            ? "FLEX Event Folder linked"
-            : "FLEX source not linked yet";
-      const score = getShowScore(show);
-      const scoreHtml = score != null ? renderReadinessScore({ score }) : "";
-      const firstPulled = getFirstPulledFindingData(show);
+      const presentation = buildShowReadinessPresentation(show);
+      const brief = buildShowDetailBrief(show, presentation);
+      const eventFolder = isEventFolderFlex(show);
+
+      const openActionItems = (brief.topActions || [])
+        .slice(0, 4)
+        .map((item) => {
+          const tone = String(item.tone || "cyan").toLowerCase();
+          const statusLabel =
+            tone === "red"
+              ? "Blocked"
+              : tone === "magenta"
+                ? "Needs Review"
+                : tone === "yellow"
+                  ? "Source Check"
+                  : tone === "green"
+                    ? "Ready"
+                    : "Follow-up";
+          const actionSentence =
+            item.action &&
+            item.action.toLowerCase() !== String(item.title || "").toLowerCase()
+              ? item.action
+              : "";
+          const meta = [item.owner || "PM", actionSentence]
+            .filter(Boolean)
+            .join(" · ");
+          return `
+            <div class="action-row">
+              <span class="pill ${escapeHtml(tone)}">${escapeHtml(statusLabel)}</span>
+              <div>
+                <div class="action-row-title">${escapeHtml(item.title)}</div>
+                ${
+                  meta
+                    ? `<div class="action-row-meta">${escapeHtml(meta)}</div>`
+                    : ""
+                }
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+
+      const childCount = Number(brief.flexBrief?.childCount || 0);
+      const hasChildWorkstreams =
+        (eventFolder && childCount > 0) ||
+        (!eventFolder && getFlexHints(show).length > 0);
+      const childWorkstreamsHtml = hasChildWorkstreams
+        ? `<details class="detail-collapse" ${
+            eventFolder && childCount > 0 ? "open" : ""
+          }>
+          <summary>Child Workstreams${
+            eventFolder
+              ? ` · ${escapeHtml(String(childCount))}`
+              : getFlexHints(show).length
+                ? ` · ${escapeHtml(String(getFlexHints(show).length))}`
+                : ""
+          }</summary>
+          ${
+            eventFolder
+              ? renderEventFolderDetailSection(show, { compact: true })
+              : `${renderWorkstreamChips(show)}
+                 <div class="value muted" style="margin-top:8px">${escapeHtml(
+                   getFlexHints(show).join("; ") || "FLEX source not linked yet"
+                 )}</div>`
+          }
+        </details>`
+        : "";
+
+      const opsChips = `
+        <div class="dept-badges" style="margin-top:10px">
+          <span class="pill cyan">${escapeHtml(brief.chips.flex)}</span>
+          <span class="pill cyan">${escapeHtml(brief.chips.trucking)}</span>
+          <span class="pill cyan">${escapeHtml(brief.chips.warehouse)}</span>
+          <span class="pill cyan">${escapeHtml(brief.chips.staffing)}</span>
+          <span class="pill ${
+            brief.chips.source === "Source Check" ? "yellow" : "cyan"
+          }">${escapeHtml(brief.chips.source)}</span>
+        </div>
+      `;
+
+      const flexScopeBody = `
+        <div class="presentation-grid">
+          <div class="presentation-stat">
+            <div class="k">Source</div>
+            <div class="v">${escapeHtml(brief.flexBrief.sourceLabel)}</div>
+          </div>
+          <div class="presentation-stat">
+            <div class="k">Linked / Pulled</div>
+            <div class="v">${escapeHtml(brief.flexBrief.pulledLabel)}</div>
+          </div>
+          ${
+            eventFolder || brief.flexBrief.parentLabel
+              ? `<div class="presentation-stat">
+                   <div class="k">Parent</div>
+                   <div class="v">${escapeHtml(
+                     brief.flexBrief.parentLabel || "—"
+                   )}</div>
+                 </div>
+                 <div class="presentation-stat">
+                   <div class="k">Child Quotes</div>
+                   <div class="v">${escapeHtml(
+                     String(brief.flexBrief.childCount || 0)
+                   )}</div>
+                 </div>`
+              : ""
+          }
+        </div>
+        ${
+          brief.flexBrief.refreshWarning
+            ? `<div class="value" style="color:var(--yellow);margin-top:8px">${escapeHtml(
+                brief.flexBrief.refreshWarning
+              )}</div>`
+            : ""
+        }
+        ${renderDepartmentBadges(brief.flexBrief.departments, 8)}
+        ${eventFolder ? "" : renderWorkstreamChips(show)}
+        <div style="margin-top:10px">
+          ${flexButtonsForShow(show)}
+          <button class="small trucking-action" data-query-trucking="${escapeHtml(
+            show.id
+          )}">Query Trucking</button>
+        </div>
+        ${
+          getPulledFlexData(show).length
+            ? `<details class="detail-collapse" style="margin-top:10px">
+                 <summary>Show FLEX rollup details</summary>
+                 ${renderShowRollup(show)}
+               </details>`
+            : ""
+        }
+      `;
+
+      const truckingBody = `
+        <div class="presentation-grid">
+          <div class="presentation-stat">
+            <div class="k">Status</div>
+            <div class="v">${escapeHtml(brief.truckingBrief.label)}</div>
+          </div>
+          <div class="presentation-stat">
+            <div class="k">Runs</div>
+            <div class="v">${escapeHtml(
+              brief.truckingBrief.runs == null ? "—" : brief.truckingBrief.runs
+            )}</div>
+          </div>
+          <div class="presentation-stat">
+            <div class="k">Driver Needed</div>
+            <div class="v">${escapeHtml(
+              brief.truckingBrief.driverNeeded == null
+                ? "—"
+                : brief.truckingBrief.driverNeeded
+            )}</div>
+          </div>
+          <div class="presentation-stat">
+            <div class="k">Info / LPO Open</div>
+            <div class="v">${escapeHtml(
+              brief.truckingBrief.checked
+                ? `${brief.truckingBrief.infoOpen || 0} / ${
+                    brief.truckingBrief.lpoOpen || 0
+                  }`
+                : "—"
+            )}</div>
+          </div>
+          <div class="presentation-stat">
+            <div class="k">Maybe Truck</div>
+            <div class="v">${escapeHtml(
+              brief.truckingBrief.maybeTruck == null
+                ? "—"
+                : brief.truckingBrief.maybeTruck
+            )}</div>
+          </div>
+          <div class="presentation-stat">
+            <div class="k">Warehouse</div>
+            <div class="v">${escapeHtml(brief.warehouseBrief)}</div>
+          </div>
+        </div>
+        ${
+          brief.truckingBrief.topAction
+            ? `<div class="label" style="margin-top:10px">Top Trucking Action</div>
+               <div class="value">${escapeHtml(
+                 brief.truckingBrief.topAction.title
+               )} · ${escapeHtml(brief.truckingBrief.topAction.owner || "")}</div>
+               ${
+                 brief.truckingBrief.topAction.action &&
+                 brief.truckingBrief.topAction.action.toLowerCase() !==
+                   String(brief.truckingBrief.topAction.title || "").toLowerCase()
+                   ? `<div class="value muted">${escapeHtml(
+                       brief.truckingBrief.topAction.action
+                     )}</div>`
+                   : ""
+               }`
+            : `<div class="value muted" style="margin-top:10px">${
+                brief.truckingBrief.checked
+                  ? "No urgent trucking action."
+                  : "Use Query Trucking to check Weekly Runs."
+              }</div>`
+        }
+        <details class="detail-collapse" style="margin-top:10px">
+          <summary>Show trucking rows</summary>
+          ${renderTruckingRowsOnly(show)}
+        </details>
+      `;
 
       modalHeaderEl.innerHTML = `
         <div class="modal-title">
-          <h2>${escapeHtml(show.name || "Unnamed Show")}</h2>
-          <div>${escapeHtml(show.timing || "Timing TBD")} · ${escapeHtml(show.priority || "Priority TBD")}</div>
+          <h2>${escapeHtml(presentation.title)}</h2>
+          <div>${escapeHtml(brief.dateLabel)}</div>
           <div>
-            <span class="pill ${statusClass(show.readinessStatus)}">${escapeHtml(show.readinessStatus || "UNKNOWN")}</span>
-            <span class="pill cyan">${escapeHtml(show.changeSignal || "No recent change")}</span>
-            ${isShowAskingFlex(show) ? '<span class="pill cyan">Asking FLEX…</span>' : ''}
+            <span class="pill ${escapeHtml(brief.readinessTone)}">${escapeHtml(
+              brief.headlineStatus
+            )}</span>
+            <span class="pill cyan">${escapeHtml(brief.flexBrief.sourceLabel)}</span>
+            ${isShowAskingFlex(show) ? '<span class="pill cyan">Asking FLEX…</span>' : ""}
           </div>
-          ${renderKeyInfoRows(show, "modal")}
         </div>
         <div class="modal-actions">
           <button class="secondary" onclick="closeShowDetail()">Close</button>
@@ -3070,50 +3769,87 @@
       `;
 
       modalBodyEl.innerHTML = `
-        <div class="detail-panel">
-          <h3>Show Snapshot</h3>
-
-          ${scoreHtml}
-          ${renderKeyInfoRows(show, "card")}
+        <div class="detail-panel detail-section ops-brief">
+          <h3>Operations Brief</h3>
           ${renderFlexAskingIndicator(show)}
+          <div class="value" style="margin-top:2px">${escapeHtml(
+            brief.oneLineSummary
+          )}</div>
+          ${opsChips}
+        </div>
 
-          <div class="label">Top Issue</div>
-          <div class="value">${escapeHtml(show.topIssue || "")}</div>
-
-          <div class="label">Next Action</div>
-          <div class="value">${escapeHtml(show.nextAction || "")}</div>
-
-          <div class="label">FLEX Signal</div>
-          <div class="value">${escapeHtml(show.flexSignal || "")}</div>
-
-          ${renderEventFolderDetailSection(show)}
-
-          <div class="label">Trucking Signal</div>
-          <div class="value">${escapeHtml(show.trucking || "")}</div>
-
-          ${renderSlackDetailSection(show)}
-
-          <div class="label">FLEX Hints / Workstreams</div>
-          <div class="value muted">${escapeHtml(hintText)}</div>
-          ${renderWorkstreamChips(show)}
-
-          <div class="label">Actions</div>
-          <div>
-            ${flexButtonsForShow(show)}
-            <button class="small trucking-action" onclick="event.stopPropagation(); queryTruckingForShow('${show.id}')">Query Trucking</button>
+        <div class="detail-panel detail-section">
+          <h3>Open Actions</h3>
+          <div class="action-list">
+            ${
+              openActionItems ||
+              `<div class="value muted">No open actions mapped yet.</div>`
+            }
           </div>
         </div>
 
-        <div>
-          ${renderShowRollup(show)}
-          ${renderShowLevelFinding(show)}
-          ${renderTruckingPanel(show)}
-          ${renderTruckingActionQueue(show)}
-          ${renderFlexVsTruckingComparison(show)}
-          ${renderDateComparison(show)}
-          ${firstPulled ? renderCueReadinessFinding(show, firstPulled) : ""}
-          ${renderRawFlexDetails(show)}
+        <div class="detail-two-col">
+          <div class="detail-panel detail-section balanced" style="margin-bottom:0">
+            <h3>FLEX Scope</h3>
+            ${flexScopeBody}
+          </div>
+          <div class="detail-panel detail-section balanced" style="margin-bottom:0">
+            <h3>Trucking / Warehouse</h3>
+            ${truckingBody}
+          </div>
         </div>
+
+        ${childWorkstreamsHtml}
+
+        <details class="detail-collapse">
+          <summary>Drive / Docs</summary>
+          <div class="label">Show Folder</div>
+          <div class="value">${escapeHtml(
+            show?.activeShowsIndex?.showFolder || "Not mapped yet"
+          )}</div>
+          <div class="label">Key Docs</div>
+          <div class="value">${escapeHtml(
+            shortenProductionText(
+              show?.activeShowsIndex?.keyDocs || "No Drive key-doc summary mapped yet",
+              160
+            )
+          )}</div>
+        </details>
+
+        <details class="detail-collapse" ${
+          slackNeedsAttention(show) ? "open" : ""
+        }>
+          <summary>Slack Signals</summary>
+          ${renderSlackDetailSection(show)}
+        </details>
+
+        <details class="detail-collapse debug-collapse">
+          <summary>Source Details / Debug</summary>
+          <div class="label">Short Source Notes</div>
+          <ul>
+            ${(brief.sourceNotes || [])
+              .map((note) => `<li>${escapeHtml(note)}</li>`)
+              .join("") || "<li>No source notes.</li>"}
+          </ul>
+          <div class="label">Debug Notes</div>
+          <ul>
+            ${(brief.debugNotes || [])
+              .map((note) => `<li>${escapeHtml(shortenProductionText(note, 180))}</li>`)
+              .join("") || "<li>No debug notes.</li>"}
+          </ul>
+          <div class="label">Schedule / comparison (debug)</div>
+          ${renderDateComparison(show) || '<div class="value muted">No schedule comparison.</div>'}
+          ${renderFlexVsTruckingComparison(show) || ""}
+          <div class="label" style="margin-top:10px">Intake-ready fields (FLEX Intake Engine later)</div>
+          <div class="value muted">
+            Event Folder and child quote sold scope stay available for future staffing,
+            trucking, warehouse, and vendor-managed pre-population.
+          </div>
+          <pre class="muted" style="white-space:pre-wrap;font-size:11px;overflow:auto;max-height:220px">${escapeHtml(
+            JSON.stringify(presentation.intake, null, 2)
+          )}</pre>
+          ${renderRawFlexDetails(show)}
+        </details>
       `;
     }
 
@@ -3157,6 +3893,26 @@
       if (card) {
         const showId = card.getAttribute("data-open-show");
         openShowDetail(showId);
+      }
+    });
+
+    showModalEl.addEventListener("click", (event) => {
+      const truckingButton = event.target.closest("[data-query-trucking]");
+      if (truckingButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        queryTruckingForShow(truckingButton.getAttribute("data-query-trucking"));
+        return;
+      }
+
+      const pullButton = event.target.closest("[data-pull-flex-show]");
+      if (pullButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        pullFlexForShow(
+          pullButton.getAttribute("data-pull-flex-show"),
+          pullButton.getAttribute("data-pull-flex-doc")
+        );
       }
     });
 
