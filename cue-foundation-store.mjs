@@ -21,6 +21,9 @@ function cleanText(value) {
     .replace(/â|â/g, '"')
     .replace(/â|â/g, "-")
     .replace(/âs\b/g, "'s")
+    .replace(/â¢/g, "•")
+    .replace(/â(?=\s|$)/g, "'")
+    .replace(/&amp;/g, "&")
     .replace(/Â/g, "")
     .trim();
 }
@@ -69,10 +72,17 @@ function cardTypeOf(message) {
 }
 function shouldCreateDecisionCard(message, matchState) {
   const type = cardTypeOf(message);
-  // Routine affirmative state is preserved as Intake/evidence. It becomes a
-  // decision only when CUE genuinely cannot determine the show.
-  if (type === "state_confirmation") return !primaryMatch(message);
-  return matchState === "needs_review" || ["task_request", "risk_review"].includes(type);
+  const match = primaryMatch(message);
+  // General/unmatched communication remains searchable Intake evidence. It
+  // must not flood the show-focused My Decisions queue.
+  if (!match?.showKey) return false;
+  // Routine affirmative state is evidence/current-state input, not a decision.
+  if (type === "state_confirmation") return false;
+  // Ambiguous show candidates require a human match decision.
+  if (match.matchState === "needs_review" || matchState === "needs_review") return true;
+  // High-confidence matched requests/risks still require operational treatment.
+  return ["task_request", "risk_review"].includes(type) &&
+    ["auto_attached", "manually_approved"].includes(match.matchState);
 }
 function readinessStatusFor(openCards, events) {
   const statuses = openCards.map((x) => x.impact);
