@@ -11,13 +11,15 @@ const message = {
   text: "Sound Haven may need a third box truck. Please confirm.", contentHash: "h1", timestampIso: "2026-07-12T01:50:00.000Z", ingestedAt: "2026-07-12T01:51:00.000Z",
   operationalClassification: { categories: ["trucking","unresolved_issue"], status: "needs_review", summary: "Possible third box truck", unresolved: true },
   extractedEntities: { trucks: [], quotes: [] }, matchState: "needs_review",
-  matches: [{ showKey: "sound-haven", showName: "Sound Haven", score: 110, confidenceBand: "high", reasons: ["Exact show alias", "Date proximity"], matchState: "auto_attached" }],
+  matches: [{ showKey: "sound-haven", showName: "Sound Haven", documentNumbers: ["26-1421"], elementId: "element-sound-haven", quoteElements: [{ documentNumber: "26-1421", elementId: "element-sound-haven" }], score: 110, confidenceBand: "high", reasons: ["Exact show alias", "Date proximity"], matchState: "auto_attached" }],
 };
 const first = await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
 assert.equal(first.intakeCount, 1); assert.equal(first.openDecisionCount, 1);
 const second = await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
 assert.equal(second.sourceRecordCount, 1, "sync idempotent");
 const cards = await store.listDecisionCards({ status: "open" }); assert.equal(cards.length, 1);
+assert.deepEqual(cards[0].intake.flexDocumentNumbers, ["26-1421"], "FLEX quote number follows show match into Intake");
+assert.equal(cards[0].intake.flexQuoteElements[0].elementId, "element-sound-haven", "FLEX element identity follows quote into Intake");
 const result = await store.decide(cards[0].id, { action: "accept_update", actorId: "brian-kee", idempotencyKey: "accept-1" });
 assert(result.ok); assert(result.event); assert.equal(result.readiness.showId, "sound-haven");
 assert.equal(result.readiness.overallStatus, "at_risk", "accepted requirement is not fulfilled readiness");
