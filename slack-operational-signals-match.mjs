@@ -698,7 +698,13 @@ export function matchSlackMessageToShows(message, candidateShows = []) {
     results.push({
       showKey,
       showName,
-      documentNumbers: parentShowOnly && quoteHits.length === 0 ? [] : docs,
+      // Preserve the candidate show's known FLEX documents for operator
+      // context even when the message only identifies the parent show. The
+      // workstreamUnspecified flag still prevents treating one child quote as
+      // definitively selected.
+      documentNumbers: docs,
+      elementId: show.elementId || null,
+      quoteElements: Array.isArray(show.quoteElements) ? show.quoteElements : [],
       workstreamUnspecified: Boolean(parentShowOnly && quoteHits.length === 0),
       confidence: confidenceBand,
       confidenceBand,
