@@ -9223,7 +9223,21 @@ server.listen(PORT, async () => {
     }
   } else {
     try {
-      slackOperationalSignalsService.startBackgroundSync(async () => []);
+      const syncMinutes = Number(
+        process.env.SLACK_OPERATIONAL_SYNC_INTERVAL_MINUTES || 0
+      );
+      const handle = slackOperationalSignalsService.startBackgroundSync(() =>
+        slackMatchDeps.getCandidateShows()
+      );
+      if (handle) {
+        console.log(
+          `[CUE SLACK SIGNALS] Background sync enabled every ${syncMinutes} minutes.`
+        );
+      } else {
+        console.warn(
+          "[CUE SLACK SIGNALS] Background sync not enabled (set SLACK_OPERATIONAL_SYNC_INTERVAL_MINUTES >= 5)."
+        );
+      }
     } catch (error) {
       console.warn("[CUE SLACK SIGNALS] Background sync not started.", error?.message || error);
     }

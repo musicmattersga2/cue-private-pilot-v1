@@ -136,8 +136,13 @@ export function createSlackOperationalSignalsService(options = {}) {
   }
 
   async function loadBaseCandidates(syncOptions = {}) {
-    if (syncOptions.candidateShows) {
-      return await Promise.resolve(syncOptions.candidateShows);
+    // Empty arrays are not usable candidate lists (background sync used to pass []).
+    // Fall through to the configured Active Shows loader instead.
+    if (
+      Array.isArray(syncOptions.candidateShows) &&
+      syncOptions.candidateShows.length > 0
+    ) {
+      return syncOptions.candidateShows;
     }
     if (typeof getCandidateShows === "function") {
       return (await getCandidateShows()) || [];
