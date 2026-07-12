@@ -703,7 +703,9 @@ export function matchSlackMessageToShows(message, candidateShows = []) {
       // workstreamUnspecified flag still prevents treating one child quote as
       // definitively selected.
       documentNumbers: docs,
+      primaryDocumentNumber: show.primaryDocumentNumber || null,
       elementId: show.elementId || null,
+      documentRefs: Array.isArray(show.documentRefs) ? show.documentRefs : [],
       quoteElements: Array.isArray(show.quoteElements) ? show.quoteElements : [],
       workstreamUnspecified: Boolean(parentShowOnly && quoteHits.length === 0),
       confidence: confidenceBand,
