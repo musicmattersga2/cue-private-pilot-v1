@@ -19,7 +19,7 @@ const second = await store.syncSlackSnapshot({ messages: { [message.messageKey]:
 assert.equal(second.sourceRecordCount, 1, "sync idempotent");
 const initialDb = await store.read();
 const initialIntakeId = Object.keys(initialDb.intakeItems)[0];
-const linked = await store.linkFlexQuote({ documentNumber: "26-1421", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", intakeItemId: initialIntakeId, actorId: "ops-manager", flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#fin-doc/85141d01-8008-4d29-8fc2-1749159e35e0/doc-view/ca6b072c-b122-11df-b8d5-00e08175e43e/header" });
+const linked = await store.linkFlexQuote({ documentNumber: "26-1421", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", documentType: "quote", role: "primary_show_quote", intakeItemId: initialIntakeId, actorId: "ops-manager", flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#fin-doc/85141d01-8008-4d29-8fc2-1749159e35e0/doc-view/ca6b072c-b122-11df-b8d5-00e08175e43e/header" });
 assert(linked.ok, "authorized operator can link a verified FLEX quote");
 assert.equal((await store.getLearnedFlexLink("26-1421")).elementId, "85141d01-8008-4d29-8fc2-1749159e35e0", "verified FLEX mapping is learned");
 await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
@@ -87,7 +87,7 @@ const explicitQuoteMessage = {
 await explicitQuoteStore.syncSlackSnapshot({ messages: { [explicitQuoteMessage.messageKey]: explicitQuoteMessage } });
 const explicitQuoteIntake = Object.values((await explicitQuoteStore.read()).intakeItems)[0];
 assert.deepEqual(explicitQuoteIntake.flexDocumentNumbers, ["26-0821"], "explicit Slack quote enters Intake even when the show catalog lacks it");
-assert.equal(explicitQuoteIntake.primaryFlexDocumentNumber, "26-0821", "one explicit Slack quote becomes the proposed primary workstream");
+assert.equal(explicitQuoteIntake.primaryFlexDocumentNumber, null, "a Slack document number remains mentioned evidence until FLEX or a human verifies its primary role");
 assert.equal(explicitQuoteIntake.status, "needs_review", "explicit quote evidence does not silently confirm an uncertain show match");
 
 const multipleQuoteStore = createCueFoundationStore({ filePath: path.join(dir, "multiple-explicit-quotes.json") });
@@ -109,9 +109,9 @@ const typedDocumentMessage = {
     showName: "Live Nation Moonchild @ The Fox",
     documentNumbers: ["26-1846", "26-0836"],
     primaryDocumentNumber: "26-1846",
-    elementId: "85141d01-8008-4d29-8fc2-1749159e35e0",
+    elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
     documentRefs: [
-      { documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", source: "active_shows_primary" },
+      { documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00", source: "active_shows_primary" },
     ],
     quoteElements: [],
     score: 180,
