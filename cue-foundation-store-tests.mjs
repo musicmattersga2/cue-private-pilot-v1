@@ -53,3 +53,14 @@ await orderingStore.syncSlackSnapshot({ messages: { [unordered.messageKey]: unor
 const orderingDb = await orderingStore.read();
 const orderingIntake = Object.values(orderingDb.intakeItems)[0];
 assert.equal(orderingIntake.matchedShowId, "sound-haven", "strongest selected match wins regardless of array order");
+
+const matchStore = createCueFoundationStore({ filePath: path.join(dir, "match-decision.json") });
+const candidate = { ...message, messageKey: "CLOG:1783821005.0001", contentHash: "h6", matches: [{ showKey: "paul-simon", score: 75, confidenceBand: "medium", matchState: "needs_review", reasons: ["Chastain alias"] }] };
+await matchStore.syncSlackSnapshot({ messages: { [candidate.messageKey]: candidate } });
+const matchCards = await matchStore.listDecisionCards({ status: "open" });
+assert.equal(matchCards[0].cardType, "show_match_review", "candidate creates match-review card");
+const matchDecision = await matchStore.decide(matchCards[0].id, { action: "link_show", actorId: "pm-user", idempotencyKey: "link-1", parameters: { showId: "paul-simon", alias: "Chastain Paul" } });
+assert(matchDecision.ok && matchDecision.event, "show match decision is recorded");
+const matchDb = await matchStore.read();
+assert.equal(Object.values(matchDb.intakeItems)[0].matchedShowId, "paul-simon", "confirmed show persisted to Intake");
+assert.equal(matchDb.learnedAliases["chastain paul"].showId, "paul-simon", "confirmed alias learned");
