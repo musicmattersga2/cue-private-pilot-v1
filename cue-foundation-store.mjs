@@ -174,9 +174,12 @@ export function createCueFoundationStore(options = {}) {
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
         const candidateNeedsReview = match?.matchState === "needs_review";
         const learnedForIntake = Object.values(db.learnedFlexLinks || {}).filter((item) => (item.intakeItemIds || []).includes(intakeId));
-        const flexDocumentNumbers = [...new Set([...(match?.documentNumbers || []).map(String).filter(Boolean), ...learnedForIntake.map(item => item.documentNumber)])];
-        const exactMessageQuotes = message.extractedEntities?.quotes || [];
-        const primaryFlexDocumentNumber = learnedForIntake.at(-1)?.documentNumber || exactMessageQuotes.find((quote) => flexDocumentNumbers.includes(String(quote))) || (flexDocumentNumbers.length === 1 ? flexDocumentNumbers[0] : null);
+        const exactMessageQuotes = [...new Set((message.extractedEntities?.quotes || []).map(String).filter(Boolean))];
+        // A quote number written in the source message is direct evidence. Keep
+        // it even when the proposed Active Shows record has incomplete or
+        // different workstream metadata. This does not confirm the show match.
+        const flexDocumentNumbers = [...new Set([...exactMessageQuotes, ...(match?.documentNumbers || []).map(String).filter(Boolean), ...learnedForIntake.map(item => item.documentNumber)])];
+        const primaryFlexDocumentNumber = learnedForIntake.at(-1)?.documentNumber || (exactMessageQuotes.length === 1 ? exactMessageQuotes[0] : null) || (exactMessageQuotes.length === 0 && flexDocumentNumbers.length === 1 ? flexDocumentNumbers[0] : null);
         const flexQuoteElements = [
           ...learnedForIntake.map(item => ({ documentNumber: item.documentNumber, elementId: item.elementId })),
           ...(match?.quoteElements || []),
