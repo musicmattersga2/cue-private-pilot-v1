@@ -1662,10 +1662,56 @@ function extractQuoteNumbersFromText(value) {
   return [...new Set(matches.map((item) => item.trim()))];
 }
 
+function inferFlexDocumentType(value, fallback = "unknown") {
+  const text = String(value || "").toLowerCase();
+  if (/pull\s*sheet|pullsheet/.test(text)) return "pull_sheet";
+  if (/event\s*folder/.test(text)) return "event_folder";
+  if (/\bquote\b|mmp\s*quote/.test(text)) return "quote";
+  return fallback;
+}
+
 function buildSlackCandidateFromActiveShow(show) {
   const showName = show?.name || show?.showName || "Unnamed Show";
   const childQuotes = Array.isArray(show?.flex?.childQuotes) ? show.flex.childQuotes : [];
+  const flexDocuments = Array.isArray(show?.flex?.documents) ? show.flex.documents : [];
+  const primaryDocumentNumber = String(
+    show?.flex?.primary?.documentNumber || show?.flex?.documentNumber || ""
+  ).trim() || null;
+  const primaryElementId =
+    show?.flex?.primary?.elementId || show?.flex?.elementId || show?.elementId || null;
+  const documentRefs = [
+    primaryDocumentNumber
+      ? {
+          documentNumber: primaryDocumentNumber,
+          elementId: primaryElementId,
+          documentType: inferFlexDocumentType(show?.flex?.matchType, "quote"),
+          role: "primary_show_quote",
+          name: show?.flex?.primary?.name || show?.flex?.showName || showName,
+          parentElementId: null,
+          source: "active_shows_primary",
+        }
+      : null,
+    ...flexDocuments.map((document) => ({
+      documentNumber: document?.documentNumber || null,
+      elementId: document?.elementId || null,
+      documentType: inferFlexDocumentType(`${document?.type || ""} ${document?.status || ""} ${document?.showName || ""}`, "quote"),
+      role: String(document?.documentNumber || "") === primaryDocumentNumber ? "primary_show_quote" : "related",
+      name: document?.showName || document?.name || null,
+      parentElementId: document?.parentElementId || null,
+      source: "active_shows_document",
+    })),
+    ...childQuotes.map((child) => ({
+      documentNumber: child?.documentNumber || null,
+      elementId: child?.elementId || null,
+      documentType: inferFlexDocumentType(`${child?.type || ""} ${child?.name || ""}`, "quote"),
+      role: "related",
+      name: child?.name || null,
+      parentElementId: child?.parentId || show?.flex?.eventFolder?.elementId || null,
+      source: "active_shows_child",
+    })),
+  ].filter((ref, index, refs) => ref?.documentNumber && index === refs.findIndex((candidate) => candidate?.documentNumber === ref.documentNumber && candidate?.documentType === ref.documentType));
   const documentNumbers = [
+    primaryDocumentNumber,
     ...extractQuoteNumbersFromText(
       [
         show?.id,
@@ -1699,11 +1745,11 @@ function buildSlackCandidateFromActiveShow(show) {
     showName,
     client: show?.activeShowsIndex?.client || show?.client || null,
     venue: show?.venue || null,
-    documentNumbers: [...new Set(documentNumbers.map((d) => String(d).trim()).filter(Boolean))],
-    elementId: show?.flex?.elementId || show?.elementId || null,
-    quoteElements: childQuotes
-      .filter((child) => child?.documentNumber)
-      .map((child) => ({ documentNumber: child.documentNumber, elementId: child.elementId || null })),
+    documentNumbers: [...new Set(documentNumbers.map((d) => d == null ? "" : String(d).trim()).filter(Boolean))],
+    primaryDocumentNumber,
+    elementId: primaryElementId,
+    documentRefs,
+    quoteElements: documentRefs.map((ref) => ({ documentNumber: ref.documentNumber, elementId: ref.elementId || null, documentType: ref.documentType })),
     aliases: [],
     plannedStartDate: show?.flex?.plannedStartDate || null,
     plannedEndDate: show?.flex?.plannedEndDate || null,
@@ -1811,32 +1857,6 @@ async function resolveSlackCandidateFromFlexQuote(documentNumber) {
     elementId: verified.elementId,
     quoteVerified: true,
   };
-}
-
-async function resolveFlexQuoteElementForLink(documentNumber) {
-  const wanted = String(documentNumber || "").trim();
-  if (!wanted) return null;
-  const searchResult = await fetchFlexSearch(wanted);
-  const seen = new Set();
-  const candidates = normalizeFlexSearchResults(searchResult.data)
-    .map((result) => ({
-      elementId: extractSearchResultId(result),
-      name: result?.name || result?.displayName || result?.preferredDisplayString || result?.text || result?.label || null,
-    }))
-    .filter((candidate) => candidate.elementId && !seen.has(candidate.elementId) && seen.add(candidate.elementId))
-    .slice(0, 8);
-  const verified = [];
-  for (const candidate of candidates) {
-    try {
-      const intake = await fetchFlexShowIntake(candidate.elementId);
-      const ctx = intake?.showContext || {};
-      if (String(ctx.documentNumber || "").trim().toLowerCase() !== wanted.toLowerCase()) continue;
-      verified.push({ elementId: candidate.elementId, showName: ctx.showName || candidate.name || wanted, ctx });
-    } catch {
-      // Search results can contain inaccessible or stale elements; keep checking.
-    }
-  }
-  return verified.length === 1 ? verified[0] : null;
 }
 
 function flattenFlexRows(rows, parentSection = null, depth = 0) {
@@ -8629,38 +8649,39 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/foundation/slack/sync") {
+      const rematch = await slackOperationalSignalsService.rematchAll(null, {
+        // Active Shows / FLEX Intake Engine is authoritative. Do not manufacture
+        // candidates from a bare document number that may belong to another type.
+        expandQuotes: false,
+      });
       const snapshot = await slackOperationalSignalsService.getSlackOperationalSnapshot();
       const foundation = await defaultCueFoundationStore.syncSlackSnapshot(snapshot);
-      sendJson(res, 200, { ok: true, foundation });
+      sendJson(res, 200, { ok: true, rematch, foundation });
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/flex/quote/open") {
+    if (req.method === "GET" && ["/api/flex/quote/open", "/api/flex/document/open"].includes(url.pathname)) {
       const documentNumber = String(url.searchParams.get("documentNumber") || "").trim();
       const intakeItemId = String(url.searchParams.get("intakeItemId") || "").trim();
+      const documentType = String(url.searchParams.get("documentType") || "quote").trim() || "quote";
+      const role = String(url.searchParams.get("role") || "linked").trim() || "linked";
       let elementId = String(url.searchParams.get("elementId") || "").trim();
-      if (!elementId && documentNumber) {
-        const learned = await defaultCueFoundationStore.getLearnedFlexLink(documentNumber);
-        elementId = String(learned?.elementId || "").trim();
+      const learned = documentNumber
+        ? await defaultCueFoundationStore.getLearnedFlexLink(documentNumber, intakeItemId || null)
+        : null;
+      if (learned?.flexUrl) {
+        res.writeHead(302, { Location: learned.flexUrl, "Cache-Control": "no-store" });
+        res.end();
+        return;
       }
-      if (!elementId && documentNumber) {
-        const resolved = await resolveFlexQuoteElementForLink(documentNumber);
-        elementId = String(resolved?.elementId || "").trim();
-        if (isFlexElementId(elementId)) {
-          await defaultCueFoundationStore.linkFlexQuote({
-            documentNumber,
-            elementId,
-            intakeItemId: intakeItemId || null,
-            flexUrl: buildFlexQuoteUrl(elementId),
-            actorId: "system:flex-verified",
-            rationale: "Unique exact FLEX header verification",
-            source: "flex_header_verification",
-          });
-        }
-      }
-      if (!isFlexElementId(elementId)) {
+      // A canonical quote UUID from the Intake Engine is safe to open with the
+      // known quote view. Other financial document types need their own pasted
+      // and verified URL because FLEX document numbers collide across types.
+      if (!isFlexElementId(elementId) || documentType !== "quote") {
         const params = new URLSearchParams({ linkFlexQuote: documentNumber });
         if (intakeItemId) params.set("intakeItemId", intakeItemId);
+        params.set("documentType", documentType);
+        params.set("role", role);
         res.writeHead(302, {
           Location: `/command-center?${params}`,
           "Cache-Control": "no-store",
@@ -8680,6 +8701,7 @@ const server = http.createServer(async (req, res) => {
       const rawBody = await readRequestBody(req);
       const body = JSON.parse(rawBody || "{}");
       const documentNumber = String(body.documentNumber || "").trim();
+      const documentType = String(body.documentType || "unknown").trim() || "unknown";
       let parsed;
       try {
         parsed = parseFlexQuoteUrl(body.flexUrl);
@@ -8687,14 +8709,14 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: error.message });
         return;
       }
-      let verifiedIntake;
+      let verifiedHeader;
       try {
-        verifiedIntake = await fetchFlexShowIntake(parsed.elementId);
+        verifiedHeader = await fetchFlexHeaderData(parsed.elementId);
       } catch {
-        sendJson(res, 400, { error: "CUE could not verify that FLEX quote. Confirm the URL and try again." });
+        sendJson(res, 400, { error: "CUE could not verify that FLEX document. Confirm the URL and try again." });
         return;
       }
-      const verifiedDocumentNumber = String(verifiedIntake?.showContext?.documentNumber || "").trim();
+      const verifiedDocumentNumber = String(buildShowContext(verifiedHeader.data, parsed.elementId)?.documentNumber || "").trim();
       if (!documentNumber || verifiedDocumentNumber.toLowerCase() !== documentNumber.toLowerCase()) {
         sendJson(res, 400, { error: `That FLEX URL belongs to ${verifiedDocumentNumber || "a different document"}, not ${documentNumber || "the requested quote"}.` });
         return;
@@ -8702,6 +8724,8 @@ const server = http.createServer(async (req, res) => {
       const result = await defaultCueFoundationStore.linkFlexQuote({
         documentNumber,
         elementId: parsed.elementId,
+        documentType,
+        role: String(body.role || "linked").trim() || "linked",
         intakeItemId: String(body.intakeItemId || "").trim() || null,
         flexUrl: parsed.normalizedUrl,
         actorId: String(body.actorId || "command-center-user").trim(),
@@ -8843,7 +8867,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/slack-operational-signals/rematch") {
       const result = await slackOperationalSignalsService.rematchAll(null, {
-        expandQuotes: true,
+        expandQuotes: false,
       });
       sendJson(res, 200, { ok: true, ...result });
       return;
