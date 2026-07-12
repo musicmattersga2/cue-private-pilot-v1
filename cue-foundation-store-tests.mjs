@@ -17,9 +17,16 @@ const first = await store.syncSlackSnapshot({ messages: { [message.messageKey]: 
 assert.equal(first.intakeCount, 1); assert.equal(first.openDecisionCount, 1);
 const second = await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
 assert.equal(second.sourceRecordCount, 1, "sync idempotent");
+const initialDb = await store.read();
+const initialIntakeId = Object.keys(initialDb.intakeItems)[0];
+const linked = await store.linkFlexQuote({ documentNumber: "26-1421", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", intakeItemId: initialIntakeId, actorId: "ops-manager", flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#fin-doc/85141d01-8008-4d29-8fc2-1749159e35e0/doc-view/ca6b072c-b122-11df-b8d5-00e08175e43e/header" });
+assert(linked.ok, "authorized operator can link a verified FLEX quote");
+assert.equal((await store.getLearnedFlexLink("26-1421")).elementId, "85141d01-8008-4d29-8fc2-1749159e35e0", "verified FLEX mapping is learned");
+await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
 const cards = await store.listDecisionCards({ status: "open" }); assert.equal(cards.length, 1);
 assert.deepEqual(cards[0].intake.flexDocumentNumbers, ["26-1421"], "FLEX quote number follows show match into Intake");
-assert.equal(cards[0].intake.flexQuoteElements[0].elementId, "element-sound-haven", "FLEX element identity follows quote into Intake");
+assert.equal(cards[0].intake.primaryFlexDocumentNumber, "26-1421", "human-confirmed primary FLEX quote survives connector resync");
+assert.equal(cards[0].intake.flexQuoteElements[0].elementId, "85141d01-8008-4d29-8fc2-1749159e35e0", "learned FLEX element identity survives connector resync");
 const result = await store.decide(cards[0].id, { action: "accept_update", actorId: "brian-kee", idempotencyKey: "accept-1" });
 assert(result.ok); assert(result.event); assert.equal(result.readiness.showId, "sound-haven");
 assert.equal(result.readiness.overallStatus, "at_risk", "accepted requirement is not fulfilled readiness");
