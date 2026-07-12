@@ -106,6 +106,9 @@ function sourceFlexDocumentType(message) {
   const text = cleanText(message?.text || "").toLowerCase();
   if (/pull\s*sheet|pullsheet/.test(text)) return "pull_sheet";
   if (/event\s*folder/.test(text)) return "event_folder";
+  if (/manifest/.test(text)) return "manifest";
+  if (/purchase\s*order|\blpo\b/.test(text)) return "purchase_order";
+  if (/invoice/.test(text)) return "invoice";
   if (/\bquote\b/.test(text)) return "quote";
   return "unknown";
 }
@@ -187,7 +190,11 @@ export function createCueFoundationStore(options = {}) {
         // it even when the proposed Active Shows record has incomplete or
         // different workstream metadata. This does not confirm the show match.
         const flexDocumentNumbers = [...new Set([...exactMessageQuotes, ...(match?.documentNumbers || []).map(String).filter(Boolean), ...learnedForIntake.map(item => item.documentNumber)])];
-        const primaryFlexDocumentNumber = learnedForIntake.find(item => item.role === "primary_show_quote")?.documentNumber || match?.primaryDocumentNumber || learnedForIntake.at(-1)?.documentNumber || (exactMessageQuotes.length === 1 ? exactMessageQuotes[0] : null) || (exactMessageQuotes.length === 0 && flexDocumentNumbers.length === 1 ? flexDocumentNumbers[0] : null);
+        // Only an authoritative Active Shows/FLEX hierarchy or an explicit
+        // human primary link may establish the primary show quote. A number in
+        // Slack can identify a pull sheet, manifest, or colliding document and
+        // therefore remains mentioned evidence until its role is verified.
+        const primaryFlexDocumentNumber = learnedForIntake.find(item => item.role === "primary_show_quote")?.documentNumber || match?.primaryDocumentNumber || null;
         const sourceMentionedFlexDocuments = exactMessageQuotes.map(documentNumber => ({ documentNumber, documentType: mentionedDocumentType, role: "mentioned_source", elementId: null, source: "slack" }));
         const flexDocumentRefs = [
           ...(match?.documentRefs || []),
