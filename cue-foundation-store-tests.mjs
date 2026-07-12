@@ -43,3 +43,13 @@ const lowDb = await lowStore.read();
 const lowIntake = Object.values(lowDb.intakeItems)[0];
 assert.equal(lowIntake.status, "needs_match", "low-confidence candidate is not a confirmed match");
 assert.equal(lowIntake.matchedShowId, null, "low-confidence candidate never attaches to a show");
+
+const orderingStore = createCueFoundationStore({ filePath: path.join(dir, "ordering.json") });
+const unordered = { ...message, messageKey: "CLOG:1783821004.0001", contentHash: "h5", matches: [
+  { showKey: "wrong-low", score: 25, confidenceBand: "low", matchState: "general_queue", reasons: ["Recency only"] },
+  { showKey: "sound-haven", score: 125, confidenceBand: "high", matchState: "auto_attached", reasons: ["Exact quote"] },
+] };
+await orderingStore.syncSlackSnapshot({ messages: { [unordered.messageKey]: unordered } });
+const orderingDb = await orderingStore.read();
+const orderingIntake = Object.values(orderingDb.intakeItems)[0];
+assert.equal(orderingIntake.matchedShowId, "sound-haven", "strongest selected match wins regardless of array order");
