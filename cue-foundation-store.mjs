@@ -38,7 +38,7 @@ function id(prefix, value) {
   return `${prefix}_${hash}`;
 }
 function blank() {
-  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {} };
+  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {} };
 }
 function readFile(filePath) {
   if (!fs.existsSync(filePath)) return blank();
@@ -173,7 +173,14 @@ export function createCueFoundationStore(options = {}) {
         db.sourceRecords[sourceId] = sourceRecord;
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
         const candidateNeedsReview = match?.matchState === "needs_review";
-        const flexDocumentNumbers = [...new Set((match?.documentNumbers || []).map(String).filter(Boolean))];
+        const learnedForIntake = Object.values(db.learnedFlexLinks || {}).filter((item) => (item.intakeItemIds || []).includes(intakeId));
+        const flexDocumentNumbers = [...new Set([...(match?.documentNumbers || []).map(String).filter(Boolean), ...learnedForIntake.map(item => item.documentNumber)])];
+        const exactMessageQuotes = message.extractedEntities?.quotes || [];
+        const primaryFlexDocumentNumber = learnedForIntake.at(-1)?.documentNumber || exactMessageQuotes.find((quote) => flexDocumentNumbers.includes(String(quote))) || (flexDocumentNumbers.length === 1 ? flexDocumentNumbers[0] : null);
+        const flexQuoteElements = [
+          ...learnedForIntake.map(item => ({ documentNumber: item.documentNumber, elementId: item.elementId })),
+          ...(match?.quoteElements || []),
+        ].filter((item, index, items) => item.documentNumber && index === items.findIndex(candidate => candidate.documentNumber === item.documentNumber));
         const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : scope === "show_specific" ? "needs_match" : "routed";
         db.intakeItems[intakeId] = {
           id: intakeId, sourceRecordId: sourceId, status, category: domain, scope,
@@ -184,8 +191,9 @@ export function createCueFoundationStore(options = {}) {
           candidateShowId: candidateNeedsReview ? match.showKey : null,
           matchedShowName: match?.showName || null,
           flexDocumentNumbers,
+          primaryFlexDocumentNumber,
           flexElementId: match?.elementId || null,
-          flexQuoteElements: match?.quoteElements || [],
+          flexQuoteElements,
           matchConfidence: match?.score ?? null,
           matchReasons: match?.reasons || [], createdAt: db.intakeItems[intakeId]?.createdAt || now(), updatedAt: now(),
         };
@@ -284,6 +292,36 @@ export function createCueFoundationStore(options = {}) {
     });
   }
 
+  async function linkFlexQuote(input = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const documentNumber = cleanText(input.documentNumber || "");
+      const elementId = cleanText(input.elementId || "");
+      const actorId = cleanText(input.actorId || "");
+      if (!/^\d{2}-\d{3,6}$/.test(documentNumber)) return { ok: false, status: 400, error: "A valid FLEX document number is required." };
+      if (!/^[0-9a-f-]{36}$/i.test(elementId)) return { ok: false, status: 400, error: "A valid FLEX element ID is required." };
+      if (!actorId) return { ok: false, status: 400, error: "actorId is required." };
+      const previous = db.learnedFlexLinks[documentNumber] || {};
+      const intakeItemIds = [...new Set([...(previous.intakeItemIds || []), input.intakeItemId].filter(Boolean))];
+      const learned = { documentNumber, elementId, flexUrl: input.flexUrl || null, actorId, rationale: input.rationale || null, source: input.source || "command_center", intakeItemIds, confirmedAt: now() };
+      db.learnedFlexLinks[documentNumber] = learned;
+      const intake = input.intakeItemId ? db.intakeItems[input.intakeItemId] : null;
+      if (intake) {
+        intake.flexDocumentNumbers = [...new Set([...(intake.flexDocumentNumbers || []), documentNumber])];
+        intake.primaryFlexDocumentNumber = documentNumber;
+        intake.flexQuoteElements = [
+          ...(intake.flexQuoteElements || []).filter((item) => item.documentNumber !== documentNumber),
+          { documentNumber, elementId },
+        ];
+        intake.updatedAt = now();
+      }
+      const eventId = id("event", `flex-link:${documentNumber}:${elementId}:${actorId}`);
+      db.events[eventId] = { id: eventId, eventType: "intake.flex_quote.linked", showId: intake?.matchedShowId || intake?.candidateShowId || null, domain: intake?.category || "operations", entityType: "flex_quote", entityId: elementId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: actorId.startsWith("system:") ? "system" : "user", actorId, sourceType: input.source || "command_center", sourceRecordId: intake?.sourceRecordId || null, intakeItemId: intake?.id || null, newValue: learned, idempotencyKey: eventId };
+      writeFile(filePath, db);
+      return { ok: true, learned, intake: intake || null, event: db.events[eventId] };
+    });
+  }
+
   return {
     filePath,
     read: async () => readFile(filePath),
@@ -313,6 +351,8 @@ export function createCueFoundationStore(options = {}) {
     getIntakeItem: async (intakeId) => { const db = readFile(filePath); const item = db.intakeItems[intakeId]; if (!item) return null; return { ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null, matches: Object.values(db.matchCandidates).filter(x => x.intakeItemId === intakeId), facts: Object.values(db.candidateFacts).filter(x => x.intakeItemId === intakeId), decisionCards: Object.values(db.decisionCards).filter(x => x.intakeItemId === intakeId) }; },
     getShowReadiness: async (showId) => readFile(filePath).readiness[showId] || { showId, overallStatus: "not_started", overallScore: 0, domainRollup: {}, milestoneRollup: {}, blockers: [], warnings: [], nextActions: [], rulesetVersion: "pilot-v1", evaluatedAt: now() },
     getShowState: async (showId) => readFile(filePath).showState[showId] || null,
+    getLearnedFlexLink: async (documentNumber) => readFile(filePath).learnedFlexLinks[String(documentNumber || "").trim()] || null,
+    linkFlexQuote,
     decide,
   };
 }
