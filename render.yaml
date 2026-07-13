@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: cue-control-board-relay
+    runtime: node
+    repo: https://github.com/musicmattersga2/cue-private-pilot-v1
+    branch: feature/control-board-render-relay
+    rootDir: relay
+    plan: starter
+    region: virginia
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: off
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: CONTROL_BOARD_UPSTREAM_URL
+        value: https://cue-intake-spine-control-board.aaronsoriero619.chatgpt.site/api/control-board
+      - key: RELAY_SERVICE_ID
+        value: chatgpt-mcp
+      - key: RELAY_SITES_AUTH_SHA256
+        sync: false
