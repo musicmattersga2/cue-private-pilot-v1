@@ -127,6 +127,26 @@ assert.deepEqual(typedDocumentIntake.sourceMentionedFlexDocuments, [{ documentNu
 assert(typedDocumentIntake.flexDocumentRefs.some(ref => ref.documentNumber === "26-1846" && ref.role === "primary_show_quote" && ref.elementId), "canonical quote keeps its Intake Engine UUID");
 assert(typedDocumentIntake.flexDocumentRefs.some(ref => ref.documentNumber === "26-0836" && ref.documentType === "pull_sheet" && ref.role === "mentioned_source"), "pull sheet remains source evidence and never replaces the primary quote");
 
+await typedDocumentStore.syncCanonicalShowRegistry([{
+  id: "live-nation-moonchild-the-fox",
+  name: "Live Nation Moonchild @ The Fox",
+  activeShowsIndex: { client: "Live Nation" },
+  flex: { status: "Missing", documents: [] },
+}], { source: "test-active-shows" });
+const humanRegistryLink = await typedDocumentStore.linkFlexQuote({
+  documentNumber: "26-1846",
+  elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
+  documentType: "quote",
+  role: "primary_show_quote",
+  intakeItemId: typedDocumentIntake.id,
+  actorId: "ops-manager",
+  source: "command_center",
+});
+assert(humanRegistryLink.ok, "human primary quote link succeeds");
+const canonicalMoonchild = await typedDocumentStore.getCanonicalShow("live-nation-moonchild-the-fox");
+assert.equal(canonicalMoonchild.flex.primaryShowQuote.documentNumber, "26-1846", "human link updates the canonical show registry");
+assert.equal(canonicalMoonchild.humanOverrides.primaryShowQuote.actorId, "ops-manager", "registry records the human authority");
+
 const linkedPullSheet = await typedDocumentStore.linkFlexQuote({
   documentNumber: "26-0836",
   elementId: "95141d01-8008-4d29-8fc2-1749159e35e0",

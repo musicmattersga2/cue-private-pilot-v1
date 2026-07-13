@@ -20,6 +20,7 @@ import { defaultReviewSnapshotStore } from "./ask-flex-review-snapshot-store.mjs
 import { formatChangeComparisonItems } from "./ask-flex-review-change-detection.mjs";
 import { createSlackOperationalSignalsService } from "./slack-operational-signals-service.mjs";
 import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
+import { canonicalShowToSlackCandidate } from "./canonical-show-registry.mjs";
 import {
   buildFlexQuoteUrl,
   inferFlexDocumentType,
@@ -7993,6 +7994,58 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    async function resolveActiveShowFlexParent(elementId, show = {}) {
+      if (!isFlexElementId(elementId)) return null;
+      try {
+        const header = await fetchFlexHeaderData(elementId);
+        const context = buildShowContext(header.data, elementId);
+        let documentType = inferFlexDocumentType(
+          `${context.documentType || ""} ${context.definitionName || ""}`,
+          "unknown"
+        );
+        let parentElementId = null;
+        try {
+          const tree = await fetchFlexElementTree(elementId);
+          const node = normalizeFlexElementTree(tree.data).find(candidate =>
+            String(candidate.elementId || "").toLowerCase() === String(elementId).toLowerCase()
+          );
+          if (node) {
+            const treeType = inferFlexDocumentType(`${node.type || ""} ${node.name || ""} ${node.domainId || ""}`, "unknown");
+            if (treeType !== "unknown") documentType = treeType;
+            parentElementId = node.parentId || null;
+          }
+        } catch {
+          // The verified header remains useful, but an opaque parent is never
+          // promoted to the canonical quote.
+        }
+        if (documentType !== "quote" || !context.documentNumber) return null;
+        const intake = await fetchFlexShowIntake(elementId);
+        const detail = buildFlexDocumentDetail(intake);
+        return {
+          status: "Verified",
+          approvalNeeded: false,
+          documentNumber: context.documentNumber,
+          documentType: "quote",
+          parentElementId,
+          elementId,
+          showName: detail.showContext?.showName || context.showName || show.name || null,
+          client: detail.showContext?.client || context.client || null,
+          venue: detail.showContext?.venue || context.venue || null,
+          plannedStartDate: detail.showContext?.plannedStartDate || null,
+          plannedEndDate: detail.showContext?.plannedEndDate || null,
+          loadInDate: detail.showContext?.loadInDate || null,
+          loadOutDate: detail.showContext?.loadOutDate || null,
+          soldDepartments: getFlexSoldDepartments(detail),
+          totals: detail.summary?.totals || null,
+          financials: detail.summary?.financials || null,
+          counts: detail.counts || null,
+          quoteLookup: { found: true, source: "explicit_parent_element" },
+        };
+      } catch {
+        return null;
+      }
+    }
+
     async function resolveActiveShowFlexQuoteByName(show = {}) {
       const showName = String(show.name || show.showName || "").trim();
       if (!showName) return null;
@@ -8177,6 +8230,24 @@ const server = http.createServer(async (req, res) => {
         showName: show.name || show.showName || null,
         client: show.activeShowsIndex?.client || show.client || null,
       };
+
+      // FLEX child documents expose their real parent UUID. Resolve that UUID
+      // before any fuzzy name search, and promote it only when FLEX explicitly
+      // types the parent as a quote. This is the authoritative path for cases
+      // such as Moonchild pull sheet 26-0836 -> show quote 26-1846.
+      const explicitParentIds = [...new Set(
+        verifiedDocuments.map(document => document.parentElementId).filter(isFlexElementId)
+      )];
+      for (const parentElementId of explicitParentIds) {
+        if (documents.some(document => String(document.elementId || "").toLowerCase() === String(parentElementId).toLowerCase())) continue;
+        const parentQuote = await resolveActiveShowFlexParent(parentElementId, show);
+        if (parentQuote?.documentType === "quote") {
+          documents.push(parentQuote);
+          documentNumbers = [...new Set([...documentNumbers, parentQuote.documentNumber].filter(Boolean))];
+        }
+      }
+      verifiedDocuments = documents.filter(document => document.status === "Verified");
+      unresolvedDocuments = documents.filter(document => document.status !== "Verified");
       let primary = selectPrimaryShowQuote(verifiedDocuments, expectedShowIdentity);
 
       // A row can contain only a child pull sheet (Moonchild 26-0836 is the
@@ -8477,7 +8548,13 @@ const server = http.createServer(async (req, res) => {
         ...buildMissingEventFolderHintShows(source.shows),
       ];
       const enrichedShows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: true });
-      return enrichedShows.map(buildSlackCandidateFromActiveShow);
+      await defaultCueFoundationStore.syncCanonicalShowRegistry(enrichedShows, {
+        source: source.source,
+        sheetId: source.sheetId,
+        sheetName: source.sheetName,
+      });
+      const canonicalShows = await defaultCueFoundationStore.listCanonicalShows({ activeOnly: true });
+      return canonicalShows.map(canonicalShowToSlackCandidate);
     };
     slackMatchDeps.resolveQuoteCandidate = resolveSlackCandidateFromFlexQuote;
 
@@ -8488,6 +8565,13 @@ const server = http.createServer(async (req, res) => {
         ...buildMissingEventFolderHintShows(activeShowsSource.shows),
       ];
       const shows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: true });
+      const registrySync = await defaultCueFoundationStore.syncCanonicalShowRegistry(shows, {
+        source: activeShowsSource.source,
+        sheetId: activeShowsSource.sheetId,
+        sheetName: activeShowsSource.sheetName,
+      });
+      const canonicalShows = await defaultCueFoundationStore.listCanonicalShows({ activeOnly: true });
+      const canonicalById = new Map(canonicalShows.map(show => [show.id, show]));
 
       // One shared Slack cache read — no per-show Slack API calls.
       let slackStatus = null;
@@ -8512,6 +8596,7 @@ const server = http.createServer(async (req, res) => {
             );
             return {
               ...show,
+              canonicalIdentity: canonicalById.get(show.id) || null,
               slackOperationalSignals: {
                 status: SLACK_FIXTURE_MODE
                   ? "fallback"
@@ -8535,6 +8620,7 @@ const server = http.createServer(async (req, res) => {
           } catch {
             return {
               ...show,
+              canonicalIdentity: canonicalById.get(show.id) || null,
               slackOperationalSignals: {
                 status: "unavailable",
                 lastSyncAt: null,
@@ -8575,6 +8661,7 @@ const server = http.createServer(async (req, res) => {
         message:
           "Active Shows now reads rows from the Active Shows Index when available, then enriches every FLEX/document number found on each row with live FLEX search, header fetch, and line-item pull.",
         flexSummary,
+        canonicalShowRegistry: registrySync,
         shows: showsWithSlack,
       };
     }
@@ -8974,6 +9061,20 @@ const server = http.createServer(async (req, res) => {
       const status = String(url.searchParams.get("status") || "").trim() || null;
       const items = await defaultCueFoundationStore.listDecisionCards({ showId, status });
       sendJson(res, 200, { count: items.length, items: items.slice(0, 200) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/show-registry") {
+      const activeOnly = url.searchParams.get("activeOnly") !== "false";
+      const items = await defaultCueFoundationStore.listCanonicalShows({ activeOnly });
+      sendJson(res, 200, { count: items.length, items });
+      return;
+    }
+
+    if (req.method === "GET" && /^\/api\/foundation\/show-registry\/[^/]+$/.test(url.pathname)) {
+      const showId = decodeURIComponent(url.pathname.split("/")[4] || "");
+      const item = await defaultCueFoundationStore.getCanonicalShow(showId);
+      sendJson(res, item ? 200 : 404, item || { error: "Canonical show not found." });
       return;
     }
 

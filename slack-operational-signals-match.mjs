@@ -296,7 +296,7 @@ function recencyAdjustment(show) {
 
   let delta = 0;
   const reasons = [];
-  if (String(show.source || "").toLowerCase() === "active_shows") {
+  if (["active_shows", "canonical_show_registry"].includes(String(show.source || "").toLowerCase())) {
     delta += 10;
     reasons.push("Prefer current Active Shows candidate");
   }

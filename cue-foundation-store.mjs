@@ -8,6 +8,9 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import {
+  buildCanonicalShowRegistry,
+} from "./canonical-show-registry.mjs";
 
 const DEFAULT_PATH = path.resolve(
   process.env.CUE_FOUNDATION_STORE_PATH || "./data/cue-foundation-v1.json"
@@ -38,7 +41,7 @@ function id(prefix, value) {
   return `${prefix}_${hash}`;
 }
 function blank() {
-  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {} };
+  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, showRegistry: {}, flexDocumentRegistry: {} };
 }
 function readFile(filePath) {
   if (!fs.existsSync(filePath)) return blank();
@@ -143,6 +146,22 @@ function readinessStatusFor(openCards, events) {
 export function createCueFoundationStore(options = {}) {
   const filePath = path.resolve(options.filePath || DEFAULT_PATH);
   const locked = (fn) => { const p = writeChain.then(fn, fn); writeChain = p.then(() => undefined, () => undefined); return p; };
+
+  async function syncCanonicalShowRegistry(shows = [], metadata = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const result = buildCanonicalShowRegistry(
+        shows,
+        db.showRegistry || {},
+        db.flexDocumentRegistry || {},
+        metadata
+      );
+      db.showRegistry = result.showRegistry;
+      db.flexDocumentRegistry = result.flexDocumentRegistry;
+      writeFile(filePath, db);
+      return { ok: true, ...result.summary, updatedAt: now() };
+    });
+  }
 
   async function syncSlackSnapshot(snapshot = {}) {
     return locked(async () => {
@@ -355,8 +374,58 @@ export function createCueFoundationStore(options = {}) {
         }
         intake.updatedAt = now();
       }
+      const showId = intake?.matchedShowId || intake?.candidateShowId || cleanText(input.showId || "") || null;
+      if (showId && role === "primary_show_quote" && documentType === "quote") {
+        const existingShow = db.showRegistry?.[showId] || {
+          id: showId,
+          name: cleanText(input.showName || showId),
+          aliases: [],
+          operationalIdentity: {},
+          flex: { documents: [] },
+          lifecycle: { status: "active", firstSeenAt: now(), lastSeenAt: now() },
+        };
+        const primaryShowQuote = {
+          documentNumber,
+          elementId,
+          documentType: "quote",
+          role: "primary_show_quote",
+          status: "Verified",
+          source: input.source || "command_center",
+          flexUrl: input.flexUrl || null,
+          verifiedAt: now(),
+          actorId,
+        };
+        db.showRegistry[showId] = {
+          ...existingShow,
+          flex: {
+            ...(existingShow.flex || {}),
+            status: "Verified",
+            hierarchyStatus: "verified",
+            primaryShowQuote,
+            documents: [
+              ...(existingShow.flex?.documents || []).filter(document => document.elementId !== elementId && document.documentNumber !== documentNumber),
+              primaryShowQuote,
+            ],
+          },
+          identityConfidence: "high",
+          humanConfirmationRequired: false,
+          humanOverrides: {
+            ...(existingShow.humanOverrides || {}),
+            primaryShowQuote,
+          },
+          updatedAt: now(),
+        };
+        const registryKey = elementId.toLowerCase();
+        db.flexDocumentRegistry[registryKey] = {
+          ...(db.flexDocumentRegistry[registryKey] || {}),
+          ...primaryShowQuote,
+          key: registryKey,
+          showIds: [...new Set([...(db.flexDocumentRegistry[registryKey]?.showIds || []), showId])],
+          lastSeenAt: now(),
+        };
+      }
       const eventId = id("event", `flex-link:${documentNumber}:${elementId}:${actorId}`);
-      db.events[eventId] = { id: eventId, eventType: "intake.flex_quote.linked", showId: intake?.matchedShowId || intake?.candidateShowId || null, domain: intake?.category || "operations", entityType: "flex_quote", entityId: elementId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: actorId.startsWith("system:") ? "system" : "user", actorId, sourceType: input.source || "command_center", sourceRecordId: intake?.sourceRecordId || null, intakeItemId: intake?.id || null, newValue: learned, idempotencyKey: eventId };
+      db.events[eventId] = { id: eventId, eventType: "intake.flex_quote.linked", showId, domain: intake?.category || "operations", entityType: "flex_quote", entityId: elementId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: actorId.startsWith("system:") ? "system" : "user", actorId, sourceType: input.source || "command_center", sourceRecordId: intake?.sourceRecordId || null, intakeItemId: intake?.id || null, newValue: learned, idempotencyKey: eventId };
       writeFile(filePath, db);
       return { ok: true, learned, intake: intake || null, event: db.events[eventId] };
     });
@@ -365,6 +434,21 @@ export function createCueFoundationStore(options = {}) {
   return {
     filePath,
     read: async () => readFile(filePath),
+    syncCanonicalShowRegistry,
+    listCanonicalShows: async ({ activeOnly = false } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.showRegistry || {})
+        .filter(show => !activeOnly || show.lifecycle?.status === "active")
+        .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+    },
+    getCanonicalShow: async (showId) => readFile(filePath).showRegistry?.[showId] || null,
+    getFlexDocument: async (key) => {
+      const db = readFile(filePath);
+      const lookup = cleanText(key || "").toLowerCase();
+      return db.flexDocumentRegistry?.[lookup]
+        || Object.values(db.flexDocumentRegistry || {}).find(document => String(document.documentNumber || "").toLowerCase() === lookup)
+        || null;
+    },
     syncSlackSnapshot,
     listDecisionCards: async ({ showId = null, status = null } = {}) => {
       const db = readFile(filePath);

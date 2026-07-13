@@ -727,7 +727,7 @@ console.log("\nalias / fuzzy / ambiguity matching");
     showKey: "paul-simon-2026",
     showName: "Paul Simon LED Wall - 2026",
     documentNumbers: ["26-2001"],
-    source: "active_shows",
+    source: "canonical_show_registry",
     daysOut: 12,
     departments: ["video", "led"],
   };
@@ -885,6 +885,7 @@ console.log("\nalias / fuzzy / ambiguity matching");
   const pullSheetMatch = matchSlackMessageToShows(pullSheetMessage, [moonchildCandidate])[0];
   assert(pullSheetMatch?.primaryDocumentNumber === "26-1846", "matcher preserves canonical show quote separately from mentioned pull sheet");
   assert(pullSheetMatch?.documentRefs?.[0]?.elementId === moonchildCandidate.elementId, "matcher carries Intake Engine UUID forward");
+  assert(pullSheetMatch?.reasons?.some(reason => /Prefer current Active Shows candidate/.test(reason)), "canonical registry candidates retain the Active Show Index recency preference");
 }
 
 console.log("\nsystem noise excluded from queues");
