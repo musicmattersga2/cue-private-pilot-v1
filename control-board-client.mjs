@@ -1,0 +1,180 @@
+import { randomUUID } from "node:crypto";
+
+const DEFAULT_AGENT = "CUE Control Board Client";
+const SERVICE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{1,63}$/;
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+function required(value, name) {
+  const normalized = String(value || "").trim();
+  if (!normalized) throw new Error(`${name} is required`);
+  return normalized;
+}
+
+function controlBoardEndpoint(value) {
+  const url = new URL(required(value, "CONTROL_BOARD_URL"));
+  const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
+    throw new Error("CONTROL_BOARD_URL must use HTTPS outside local development");
+  }
+  if (url.username || url.password) throw new Error("CONTROL_BOARD_URL must not contain credentials");
+  const path = url.pathname.replace(/\/$/, "");
+  url.pathname = path.endsWith("/api/control-board")
+    ? path
+    : `${path}/api/control-board`.replace(/\/{2,}/g, "/");
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function safeJson(text) {
+  if (!text) return {};
+  try { return JSON.parse(text); }
+  catch { return { error: "Control Board returned a non-JSON response" }; }
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export class ControlBoardError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = "ControlBoardError";
+    this.status = options.status || 0;
+    this.code = options.code || "control_board_error";
+    this.body = options.body || {};
+  }
+}
+
+export function controlBoardConfigFromEnv(env = process.env) {
+  return {
+    baseUrl: required(env.CONTROL_BOARD_URL, "CONTROL_BOARD_URL"),
+    serviceId: required(env.CONTROL_BOARD_SERVICE_ID, "CONTROL_BOARD_SERVICE_ID"),
+    serviceSecret: required(env.CONTROL_BOARD_SERVICE_SECRET, "CONTROL_BOARD_SERVICE_SECRET"),
+    sitesToken: required(env.CONTROL_BOARD_SITES_TOKEN, "CONTROL_BOARD_SITES_TOKEN"),
+    agent: String(env.CONTROL_BOARD_AGENT || DEFAULT_AGENT).trim() || DEFAULT_AGENT,
+  };
+}
+
+export class ControlBoardClient {
+  constructor(options = {}) {
+    this.endpoint = controlBoardEndpoint(options.baseUrl);
+    this.serviceId = required(options.serviceId, "serviceId").toLowerCase();
+    if (!SERVICE_ID_PATTERN.test(this.serviceId)) throw new Error("serviceId is invalid");
+    this.serviceSecret = required(options.serviceSecret, "serviceSecret");
+    this.sitesToken = required(options.sitesToken, "sitesToken");
+    this.agent = String(options.agent || DEFAULT_AGENT).trim().slice(0, 200) || DEFAULT_AGENT;
+    this.fetch = options.fetch || globalThis.fetch;
+    if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
+    this.maxAttempts = Math.max(1, Math.min(3, Number(options.maxAttempts || 2)));
+    this.retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? 200));
+  }
+
+  headers(hasBody = false) {
+    return {
+      accept: "application/json",
+      ...(hasBody ? { "content-type": "application/json" } : {}),
+      authorization: `Bearer ${this.serviceId}.${this.serviceSecret}`,
+      "oai-sites-authorization": `Bearer ${this.sitesToken}`,
+      "x-cue-agent": this.agent,
+    };
+  }
+
+  async request(method, body) {
+    const serialized = body === undefined ? undefined : JSON.stringify(body);
+    let lastNetworkError;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      let response;
+      try {
+        response = await this.fetch(this.endpoint, {
+          method,
+          headers: this.headers(serialized !== undefined),
+          ...(serialized === undefined ? {} : { body: serialized }),
+        });
+      } catch (error) {
+        lastNetworkError = error;
+        if (attempt < this.maxAttempts) {
+          if (this.retryDelayMs) await sleep(this.retryDelayMs);
+          continue;
+        }
+        throw new ControlBoardError("Control Board request could not be completed", {
+          code: "network_error",
+          body: { cause: error instanceof Error ? error.message : "Network request failed" },
+        });
+      }
+
+      const parsed = safeJson(await response.text());
+      if (response.ok) return parsed;
+      if (RETRYABLE_STATUSES.has(response.status) && attempt < this.maxAttempts) {
+        if (this.retryDelayMs) await sleep(this.retryDelayMs);
+        continue;
+      }
+      throw new ControlBoardError(String(parsed.error || `Control Board returned ${response.status}`), {
+        status: response.status,
+        code: String(parsed.code || "control_board_error"),
+        body: parsed,
+      });
+    }
+    throw new ControlBoardError("Control Board request could not be completed", {
+      code: "network_error",
+      body: { cause: lastNetworkError instanceof Error ? lastNetworkError.message : "Network request failed" },
+    });
+  }
+
+  read() {
+    return this.request("GET");
+  }
+
+  async mutate(action, payload = {}, options = {}) {
+    const expectedVersion = options.expectedVersion ?? (await this.read()).boardVersion;
+    if (!Number.isSafeInteger(Number(expectedVersion)) || Number(expectedVersion) < 1) {
+      throw new Error("A positive expectedVersion is required");
+    }
+    const idempotencyKey = String(options.idempotencyKey || randomUUID());
+    const mutation = {
+      ...payload,
+      action,
+      expectedVersion: Number(expectedVersion),
+      idempotencyKey,
+    };
+    return this.request("POST", mutation);
+  }
+
+  async updateStep(stepId, status, values = {}, options = {}) {
+    if (options.expectedVersion !== undefined) {
+      if (values.notes === undefined || values.completedAt === undefined) {
+        throw new Error("notes and completedAt are required with an explicit expectedVersion");
+      }
+      return this.mutate("update_step", { ...values, stepId, status }, options);
+    }
+
+    const board = await this.read();
+    const previous = board.steps?.[stepId] || {};
+    return this.mutate("update_step", {
+      stepId,
+      status,
+      notes: values.notes === undefined ? String(previous.notes || "") : values.notes,
+      completedAt: values.completedAt === undefined ? String(previous.completedAt || "") : values.completedAt,
+    }, { ...options, expectedVersion: board.boardVersion });
+  }
+
+  setFocus(stepId, options = {}) {
+    return this.mutate("set_focus", { stepId }, options);
+  }
+
+  startWorkstream(values, options = {}) {
+    return this.mutate("start_workstream", values, options);
+  }
+
+  updateWorkstream(id, status, values = {}, options = {}) {
+    return this.mutate("update_workstream", { ...values, id, status }, options);
+  }
+
+  importState(steps, currentFocus, options = {}) {
+    return this.mutate("import_state", { steps, ...(currentFocus ? { currentFocus } : {}) }, options);
+  }
+}
+
+export function createControlBoardClientFromEnv(env = process.env, options = {}) {
+  return new ControlBoardClient({ ...controlBoardConfigFromEnv(env), ...options });
+}
