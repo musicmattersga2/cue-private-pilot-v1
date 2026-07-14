@@ -22,6 +22,11 @@ import { createSlackOperationalSignalsService } from "./slack-operational-signal
 import { defaultCueFoundationStore } from "./cue-foundation-store.mjs";
 import { canonicalShowToSlackCandidate } from "./canonical-show-registry.mjs";
 import {
+  adaptDriveFileToIntakeRecord,
+  adaptEmailMessageToIntakeRecord,
+  buildActiveShowIndexBatch,
+} from "./cue-intake-evidence-adapters.mjs";
+import {
   buildFlexQuoteUrl,
   inferFlexDocumentType,
   isFlexElementId,
@@ -8997,6 +9002,118 @@ const server = http.createServer(async (req, res) => {
         metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : {},
       });
       sendJson(res, result.ok ? 200 : 422, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/email/ingest") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const messages = Array.isArray(body.messages) ? body.messages : body.message ? [body.message] : [];
+      if (!messages.length) {
+        sendJson(res, 400, { error: "messages must contain at least one email message." });
+        return;
+      }
+      const foundation = await defaultCueFoundationStore.read();
+      let records;
+      try {
+        records = messages.map(message => adaptEmailMessageToIntakeRecord(message, {
+          connectorName: String(body.connectorName || "gmail-operational-intake").trim(),
+          connectorVersion: String(body.connectorVersion || "v1").trim(),
+          provider: String(body.provider || "gmail").trim(),
+          mailbox: String(body.mailbox || "").trim() || undefined,
+          tenantDomain: String(body.tenantDomain || "").trim() || undefined,
+          verifiedFlexDocuments: Object.values(foundation.flexDocumentRegistry || {}),
+        }));
+      } catch (error) {
+        sendJson(res, 400, { error: error?.message || String(error) });
+        return;
+      }
+      const result = await defaultCueFoundationStore.ingestSourceRecords(records, {
+        sourceType: "email",
+        connectorName: String(body.connectorName || "gmail-operational-intake").trim(),
+        connectorVersion: String(body.connectorVersion || "v1").trim(),
+        cursorBefore: body.cursorBefore ?? null,
+        cursorAfter: body.cursorAfter ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : {},
+      });
+      sendJson(res, result.ok ? 200 : 422, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/drive/ingest") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const files = Array.isArray(body.files) ? body.files : body.file ? [body.file] : [];
+      if (!files.length) {
+        sendJson(res, 400, { error: "files must contain at least one Drive file." });
+        return;
+      }
+      const foundation = await defaultCueFoundationStore.read();
+      let records;
+      try {
+        records = files.map(file => adaptDriveFileToIntakeRecord(file, {
+          connectorName: String(body.connectorName || "google-drive-operational-intake").trim(),
+          connectorVersion: String(body.connectorVersion || "v1").trim(),
+          visibility: String(body.visibility || "").trim() || undefined,
+          verifiedFlexDocuments: Object.values(foundation.flexDocumentRegistry || {}),
+        }));
+      } catch (error) {
+        sendJson(res, 400, { error: error?.message || String(error) });
+        return;
+      }
+      const result = await defaultCueFoundationStore.ingestSourceRecords(records, {
+        sourceType: "drive",
+        connectorName: String(body.connectorName || "google-drive-operational-intake").trim(),
+        connectorVersion: String(body.connectorVersion || "v1").trim(),
+        cursorBefore: body.cursorBefore ?? null,
+        cursorAfter: body.cursorAfter ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : {},
+      });
+      sendJson(res, result.ok ? 200 : 422, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/active-show-index/ingest") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const rows = Array.isArray(body.rows) ? body.rows : body.row ? [body.row] : [];
+      if (!rows.length) {
+        sendJson(res, 400, { error: "rows must contain at least one Active Show Index row." });
+        return;
+      }
+      const adapterOptions = {
+        sheetId: String(body.sheetId || "active-show-index").trim(),
+        sheetName: String(body.sheetName || "Active Show Index").trim(),
+        sourceUrl: String(body.sourceUrl || "").trim() || undefined,
+        revisionId: String(body.revisionId || "").trim() || undefined,
+        visibility: String(body.visibility || "").trim() || undefined,
+        connectorVersion: String(body.connectorVersion || "v1").trim(),
+      };
+      let batch;
+      try {
+        batch = buildActiveShowIndexBatch(rows, adapterOptions);
+      } catch (error) {
+        sendJson(res, 400, { error: error?.message || String(error) });
+        return;
+      }
+      const registry = await defaultCueFoundationStore.syncCanonicalShowRegistry(batch.shows, {
+        source: "active-show-index",
+        sheetId: adapterOptions.sheetId,
+        sheetName: adapterOptions.sheetName,
+      });
+      const intake = await defaultCueFoundationStore.ingestSourceRecords(batch.records, {
+        sourceType: "drive",
+        connectorName: "active-show-index",
+        connectorVersion: adapterOptions.connectorVersion,
+        cursorBefore: body.cursorBefore ?? null,
+        cursorAfter: body.cursorAfter ?? body.revisionId ?? null,
+        metadata: {
+          ...(body.metadata && typeof body.metadata === "object" ? body.metadata : {}),
+          sheetId: adapterOptions.sheetId,
+          sheetName: adapterOptions.sheetName,
+        },
+      });
+      sendJson(res, intake.ok ? 200 : 422, { ok: intake.ok, registry, intake });
       return;
     }
 

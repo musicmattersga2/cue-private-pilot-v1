@@ -66,12 +66,103 @@ Connector runs and their counts are available at:
 
 `GET /api/foundation/connector-runs`
 
+## Provider adapters
+
+The generic endpoint remains available for native CUE modules and future
+connectors. Email, Drive, and the Active Show Index also have typed adapter
+endpoints so provider payloads do not leak into the canonical schema:
+
+- `POST /api/foundation/email/ingest` accepts `messages` (or one `message`).
+- `POST /api/foundation/drive/ingest` accepts `files` (or one `file`).
+- `POST /api/foundation/active-show-index/ingest` accepts `rows` (or one
+  `row`) plus `sheetId`, `sheetName`, and connector cursor metadata.
+
+The adapters are transport-neutral. They expect an authorized Gmail or Drive
+sync process to retrieve provider data and then normalize it; they do not own
+OAuth credentials or make provider API calls themselves.
+
+### Email example
+
+```json
+{
+  "cursorBefore": "history-100",
+  "cursorAfter": "history-101",
+  "messages": [
+    {
+      "id": "gmail-message-id",
+      "threadId": "gmail-thread-id",
+      "historyId": "101",
+      "subject": "LiteFlair trucking update",
+      "text": "Quote 26-1790 needs another truck.",
+      "from": { "email": "pm@example.com" },
+      "internalDate": "1784000000000",
+      "permalink": "https://mail.google.com/..."
+    }
+  ]
+}
+```
+
+### Drive example
+
+```json
+{
+  "cursorAfter": "drive-change-token",
+  "files": [
+    {
+      "id": "drive-file-id",
+      "headRevisionId": "revision-id",
+      "name": "Warehouse checklist",
+      "mimeType": "application/vnd.google-apps.document",
+      "modifiedTime": "2026-07-14T01:00:00Z",
+      "webViewLink": "https://drive.google.com/...",
+      "extractedText": "Dock two opens at 8am."
+    }
+  ]
+}
+```
+
+### Active Show Index example
+
+```json
+{
+  "sheetId": "google-sheet-id",
+  "sheetName": "Active Shows",
+  "revisionId": "sheet-revision",
+  "rows": [
+    {
+      "showId": "liteflair-shoot",
+      "showName": "LiteFlair Shoot",
+      "rowNumber": 17,
+      "client": "LiteFlair",
+      "venue": "Studio A",
+      "keyDocs": "Primary quote 26-1790",
+      "primaryFlexDocument": {
+        "documentNumber": "26-1790",
+        "elementId": "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
+        "documentType": "quote",
+        "role": "primary_show_quote",
+        "verified": true
+      }
+    }
+  ]
+}
+```
+
+The Active Show Index endpoint first refreshes the canonical show registry,
+then records each row as immutable source evidence. Email and general Drive
+files may reuse a verified FLEX-to-show mapping, but they never attach from a
+show name alone. Unmatched evidence remains in `needs_match`; company-level
+evidence without a show reference is routed without creating a fake show task.
+
 ## Lifecycle guarantees
 
 - Exact connector replays are deduplicated by source type, external ID, and
   content hash.
 - Material edits create a new immutable Source Record with
   `supersedesSourceRecordId` pointing to the previous revision.
+- A material edit also supersedes the prior active Intake Item and any still-
+  proposed updates derived from it. Historical evidence remains queryable but
+  is excluded from current operational counts by default.
 - Connector cursors advance only after the batch is persisted.
 - Invalid records are reported on the connector run; valid records in the same
   batch are retained and the run is marked `partial`.

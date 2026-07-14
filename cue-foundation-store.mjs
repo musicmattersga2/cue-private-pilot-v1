@@ -190,7 +190,7 @@ export function createCueFoundationStore(options = {}) {
       const startedAt = options.startedAt || now();
       const connectorName = cleanText(options.connectorName || "shared-intake");
       const runId = connectorRunId(connectorName, startedAt, options.cursorBefore || null);
-      const counts = { received: 0, created: 0, deduplicated: 0, superseded: 0, intakeCreated: 0, matched: 0, needsMatch: 0, routed: 0, failed: 0 };
+      const counts = { received: 0, created: 0, deduplicated: 0, superseded: 0, intakeCreated: 0, intakeSuperseded: 0, matched: 0, needsMatch: 0, routed: 0, failed: 0 };
       const errors = [];
       db.connectorRuns[runId] = {
         id: runId,
@@ -231,6 +231,9 @@ export function createCueFoundationStore(options = {}) {
           counts.created += 1;
 
           const intakeId = id("intake", sourceRecord.id);
+          const previousIntake = revisions[0]
+            ? Object.values(db.intakeItems).find(item => item.sourceRecordId === revisions[0].id)
+            : null;
           const resolved = resolveConnectorShow(db, intakeSeed);
           const requiresShowMatch = intakeSeed.requiresShowMatch;
           const status = resolved ? "matched" : requiresShowMatch ? "needs_match" : "routed";
@@ -256,9 +259,22 @@ export function createCueFoundationStore(options = {}) {
             connectorName: sourceRecord.connectorName,
             connectorRunId: runId,
             intakeMetadata: intakeSeed.metadata,
+            supersedesIntakeItemId: previousIntake?.id || null,
             createdAt: now(),
             updatedAt: now(),
           };
+          if (previousIntake && previousIntake.status !== "superseded") {
+            previousIntake.status = "superseded";
+            previousIntake.supersededByIntakeItemId = intakeId;
+            previousIntake.updatedAt = now();
+            counts.intakeSuperseded += 1;
+            for (const proposal of Object.values(db.proposedUpdates)) {
+              if (proposal.intakeItemId !== previousIntake.id || proposal.status !== "proposed") continue;
+              proposal.status = "superseded";
+              proposal.supersededByIntakeItemId = intakeId;
+              proposal.updatedAt = now();
+            }
+          }
           counts.intakeCreated += 1;
           if (status === "matched") counts.matched += 1;
           else if (status === "needs_match") counts.needsMatch += 1;
@@ -623,17 +639,17 @@ export function createCueFoundationStore(options = {}) {
         .map(card => ({ ...card, intake: db.intakeItems[card.intakeItemId] || null, sourceRecord: db.sourceRecords[card.sourceRecordId] || null, matchCandidates: Object.values(db.matchCandidates).filter(x => x.intakeItemId === card.intakeItemId).sort((a,b) => b.score - a.score).slice(0,5) }))
         .sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     },
-    listIntakeItems: async ({ status = null, limit = 200 } = {}) => {
+    listIntakeItems: async ({ status = null, limit = 200, includeSuperseded = false } = {}) => {
       const db = readFile(filePath);
       return Object.values(db.intakeItems)
-        .filter(x => !status || x.status === status)
+        .filter(x => (includeSuperseded || status === "superseded" || x.status !== "superseded") && (!status || x.status === status))
         .map(item => ({ ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null }))
         .sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
         .slice(0, Math.max(1, Math.min(Number(limit) || 200, 500)));
     },
     getSummary: async () => {
       const db = readFile(filePath);
-      const intake = Object.values(db.intakeItems);
+      const intake = Object.values(db.intakeItems).filter(item => item.status !== "superseded");
       const cards = Object.values(db.decisionCards);
       const count = (items, predicate) => items.filter(predicate).length;
       return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), candidateSignals: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), routedEvidence: count(intake,x=>x.status==="routed"), evidenceOnly: count(intake,x=>!cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"&&x.cardType!=="show_match_review"), matchDecisions: count(cards,x=>x.status==="open"&&x.cardType==="show_match_review"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
