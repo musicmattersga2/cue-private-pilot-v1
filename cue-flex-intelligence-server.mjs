@@ -8980,6 +8980,35 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/foundation/source-records/ingest") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const records = Array.isArray(body.records) ? body.records : body.record ? [body.record] : [];
+      if (!records.length) {
+        sendJson(res, 400, { error: "records must contain at least one connector record." });
+        return;
+      }
+      const result = await defaultCueFoundationStore.ingestSourceRecords(records, {
+        sourceType: String(body.sourceType || "").trim() || undefined,
+        connectorName: String(body.connectorName || "shared-intake").trim(),
+        connectorVersion: String(body.connectorVersion || "v1").trim(),
+        cursorBefore: body.cursorBefore ?? null,
+        cursorAfter: body.cursorAfter ?? null,
+        metadata: body.metadata && typeof body.metadata === "object" ? body.metadata : {},
+      });
+      sendJson(res, result.ok ? 200 : 422, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/connector-runs") {
+      const connectorName = String(url.searchParams.get("connectorName") || "").trim() || null;
+      const status = String(url.searchParams.get("status") || "").trim() || null;
+      const limit = Number(url.searchParams.get("limit") || 100);
+      const items = await defaultCueFoundationStore.listConnectorRuns({ connectorName, status, limit });
+      sendJson(res, 200, { count: items.length, items });
+      return;
+    }
+
     if (req.method === "GET" && ["/api/flex/quote/open", "/api/flex/document/open"].includes(url.pathname)) {
       const documentNumber = String(url.searchParams.get("documentNumber") || "").trim();
       const intakeItemId = String(url.searchParams.get("intakeItemId") || "").trim();

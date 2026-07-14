@@ -11,6 +11,10 @@ import crypto from "crypto";
 import {
   buildCanonicalShowRegistry,
 } from "./canonical-show-registry.mjs";
+import {
+  connectorRunId,
+  normalizeConnectorRecord,
+} from "./cue-intake-contract.mjs";
 
 const DEFAULT_PATH = path.resolve(
   process.env.CUE_FOUNDATION_STORE_PATH || "./data/cue-foundation-v1.json"
@@ -41,7 +45,7 @@ function id(prefix, value) {
   return `${prefix}_${hash}`;
 }
 function blank() {
-  return { version: 1, updatedAt: now(), sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, showRegistry: {}, flexDocumentRegistry: {} };
+  return { version: 1, updatedAt: now(), connectorRuns: {}, connectorCursors: {}, sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, showRegistry: {}, flexDocumentRegistry: {} };
 }
 function readFile(filePath) {
   if (!fs.existsSync(filePath)) return blank();
@@ -147,6 +151,149 @@ export function createCueFoundationStore(options = {}) {
   const filePath = path.resolve(options.filePath || DEFAULT_PATH);
   const locked = (fn) => { const p = writeChain.then(fn, fn); writeChain = p.then(() => undefined, () => undefined); return p; };
 
+  function flexDocumentFor(db, ref = {}) {
+    const elementId = cleanText(ref.elementId || "").toLowerCase();
+    if (elementId && db.flexDocumentRegistry?.[elementId]) return db.flexDocumentRegistry[elementId];
+    if (!ref.verified || !ref.documentNumber) return null;
+    const matches = Object.values(db.flexDocumentRegistry || {}).filter(document =>
+      String(document.documentNumber || "") === String(ref.documentNumber)
+      && (!ref.documentType || ref.documentType === "unknown" || document.documentType === ref.documentType)
+      && document.elementId
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function resolveConnectorShow(db, intake = {}) {
+    if (intake.canonicalShowId && db.showRegistry?.[intake.canonicalShowId]) {
+      return { showId: intake.canonicalShowId, reason: "Explicit canonical show ID", confidence: 100 };
+    }
+    const candidates = [];
+    for (const ref of intake.flexDocumentRefs || []) {
+      const document = flexDocumentFor(db, ref);
+      for (const showId of document?.showIds || []) {
+        if (db.showRegistry?.[showId]) candidates.push({ showId, document, ref });
+      }
+    }
+    const showIds = [...new Set(candidates.map(candidate => candidate.showId))];
+    if (showIds.length !== 1) return null;
+    const match = candidates.find(candidate => candidate.showId === showIds[0]);
+    return {
+      showId: showIds[0],
+      reason: `Verified FLEX ${match.document.documentType || "document"}: ${match.document.documentNumber || match.document.elementId}`,
+      confidence: 100,
+    };
+  }
+
+  async function ingestSourceRecords(records = [], options = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const startedAt = options.startedAt || now();
+      const connectorName = cleanText(options.connectorName || "shared-intake");
+      const runId = connectorRunId(connectorName, startedAt, options.cursorBefore || null);
+      const counts = { received: 0, created: 0, deduplicated: 0, superseded: 0, intakeCreated: 0, matched: 0, needsMatch: 0, routed: 0, failed: 0 };
+      const errors = [];
+      db.connectorRuns[runId] = {
+        id: runId,
+        connectorName,
+        connectorVersion: cleanText(options.connectorVersion || "v1"),
+        sourceType: cleanText(options.sourceType || "mixed") || "mixed",
+        status: "running",
+        cursorBefore: options.cursorBefore || null,
+        cursorAfter: null,
+        startedAt,
+        finishedAt: null,
+        counts,
+        errors,
+        metadata: options.metadata || {},
+      };
+      for (const input of records || []) {
+        counts.received += 1;
+        try {
+          const normalized = normalizeConnectorRecord(input, options);
+          const sourceRecord = normalized.sourceRecord;
+          const intakeSeed = normalized.intake;
+          const exact = db.sourceRecords[sourceRecord.id];
+          if (exact) {
+            counts.deduplicated += 1;
+            continue;
+          }
+          const revisions = Object.values(db.sourceRecords).filter(record =>
+            record.sourceType === sourceRecord.sourceType
+            && record.externalId === sourceRecord.externalId
+          ).sort((a, b) => String(b.ingestedAt || "").localeCompare(String(a.ingestedAt || "")));
+          if (revisions[0]) {
+            sourceRecord.supersedesSourceRecordId = revisions[0].id;
+            counts.superseded += 1;
+          } else {
+            sourceRecord.supersedesSourceRecordId = null;
+          }
+          db.sourceRecords[sourceRecord.id] = sourceRecord;
+          counts.created += 1;
+
+          const intakeId = id("intake", sourceRecord.id);
+          const resolved = resolveConnectorShow(db, intakeSeed);
+          const requiresShowMatch = intakeSeed.requiresShowMatch;
+          const status = resolved ? "matched" : requiresShowMatch ? "needs_match" : "routed";
+          const flexDocumentNumbers = [...new Set((intakeSeed.flexDocumentRefs || []).map(ref => ref.documentNumber).filter(Boolean))];
+          db.intakeItems[intakeId] = {
+            id: intakeId,
+            sourceRecordId: sourceRecord.id,
+            status,
+            category: intakeSeed.category,
+            scope: intakeSeed.scope,
+            urgency: intakeSeed.urgency,
+            impact: intakeSeed.impact,
+            summary: intakeSeed.summary,
+            matchedShowId: resolved?.showId || null,
+            candidateShowId: resolved ? null : intakeSeed.candidateShowId,
+            matchedShowName: resolved ? db.showRegistry[resolved.showId]?.name || null : intakeSeed.showNameHint,
+            matchConfidence: resolved?.confidence || null,
+            matchReasons: resolved ? [resolved.reason] : intakeSeed.showNameHint ? [`Unverified show hint: ${intakeSeed.showNameHint}`] : [],
+            flexDocumentNumbers,
+            primaryFlexDocumentNumber: (intakeSeed.flexDocumentRefs || []).find(ref => ref.role === "primary_show_quote" && flexDocumentFor(db, ref))?.documentNumber || null,
+            flexDocumentRefs: intakeSeed.flexDocumentRefs || [],
+            sourceMentionedFlexDocuments: (intakeSeed.flexDocumentRefs || []).filter(ref => ref.role === "mentioned_source"),
+            connectorName: sourceRecord.connectorName,
+            connectorRunId: runId,
+            intakeMetadata: intakeSeed.metadata,
+            createdAt: now(),
+            updatedAt: now(),
+          };
+          counts.intakeCreated += 1;
+          if (status === "matched") counts.matched += 1;
+          else if (status === "needs_match") counts.needsMatch += 1;
+          else counts.routed += 1;
+
+          for (const [index, proposed] of (intakeSeed.proposedUpdates || []).entries()) {
+            const proposedId = id("proposal", `${intakeId}:${index}:${JSON.stringify(proposed)}`);
+            db.proposedUpdates[proposedId] = {
+              id: proposedId,
+              intakeItemId: intakeId,
+              showId: resolved?.showId || null,
+              status: "proposed",
+              ...proposed,
+              createdAt: now(),
+              updatedAt: now(),
+            };
+          }
+        } catch (error) {
+          counts.failed += 1;
+          errors.push({ message: error?.message || String(error), externalId: input?.externalId || null });
+        }
+      }
+      const finishedAt = now();
+      const run = db.connectorRuns[runId];
+      run.status = counts.failed ? (counts.created || counts.deduplicated ? "partial" : "failed") : "completed";
+      run.cursorAfter = options.cursorAfter ?? options.cursorBefore ?? null;
+      run.finishedAt = finishedAt;
+      if (run.cursorAfter !== null) {
+        db.connectorCursors[connectorName] = { connectorName, cursor: run.cursorAfter, connectorRunId: runId, updatedAt: finishedAt };
+      }
+      writeFile(filePath, db);
+      return { ok: run.status !== "failed", connectorRun: run, ...counts };
+    });
+  }
+
   async function syncCanonicalShowRegistry(shows = [], metadata = {}) {
     return locked(async () => {
       const db = readFile(filePath);
@@ -189,15 +336,25 @@ export function createCueFoundationStore(options = {}) {
         const resolveMentions = value => cleanText(value).replace(/<@([A-Z0-9]+)>/gi, (_, userId) => `@${mentionUsers[userId]?.displayName || mentionUsers[userId]?.realName || "Slack user"}`);
         const cleanedText = resolveMentions(message.text);
         const cleanedSummary = resolveMentions(message.operationalClassification?.summary || message.text);
-        const sourceRecord = {
-          id: sourceId, sourceType: "slack", externalId: message.messageKey,
+        const { sourceRecord } = normalizeConnectorRecord({
+          sourceType: "slack",
+          externalId: message.messageKey,
           externalParentId: message.threadTs ? `${message.channelId}:${message.threadTs}` : null,
-          externalRevisionId: message.editedTs || null, sourceUrl: message.permalink || null,
-          authorExternalId: message.userId || null, observedAt: message.timestampIso || null,
-          ingestedAt: message.ingestedAt || now(), contentHash: message.contentHash,
-          normalizedText: cleanedText, connectorVersion: "slack-operational-signals-v1",
+          externalRevisionId: message.editedTs || null,
+          sourceUrl: message.permalink || null,
+          authorExternalId: message.userId || null,
+          observedAt: message.timestampIso || null,
+          ingestedAt: message.ingestedAt || now(),
+          contentHash: message.contentHash,
+          normalizedText: cleanedText,
+          connectorName: "slack-operational-signals",
+          connectorVersion: "slack-operational-signals-v1",
+          permissionsMetadata: { channelId: message.channelId, channelName: message.channelName },
           payload: { channelId: message.channelId, channelName: message.channelName, authorName: message.authorName, classification: message.operationalClassification, entities: message.extractedEntities },
-        };
+        });
+        // Preserve the long-standing deterministic ID during the compatibility
+        // migration. The shared contract intentionally uses the same formula.
+        sourceRecord.id = sourceId;
         if (db.sourceRecords[sourceId]) updated += 1; else created += 1;
         db.sourceRecords[sourceId] = sourceRecord;
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
@@ -449,6 +606,15 @@ export function createCueFoundationStore(options = {}) {
         || Object.values(db.flexDocumentRegistry || {}).find(document => String(document.documentNumber || "").toLowerCase() === lookup)
         || null;
     },
+    ingestSourceRecords,
+    listConnectorRuns: async ({ connectorName = null, status = null, limit = 100 } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.connectorRuns || {})
+        .filter(run => (!connectorName || run.connectorName === connectorName) && (!status || run.status === status))
+        .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 100, 500)));
+    },
+    getConnectorCursor: async (connectorName) => readFile(filePath).connectorCursors?.[cleanText(connectorName)] || null,
     syncSlackSnapshot,
     listDecisionCards: async ({ showId = null, status = null } = {}) => {
       const db = readFile(filePath);
