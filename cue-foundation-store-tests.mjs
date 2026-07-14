@@ -19,6 +19,16 @@ const second = await store.syncSlackSnapshot({ messages: { [message.messageKey]:
 assert.equal(second.sourceRecordCount, 1, "sync idempotent");
 const initialDb = await store.read();
 const initialIntakeId = Object.keys(initialDb.intakeItems)[0];
+const initialSourceRecord = Object.values(initialDb.sourceRecords)[0];
+const initialIntake = initialDb.intakeItems[initialIntakeId];
+assert.equal(initialSourceRecord.metadata.authorityRole, "operational_signal", "Slack source records are explicitly operational evidence");
+assert.equal(initialSourceRecord.metadata.canEstablishShow, false, "Slack source records cannot establish show identity");
+assert.equal(initialIntake.authorityRole, "operational_signal", "Slack Intake retains its operational-only authority role");
+assert.equal(initialIntake.canEstablishShow, false, "Slack Intake cannot become a show-discovery trigger");
+await store.saveConnectorState("flex-confirmed-quote-snapshot", { baselineCompletedAt: "2026-07-14T00:00:00.000Z", confirmedQuotes: { one: { elementId: "one" } } });
+const savedSnapshot = await store.getConnectorState("flex-confirmed-quote-snapshot");
+assert.equal(savedSnapshot.baselineCompletedAt, "2026-07-14T00:00:00.000Z", "confirmed-quote baseline timestamp persists");
+assert.deepEqual(savedSnapshot.confirmedQuotes, { one: { elementId: "one" } }, "confirmed-quote UUID snapshot persists independently from connector telemetry");
 const linked = await store.linkFlexQuote({ documentNumber: "26-1421", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", documentType: "quote", role: "primary_show_quote", intakeItemId: initialIntakeId, actorId: "ops-manager", flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#fin-doc/85141d01-8008-4d29-8fc2-1749159e35e0/doc-view/ca6b072c-b122-11df-b8d5-00e08175e43e/header" });
 assert(linked.ok, "authorized operator can link a verified FLEX quote");
 assert.equal((await store.getLearnedFlexLink("26-1421")).elementId, "85141d01-8008-4d29-8fc2-1749159e35e0", "verified FLEX mapping is learned");
@@ -176,3 +186,53 @@ assert.match(qualityIntake.summary, /@Aaron/, "Slack mention resolves from cache
 await qualityStore.syncSlackSnapshot({ messages: { [birthday.messageKey]: birthday } });
 const reconciledDb = await qualityStore.read();
 assert.equal(Object.keys(reconciledDb.intakeItems).length, 0, "stale derived Intake is reconciled when no longer operational");
+
+const lifecycleCheckpointStore = createCueFoundationStore({ filePath: path.join(dir, "lifecycle-checkpoints.json") });
+await lifecycleCheckpointStore.checkpointConnectorRun({
+  connectorName: "flex-confirmed-quote-lifecycle",
+  connectorVersion: "test-v1",
+  sourceType: "flex",
+  status: "completed",
+  cursorBefore: "cursor-1",
+  cursorAfter: "cursor-2",
+  startedAt: "2026-07-14T01:00:00.000Z",
+  finishedAt: "2026-07-14T01:00:01.000Z",
+  counts: { received: 1, observed: 1 },
+});
+assert.equal(
+  (await lifecycleCheckpointStore.getConnectorCursor("flex-confirmed-quote-lifecycle")).cursor,
+  "cursor-2",
+  "a completed lifecycle page advances the durable connector cursor",
+);
+await lifecycleCheckpointStore.checkpointConnectorRun({
+  connectorName: "flex-confirmed-quote-lifecycle",
+  connectorVersion: "test-v1",
+  sourceType: "flex",
+  status: "partial",
+  cursorBefore: "cursor-2",
+  cursorAfter: "cursor-2",
+  startedAt: "2026-07-14T01:01:00.000Z",
+  finishedAt: "2026-07-14T01:01:01.000Z",
+  counts: { received: 2, observed: 1, failed: 1 },
+  errors: [{ message: "one candidate failed authoritative verification" }],
+});
+assert.equal(
+  (await lifecycleCheckpointStore.getConnectorCursor("flex-confirmed-quote-lifecycle")).cursor,
+  "cursor-2",
+  "a partial lifecycle page retains the previous cursor for safe replay",
+);
+await lifecycleCheckpointStore.checkpointConnectorRun({
+  connectorName: "flex-confirmed-quote-lifecycle",
+  connectorVersion: "test-v1",
+  sourceType: "flex",
+  status: "unavailable",
+  cursorBefore: "cursor-2",
+  cursorAfter: "cursor-3",
+  startedAt: "2026-07-14T01:02:00.000Z",
+  finishedAt: "2026-07-14T01:02:01.000Z",
+});
+assert.equal(
+  (await lifecycleCheckpointStore.getConnectorCursor("flex-confirmed-quote-lifecycle")).cursor,
+  "cursor-2",
+  "an unavailable lifecycle endpoint never advances the durable cursor",
+);

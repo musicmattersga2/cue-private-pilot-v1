@@ -15,6 +15,11 @@ import {
   connectorRunId,
   normalizeConnectorRecord,
 } from "./cue-intake-contract.mjs";
+import {
+  buildProvisionalShowFromConfirmedQuote,
+  confirmedQuoteMatchesShow,
+  normalizeConfirmedQuoteObservation,
+} from "./flex-confirmed-quote.mjs";
 
 const DEFAULT_PATH = path.resolve(
   process.env.CUE_FOUNDATION_STORE_PATH || "./data/cue-foundation-v1.json"
@@ -45,7 +50,7 @@ function id(prefix, value) {
   return `${prefix}_${hash}`;
 }
 function blank() {
-  return { version: 1, updatedAt: now(), connectorRuns: {}, connectorCursors: {}, sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, showRegistry: {}, flexDocumentRegistry: {} };
+  return { version: 1, updatedAt: now(), connectorRuns: {}, connectorCursors: {}, connectorState: {}, sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, flexQuoteStatusObservations: {}, showIdRedirects: {}, showRegistry: {}, flexDocumentRegistry: {} };
 }
 function readFile(filePath) {
   if (!fs.existsSync(filePath)) return blank();
@@ -310,19 +315,363 @@ export function createCueFoundationStore(options = {}) {
     });
   }
 
+  async function checkpointConnectorRun(input = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const startedAt = input.startedAt || now();
+      const finishedAt = input.finishedAt || now();
+      const connectorName = cleanText(input.connectorName || "shared-intake");
+      const cursorBefore = input.cursorBefore ?? null;
+      const cursorAfter = input.cursorAfter ?? cursorBefore;
+      const runId = connectorRunId(connectorName, startedAt, cursorBefore);
+      const status = ["completed", "partial", "failed", "unavailable", "skipped"].includes(input.status)
+        ? input.status
+        : "completed";
+      db.connectorRuns[runId] = {
+        id: runId,
+        connectorName,
+        connectorVersion: cleanText(input.connectorVersion || "v1"),
+        sourceType: cleanText(input.sourceType || "flex") || "flex",
+        status,
+        cursorBefore,
+        cursorAfter,
+        startedAt,
+        finishedAt,
+        counts: input.counts || {},
+        errors: input.errors || [],
+        metadata: input.metadata || {},
+      };
+      if (["completed", "partial"].includes(status) && cursorAfter !== null) {
+        db.connectorCursors[connectorName] = {
+          connectorName,
+          cursor: cursorAfter,
+          connectorRunId: runId,
+          updatedAt: finishedAt,
+        };
+      }
+      writeFile(filePath, db);
+      return { ok: !["failed"].includes(status), connectorRun: db.connectorRuns[runId] };
+    });
+  }
+
+  async function saveConnectorState(connectorName, state = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const normalizedName = cleanText(connectorName);
+      if (!normalizedName) throw new Error("Connector name is required.");
+      db.connectorState[normalizedName] = {
+        ...state,
+        connectorName: normalizedName,
+        updatedAt: now(),
+      };
+      writeFile(filePath, db);
+      return db.connectorState[normalizedName];
+    });
+  }
+
+  function migrateShowReferences(db, fromShowId, toShowId, timestamp) {
+    if (!fromShowId || !toShowId || fromShowId === toShowId) return;
+    db.showIdRedirects[fromShowId] = {
+      fromShowId,
+      toShowId,
+      reason: "active_show_index_reconciliation",
+      reconciledAt: timestamp,
+    };
+    for (const event of Object.values(db.events || {})) {
+      if (event.showId === fromShowId) event.showId = toShowId;
+    }
+    for (const intake of Object.values(db.intakeItems || {})) {
+      if (intake.matchedShowId === fromShowId) intake.matchedShowId = toShowId;
+      if (intake.candidateShowId === fromShowId) intake.candidateShowId = toShowId;
+      if (intake.canonicalShowId === fromShowId) intake.canonicalShowId = toShowId;
+    }
+    for (const candidate of Object.values(db.matchCandidates || {})) {
+      if (candidate.candidateEntityId === fromShowId) candidate.candidateEntityId = toShowId;
+    }
+    for (const update of Object.values(db.proposedUpdates || {})) {
+      if (update.showId === fromShowId) update.showId = toShowId;
+    }
+    for (const card of Object.values(db.decisionCards || {})) {
+      if (card.showId === fromShowId) card.showId = toShowId;
+      if (card.candidateShowId === fromShowId) card.candidateShowId = toShowId;
+      if (card.cardType === "show_onboarding" && card.showId === toShowId) {
+        if (card.status === "open") card.status = "decided";
+        card.resolution = "active_show_index_reconciled";
+        card.updatedAt = timestamp;
+      }
+    }
+    for (const document of Object.values(db.flexDocumentRegistry || {})) {
+      document.showIds = [...new Set((document.showIds || []).map(showId => showId === fromShowId ? toShowId : showId))];
+    }
+    const oldState = db.showState[fromShowId];
+    if (oldState) {
+      db.showState[toShowId] = { ...oldState, showId: toShowId, projectedAt: timestamp };
+      delete db.showState[fromShowId];
+    }
+    const oldReadiness = db.readiness[fromShowId];
+    if (oldReadiness) {
+      db.readiness[toShowId] = {
+        ...oldReadiness,
+        showId: toShowId,
+        milestoneRollup: {
+          ...(oldReadiness.milestoneRollup || {}),
+          quote_confirmed: { status: "ready" },
+          active_show_index: { status: "ready" },
+        },
+        evaluatedAt: timestamp,
+      };
+      delete db.readiness[fromShowId];
+    }
+  }
+
+  async function observeFlexQuoteStatus(input = {}, options = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      let observation;
+      try {
+        observation = normalizeConfirmedQuoteObservation(input, options);
+      } catch (error) {
+        return { ok: false, status: 400, error: error?.message || String(error) };
+      }
+      const key = observation.elementId;
+      const previous = db.flexQuoteStatusObservations[key] || null;
+      const transitionId = cleanText(observation.sourceEventId || "") || null;
+      const confirmationEventIds = [...new Set([
+        ...(previous?.confirmationEventIds || []),
+        ...(observation.confirmed && transitionId ? [transitionId] : []),
+      ])];
+      const transitionAlreadyRecorded = Boolean(
+        observation.confirmed
+        && transitionId
+        && (previous?.confirmationEventIds || []).includes(transitionId)
+      );
+      const triggered = observation.confirmed
+        && !previous?.confirmationTriggeredAt
+        && !transitionAlreadyRecorded;
+      const confirmationTriggeredAt = previous?.confirmationTriggeredAt
+        || (triggered ? observation.changedAt || observation.observedAt : null);
+      db.flexQuoteStatusObservations[key] = {
+        ...previous,
+        ...observation,
+        previousStatus: previous?.status || null,
+        firstObservedAt: previous?.firstObservedAt || observation.observedAt,
+        lastObservedAt: observation.observedAt,
+        confirmationTriggeredAt,
+        confirmationEventIds,
+        latestConfirmationEventId: observation.confirmed
+          ? transitionId || previous?.latestConfirmationEventId || null
+          : previous?.latestConfirmationEventId || null,
+      };
+      if (!triggered) {
+        writeFile(filePath, db);
+        return {
+          ok: true,
+          triggered: false,
+          idempotent: Boolean(observation.confirmed && (confirmationTriggeredAt || transitionAlreadyRecorded)),
+          transitionRecorded: Boolean(observation.confirmed && transitionId && !transitionAlreadyRecorded),
+          observation: db.flexQuoteStatusObservations[key],
+          show: db.showRegistry[previous?.provisionalShowId || observation.provisionalShowId] || null,
+        };
+      }
+
+      const timestamp = confirmationTriggeredAt;
+      const provisionalShowId = observation.provisionalShowId;
+      const provisional = buildProvisionalShowFromConfirmedQuote(
+        observation,
+        db.showRegistry[provisionalShowId] || {}
+      );
+      db.showRegistry[provisionalShowId] = provisional;
+      db.flexDocumentRegistry[key] = {
+        ...(db.flexDocumentRegistry[key] || {}),
+        ...provisional.flex.primaryShowQuote,
+        key,
+        showIds: [...new Set([...(db.flexDocumentRegistry[key]?.showIds || []), provisionalShowId])],
+        lastSeenAt: observation.observedAt,
+      };
+
+      const confirmationIdentity = transitionId || timestamp;
+      const sourceId = id("src", `flex-confirmed:${observation.elementId}:${confirmationIdentity}`);
+      const intakeId = id("intake", sourceId);
+      const cardId = id("card", intakeId);
+      const eventId = id("event", `flex.quote.confirmed:${observation.elementId}:${confirmationIdentity}`);
+      db.sourceRecords[sourceId] = {
+        id: sourceId,
+        sourceType: "flex",
+        externalId: observation.sourceEventId || `${observation.elementId}:${timestamp}`,
+        sourceUrl: observation.metadata?.flexUrl || null,
+        capturedAt: observation.observedAt,
+        occurredAt: observation.changedAt || observation.observedAt,
+        author: { id: "flex", name: "FLEX" },
+        normalizedText: `FLEX quote ${observation.documentNumber} confirmed: ${observation.showName}`,
+        rawPayload: observation,
+        contentHash: id("hash", JSON.stringify(observation)),
+        metadata: { documentType: "quote", status: observation.status },
+      };
+      db.intakeItems[intakeId] = {
+        id: intakeId,
+        sourceRecordId: sourceId,
+        status: "matched",
+        category: "operations",
+        scope: "show_specific",
+        urgency: "normal",
+        impact: "material",
+        summary: `FLEX quote ${observation.documentNumber} was confirmed. Start show onboarding and readiness tracking.`,
+        matchedShowId: provisionalShowId,
+        matchedShowName: observation.showName,
+        primaryFlexDocumentNumber: observation.documentNumber,
+        flexDocumentNumbers: [observation.documentNumber],
+        flexDocumentRefs: [{ ...provisional.flex.primaryShowQuote }],
+        flexElementId: observation.elementId,
+        matchConfidence: 100,
+        matchReasons: ["Authoritative FLEX quote status transition"],
+        createdAt: observation.observedAt,
+        updatedAt: observation.observedAt,
+      };
+      db.decisionCards[cardId] = {
+        id: cardId,
+        intakeItemId: intakeId,
+        showId: provisionalShowId,
+        status: "open",
+        cardType: "show_onboarding",
+        domain: "operations",
+        headline: `New confirmed show: ${observation.showName} (${observation.documentNumber})`,
+        explanation: "FLEX confirmed this quote. CUE created the initial show-readiness object and is waiting for the Active Show Index to begin operational tracking.",
+        recommendation: "Confirm ownership, review initial readiness, and allow the Active Show Index to reconcile the operational record.",
+        urgency: "normal",
+        impact: "material",
+        confidence: "authoritative",
+        sourceRecordId: sourceId,
+        createdAt: observation.observedAt,
+        updatedAt: observation.observedAt,
+      };
+      db.events[eventId] = {
+        id: eventId,
+        eventType: "flex.quote.confirmed",
+        showId: provisionalShowId,
+        domain: "operations",
+        entityType: "flex_quote",
+        entityId: observation.elementId,
+        occurredAt: observation.changedAt || observation.observedAt,
+        effectiveAt: observation.changedAt || observation.observedAt,
+        recordedAt: observation.observedAt,
+        actorType: "system",
+        actorId: "system:flex-confirmation",
+        sourceType: observation.source,
+        sourceRecordId: sourceId,
+        intakeItemId: intakeId,
+        newValue: observation,
+        idempotencyKey: `flex.quote.confirmed:${observation.elementId}:${timestamp}`,
+      };
+      db.showState[provisionalShowId] = {
+        showId: provisionalShowId,
+        projectionName: "show_lifecycle",
+        lastEventId: eventId,
+        state: {
+          lifecycleStage: "awaiting_active_show_index",
+          confirmedQuote: provisional.flex.primaryShowQuote,
+          confirmedAt: timestamp,
+        },
+        projectedAt: observation.observedAt,
+      };
+      db.readiness[provisionalShowId] = {
+        showId: provisionalShowId,
+        overallStatus: "in_progress",
+        overallScore: 10,
+        domainRollup: {},
+        milestoneRollup: {
+          quote_confirmed: { status: "ready" },
+          active_show_index: { status: "not_started" },
+        },
+        blockers: [],
+        warnings: [cardId],
+        nextActions: [{ decisionCardId: cardId, headline: "Complete initial show onboarding" }],
+        rulesetVersion: "confirmed-quote-v1",
+        lastEventId: eventId,
+        evaluatedAt: observation.observedAt,
+      };
+      writeFile(filePath, db);
+      return {
+        ok: true,
+        triggered: true,
+        idempotent: false,
+        observation: db.flexQuoteStatusObservations[key],
+        show: provisional,
+        event: db.events[eventId],
+        readiness: db.readiness[provisionalShowId],
+      };
+    });
+  }
+
   async function syncCanonicalShowRegistry(shows = [], metadata = {}) {
     return locked(async () => {
       const db = readFile(filePath);
+      const timestamp = metadata.timestamp || now();
+      const reconciliations = [];
+      const existingForBuild = { ...(db.showRegistry || {}) };
+      for (const show of shows || []) {
+        const canonicalShowId = cleanText(show?.id || show?.showKey);
+        if (!canonicalShowId) continue;
+        const provisionalEntry = Object.entries(existingForBuild).find(([provisionalShowId, candidate]) =>
+          provisionalShowId !== canonicalShowId
+          && candidate?.lifecycle?.status === "provisional"
+          && confirmedQuoteMatchesShow(candidate, show)
+        );
+        if (!provisionalEntry) continue;
+        const [provisionalShowId, provisional] = provisionalEntry;
+        existingForBuild[canonicalShowId] = {
+          ...provisional,
+          ...(existingForBuild[canonicalShowId] || {}),
+          aliases: [...new Set([...(provisional.aliases || []), ...(existingForBuild[canonicalShowId]?.aliases || [])])],
+          flex: {
+            ...(provisional.flex || {}),
+            ...(existingForBuild[canonicalShowId]?.flex || {}),
+            documents: [
+              ...(provisional.flex?.documents || []),
+              ...(existingForBuild[canonicalShowId]?.flex?.documents || []),
+            ],
+          },
+        };
+        delete existingForBuild[provisionalShowId];
+        reconciliations.push({ provisionalShowId, canonicalShowId });
+      }
       const result = buildCanonicalShowRegistry(
         shows,
-        db.showRegistry || {},
+        existingForBuild,
         db.flexDocumentRegistry || {},
-        metadata
+        { ...metadata, timestamp }
       );
       db.showRegistry = result.showRegistry;
       db.flexDocumentRegistry = result.flexDocumentRegistry;
+      for (const reconciliation of reconciliations) {
+        migrateShowReferences(db, reconciliation.provisionalShowId, reconciliation.canonicalShowId, timestamp);
+        const eventId = id("event", `show.identity.reconciled:${reconciliation.provisionalShowId}:${reconciliation.canonicalShowId}`);
+        db.events[eventId] = {
+          id: eventId,
+          eventType: "show.identity.reconciled",
+          showId: reconciliation.canonicalShowId,
+          domain: "operations",
+          entityType: "show",
+          entityId: reconciliation.canonicalShowId,
+          occurredAt: timestamp,
+          effectiveAt: timestamp,
+          recordedAt: timestamp,
+          actorType: "system",
+          actorId: "system:active-show-index",
+          sourceType: metadata.source || "active_show_index",
+          newValue: reconciliation,
+          idempotencyKey: eventId,
+        };
+        if (db.showState[reconciliation.canonicalShowId]) {
+          db.showState[reconciliation.canonicalShowId].lastEventId = eventId;
+          db.showState[reconciliation.canonicalShowId].state = {
+            ...(db.showState[reconciliation.canonicalShowId].state || {}),
+            lifecycleStage: "active_show_index_tracking",
+            reconciledFromShowId: reconciliation.provisionalShowId,
+          };
+        }
+      }
       writeFile(filePath, db);
-      return { ok: true, ...result.summary, updatedAt: now() };
+      return { ok: true, ...result.summary, reconciled: reconciliations.length, reconciliations, updatedAt: timestamp };
     });
   }
 
@@ -373,6 +722,11 @@ export function createCueFoundationStore(options = {}) {
         sourceRecord.id = sourceId;
         if (db.sourceRecords[sourceId]) updated += 1; else created += 1;
         db.sourceRecords[sourceId] = sourceRecord;
+        db.sourceRecords[sourceId].metadata = {
+          ...(db.sourceRecords[sourceId].metadata || {}),
+          authorityRole: "operational_signal",
+          canEstablishShow: false,
+        };
         const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
         const candidateNeedsReview = match?.matchState === "needs_review";
         const learnedForIntake = Object.values(db.learnedFlexLinks || {}).filter((item) => (item.intakeItemIds || []).includes(intakeId) && item.source !== "flex_header_verification" && item.status !== "quarantined");
@@ -417,6 +771,8 @@ export function createCueFoundationStore(options = {}) {
           flexQuoteElements,
           matchConfidence: match?.score ?? null,
           matchReasons: match?.reasons || [], createdAt: db.intakeItems[intakeId]?.createdAt || now(), updatedAt: now(),
+          authorityRole: "operational_signal",
+          canEstablishShow: false,
         };
         for (const [rank, candidate] of (message.matches || []).entries()) {
           const candidateId = id("match", `${intakeId}:${candidate.showKey}`);
@@ -499,15 +855,25 @@ export function createCueFoundationStore(options = {}) {
       }
       let event = null;
       if (["accept_update","supporting_evidence","create_task","create_issue","create_risk","link_show","choose_another_show"].includes(input.action)) {
-        const eventId = id("event", decisionId); event = { id: eventId, eventType: input.action === "accept_update" ? `${card.domain}.signal.accepted` : `intake.${input.action}.recorded`, showId: card.showId, domain: card.domain, entityType: "intake_signal", entityId: card.intakeItemId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: "user", actorId: input.actorId, sourceType: "slack", sourceRecordId: card.sourceRecordId, intakeItemId: card.intakeItemId, decisionId, newValue: { action: input.action, parameters: input.parameters || {} }, idempotencyKey: decisionId };
+        const eventId = id("event", decisionId);
+        const sourceType = db.sourceRecords[card.sourceRecordId]?.sourceType || "system";
+        const onboardingReview = card.cardType === "show_onboarding" && input.action === "accept_update";
+        event = { id: eventId, eventType: onboardingReview ? "show.onboarding.reviewed" : input.action === "accept_update" ? `${card.domain}.signal.accepted` : `intake.${input.action}.recorded`, showId: card.showId, domain: card.domain, entityType: onboardingReview ? "show_lifecycle" : "intake_signal", entityId: onboardingReview ? card.showId : card.intakeItemId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: "user", actorId: input.actorId, sourceType, sourceRecordId: card.sourceRecordId, intakeItemId: card.intakeItemId, decisionId, newValue: { action: input.action, parameters: input.parameters || {} }, idempotencyKey: decisionId };
         db.events[eventId] = event;
       }
       if (card.showId) {
         const showEvents = Object.values(db.events).filter(x => x.showId === card.showId);
-        db.showState[card.showId] = { showId: card.showId, projectionName: "operational", lastEventId: event?.id || db.showState[card.showId]?.lastEventId || null, state: { acceptedSignalCount: showEvents.length, lastDecision: decision }, projectedAt: now() };
+        const previousShowState = db.showState[card.showId] || {};
+        const onboardingReview = card.cardType === "show_onboarding" && input.action === "accept_update";
+        db.showState[card.showId] = { ...previousShowState, showId: card.showId, projectionName: onboardingReview ? previousShowState.projectionName || "show_lifecycle" : "operational", lastEventId: event?.id || previousShowState.lastEventId || null, state: { ...(previousShowState.state || {}), acceptedSignalCount: showEvents.length, lastDecision: decision, ...(onboardingReview ? { onboardingReviewedAt: decision.decidedAt, onboardingReviewedBy: input.actorId } : {}) }, projectedAt: now() };
         const openCards = Object.values(db.decisionCards).filter(x => x.showId === card.showId && ["open","assigned","waiting","escalated"].includes(x.status));
-        const status = readinessStatusFor(openCards, showEvents);
-        db.readiness[card.showId] = { showId: card.showId, overallStatus: status, overallScore: status === "ready" ? 100 : status === "at_risk" ? 55 : status === "blocked" ? 20 : 70, domainRollup: { [card.domain]: { status, openDecisionCount: openCards.filter(x => x.domain === card.domain).length } }, milestoneRollup: { ready_to_dispatch: { status: card.domain === "trucking" ? status : "not_started" } }, blockers: openCards.filter(x => x.impact === "critical").map(x => x.id), warnings: openCards.filter(x => x.impact !== "critical").map(x => x.id), nextActions: openCards.map(x => ({ decisionCardId: x.id, headline: x.headline })), rulesetVersion: "pilot-v1", lastEventId: event?.id || null, evaluatedAt: now() };
+        if (onboardingReview) {
+          const previousReadiness = db.readiness[card.showId] || {};
+          db.readiness[card.showId] = { ...previousReadiness, showId: card.showId, overallStatus: "in_progress", overallScore: Math.max(20, Number(previousReadiness.overallScore || 0)), milestoneRollup: { ...(previousReadiness.milestoneRollup || {}), quote_confirmed: { status: "ready" }, active_show_index: previousReadiness.milestoneRollup?.active_show_index || { status: "not_started" }, onboarding_reviewed: { status: "ready" } }, blockers: openCards.filter(x => x.impact === "critical").map(x => x.id), warnings: openCards.filter(x => x.impact !== "critical").map(x => x.id), nextActions: openCards.map(x => ({ decisionCardId: x.id, headline: x.headline })), rulesetVersion: "confirmed-quote-v1", lastEventId: event?.id || previousReadiness.lastEventId || null, evaluatedAt: now() };
+        } else {
+          const status = readinessStatusFor(openCards, showEvents);
+          db.readiness[card.showId] = { showId: card.showId, overallStatus: status, overallScore: status === "ready" ? 100 : status === "at_risk" ? 55 : status === "blocked" ? 20 : 70, domainRollup: { [card.domain]: { status, openDecisionCount: openCards.filter(x => x.domain === card.domain).length } }, milestoneRollup: { ready_to_dispatch: { status: card.domain === "trucking" ? status : "not_started" } }, blockers: openCards.filter(x => x.impact === "critical").map(x => x.id), warnings: openCards.filter(x => x.impact !== "critical").map(x => x.id), nextActions: openCards.map(x => ({ decisionCardId: x.id, headline: x.headline })), rulesetVersion: "pilot-v1", lastEventId: event?.id || null, evaluatedAt: now() };
+        }
       }
       writeFile(filePath, db); return { ok: true, decision, event, currentShowState: db.showState[card.showId] || null, readiness: db.readiness[card.showId] || null };
     });
@@ -607,6 +973,13 @@ export function createCueFoundationStore(options = {}) {
   return {
     filePath,
     read: async () => readFile(filePath),
+    observeFlexQuoteStatus,
+    listFlexQuoteStatusObservations: async ({ confirmedOnly = false } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.flexQuoteStatusObservations || {})
+        .filter(observation => !confirmedOnly || observation.confirmationTriggeredAt)
+        .sort((a, b) => String(b.lastObservedAt || "").localeCompare(String(a.lastObservedAt || "")));
+    },
     syncCanonicalShowRegistry,
     listCanonicalShows: async ({ activeOnly = false } = {}) => {
       const db = readFile(filePath);
@@ -623,6 +996,9 @@ export function createCueFoundationStore(options = {}) {
         || null;
     },
     ingestSourceRecords,
+    checkpointConnectorRun,
+    getConnectorState: async (connectorName) => readFile(filePath).connectorState?.[cleanText(connectorName)] || null,
+    saveConnectorState,
     listConnectorRuns: async ({ connectorName = null, status = null, limit = 100 } = {}) => {
       const db = readFile(filePath);
       return Object.values(db.connectorRuns || {})

@@ -210,6 +210,18 @@ export function buildCanonicalShowRegistry(shows = [], existingShows = {}, exist
 
   for (const [showId, previous] of Object.entries(existingShows || {})) {
     if (seen.has(showId)) continue;
+    if (previous?.lifecycle?.status === "provisional") {
+      showRegistry[showId] = {
+        ...previous,
+        lifecycle: {
+          ...(previous.lifecycle || {}),
+          lastSeenAt: previous?.lifecycle?.lastSeenAt || timestamp,
+          inactiveAt: null,
+        },
+        updatedAt: previous.updatedAt || timestamp,
+      };
+      continue;
+    }
     showRegistry[showId] = {
       ...previous,
       lifecycle: {

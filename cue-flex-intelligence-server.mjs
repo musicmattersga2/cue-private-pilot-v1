@@ -27,6 +27,11 @@ import {
   buildActiveShowIndexBatch,
 } from "./cue-intake-evidence-adapters.mjs";
 import {
+  activeShowIndexRowsToObjects as parseActiveShowIndexRows,
+  mapActiveShowIndexAuthorityRow,
+  runSourceFirstIntakeSync,
+} from "./active-show-index-authority.mjs";
+import {
   buildFlexQuoteUrl,
   inferFlexDocumentType,
   isFlexElementId,
@@ -34,6 +39,21 @@ import {
   selectFlexDocumentCandidate,
   selectPrimaryShowQuote,
 } from "./flex-quote-link.mjs";
+import {
+  FLEX_LIFECYCLE_CONNECTOR_NAME,
+  FLEX_LIFECYCLE_REQUIRED_FIELDS,
+  flexLifecycleUnavailable,
+  runFlexLifecycleDiscovery,
+} from "./flex-lifecycle-discovery.mjs";
+import {
+  FLEX_CONFIRMED_QUOTE_SNAPSHOT_CONNECTOR,
+  FLEX_CONFIRMED_STATUS_ID,
+  FLEX_MMP_QUOTE_DEFINITION_ID,
+  FLEX_PEACHTREE_CORNERS_LOCATION_ID as FLEX_CONFIRMED_QUOTE_LOCATION_ID,
+  buildFlexConfirmedQuoteListUrl,
+  buildFlexStatusHistoryUrl,
+  runFlexConfirmedQuoteSnapshot,
+} from "./flex-confirmed-quote-snapshot.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -114,6 +134,10 @@ const FLEX_ROW_DATA_CODES = [
 const FLEX_HEADER_CODES = [
   "documentNumber",
   "name",
+  "status",
+  "statusId",
+  "workflowStatus",
+  "elementStatus",
   "clientId",
   "venueId",
   "plannedStartDate",
@@ -606,6 +630,10 @@ function buildShowContext(headerData, elementId) {
     definitionName: extractHeaderValue(headerData, "definitionName") || extractHeaderValue(headerData, "elementDefinitionName"),
     definitionId: extractHeaderValue(headerData, "definitionId") || extractHeaderValue(headerData, "elementDefinitionId"),
     showName: extractHeaderValue(headerData, "name"),
+    status: extractHeaderValue(headerData, "status")
+      || extractHeaderValue(headerData, "workflowStatus")
+      || extractHeaderValue(headerData, "elementStatus"),
+    statusId: extractHeaderValue(headerData, "statusId"),
     client: extractHeaderValue(headerData, "clientId"),
     venue: extractHeaderValue(headerData, "venueId"),
     plannedStartDate: extractHeaderValue(headerData, "plannedStartDate"),
@@ -848,6 +876,254 @@ function normalizeFlexElementTree(treeData) {
 
   walk(treeData, null);
   return nodes;
+}
+
+function getFlexLifecycleFeedConfig() {
+  const configuredPath = String(process.env.CUE_FLEX_LIFECYCLE_FEED_PATH || "").trim();
+  if (!configuredPath) return null;
+  const base = getFlexBaseUrl();
+  const url = new URL(configuredPath, `${base}/`);
+  const baseUrl = new URL(base);
+  if (url.origin !== baseUrl.origin) {
+    throw new Error("CUE_FLEX_LIFECYCLE_FEED_PATH must use the configured FLEX origin.");
+  }
+  return {
+    url,
+    cursorParam: String(process.env.CUE_FLEX_LIFECYCLE_CURSOR_PARAM || "cursor").trim(),
+    sinceParam: String(process.env.CUE_FLEX_LIFECYCLE_SINCE_PARAM || "updatedSince").trim(),
+    initialSince: String(process.env.CUE_FLEX_LIFECYCLE_INITIAL_SINCE || "").trim() || null,
+    limitParam: String(process.env.CUE_FLEX_LIFECYCLE_LIMIT_PARAM || "limit").trim(),
+    limit: Math.max(1, Math.min(Number(process.env.CUE_FLEX_LIFECYCLE_LIMIT || 100) || 100, 1000)),
+  };
+}
+
+function flexLifecycleFeedUrl(config, cursorBefore = null) {
+  const url = new URL(config.url);
+  url.searchParams.set("_dc", String(Date.now()));
+  if (cursorBefore && config.cursorParam) url.searchParams.set(config.cursorParam, String(cursorBefore));
+  else if (config.initialSince && config.sinceParam) url.searchParams.set(config.sinceParam, config.initialSince);
+  if (config.limitParam) url.searchParams.set(config.limitParam, String(config.limit));
+  return url;
+}
+
+async function verifyFlexLifecycleCandidate(candidate) {
+  const header = await fetchFlexHeaderData(candidate.elementId);
+  const context = buildShowContext(header.data, candidate.elementId);
+  let treeNode = null;
+  try {
+    const tree = await fetchFlexElementTree(candidate.elementId);
+    treeNode = normalizeFlexElementTree(tree.data).find(node =>
+      String(node.elementId || "").toLowerCase() === candidate.elementId
+    ) || null;
+  } catch {
+    // A strongly typed header/feed remains usable when a tenant omits tree access.
+  }
+  const classifiedTypes = [
+    inferFlexDocumentType(candidate.documentType, "unknown"),
+    inferFlexDocumentType(`${context.documentType || ""} ${context.definitionName || ""}`, "unknown"),
+    inferFlexDocumentType(`${treeNode?.type || ""} ${treeNode?.name || ""} ${treeNode?.domainId || ""}`, "unknown"),
+  ].filter(type => type !== "unknown");
+  if (classifiedTypes.some(type => type !== "quote")) {
+    return { ok: false, reason: `non_quote_document:${classifiedTypes.join(",")}` };
+  }
+  if (!classifiedTypes.includes("quote")) {
+    return { ok: false, reason: "document_type_not_authoritatively_verified" };
+  }
+  const candidateNumber = String(candidate.documentNumber || "").trim().toUpperCase();
+  const headerNumber = String(context.documentNumber || "").trim().toUpperCase();
+  if (candidateNumber && headerNumber && candidateNumber !== headerNumber) {
+    return { ok: false, reason: `document_number_conflict:${candidateNumber}:${headerNumber}` };
+  }
+  const documentNumber = headerNumber || candidateNumber;
+  const status = candidate.status || context.status;
+  const changedAt = candidate.changedAt;
+  const showName = context.showName || candidate.showName;
+  if (!documentNumber) return { ok: false, reason: "missing_document_number" };
+  if (!status) return { ok: false, reason: "missing_lifecycle_status" };
+  if (!changedAt) return { ok: false, reason: "missing_status_change_timestamp" };
+  if (!showName) return { ok: false, reason: "missing_show_name" };
+  return {
+    ok: true,
+    observation: {
+      ...candidate,
+      ...context,
+      elementId: candidate.elementId,
+      documentNumber,
+      documentType: "quote",
+      status,
+      changedAt,
+      showName,
+      client: context.client || candidate.client,
+      venue: context.venue || candidate.venue,
+      plannedStartDate: context.plannedStartDate || candidate.plannedStartDate,
+      plannedEndDate: context.plannedEndDate || candidate.plannedEndDate,
+      source: "flex_lifecycle_feed",
+      sourceEventId: candidate.sourceEventId || `${candidate.elementId}:${status}:${changedAt}`,
+      metadata: {
+        statusId: context.statusId,
+        parentElementId: treeNode?.parentId || candidate.parentElementId || null,
+      },
+    },
+  };
+}
+
+async function discoverConfiguredFlexQuoteLifecycle(options = {}) {
+  let config = null;
+  try {
+    config = getFlexLifecycleFeedConfig();
+  } catch (error) {
+    return {
+      ...flexLifecycleUnavailable("endpoint_configuration_invalid", {
+        error: error?.message || String(error),
+      }),
+      ok: false,
+      available: true,
+      configured: true,
+    };
+  }
+  const cursorRecord = await defaultCueFoundationStore.getConnectorCursor(FLEX_LIFECYCLE_CONNECTOR_NAME);
+  const cursorBefore = options.cursorBefore ?? cursorRecord?.cursor ?? null;
+  return runFlexLifecycleDiscovery({
+    connectorName: FLEX_LIFECYCLE_CONNECTOR_NAME,
+    connectorVersion: "live-flex-v1",
+    endpointConfigured: Boolean(config),
+    endpoint: config?.url?.pathname || null,
+    cursorBefore,
+    fetchFeed: config ? async cursor => fetchJsonFromFlex(flexLifecycleFeedUrl(config, cursor)) : null,
+    verifyCandidate: verifyFlexLifecycleCandidate,
+    observe: observation => defaultCueFoundationStore.observeFlexQuoteStatus(observation, {
+      confirmedStatuses: options.confirmedStatuses || [],
+    }),
+    checkpoint: checkpoint => defaultCueFoundationStore.checkpointConnectorRun(checkpoint),
+  });
+}
+
+function getFlexConfirmedQuoteSnapshotConfig() {
+  return {
+    baseUrl: getFlexBaseUrl(),
+    definitionId: String(process.env.CUE_FLEX_MMP_QUOTE_DEFINITION_ID || FLEX_MMP_QUOTE_DEFINITION_ID).trim(),
+    confirmedStatusId: String(process.env.CUE_FLEX_CONFIRMED_STATUS_ID || FLEX_CONFIRMED_STATUS_ID).trim(),
+    locationId: String(process.env.CUE_FLEX_LOCATION_ID || FLEX_CONFIRMED_QUOTE_LOCATION_ID).trim(),
+    pageSize: Math.max(1, Math.min(Number(process.env.CUE_FLEX_CONFIRMED_PAGE_SIZE || 50) || 50, 500)),
+    lookbackDays: Math.max(0, Number(process.env.CUE_FLEX_BASELINE_LOOKBACK_DAYS || 30) || 30),
+  };
+}
+
+function confirmedQuoteRegistryDisposition(quote, activeShows = []) {
+  const elementId = String(quote?.elementId || "").trim().toLowerCase();
+  const documentNumber = String(quote?.documentNumber || "").trim().toUpperCase();
+  for (const show of activeShows) {
+    const primary = show?.flex?.primaryShowQuote || null;
+    const primaryMatches = Boolean(primary) && (
+      (elementId && String(primary.elementId || "").trim().toLowerCase() === elementId)
+      || (documentNumber && String(primary.documentNumber || "").trim().toUpperCase() === documentNumber)
+    );
+    if (primaryMatches) {
+      return {
+        action: "observe",
+        observation: {
+          provisionalShowId: show.id,
+          metadata: {
+            canonicalShowId: show.id,
+            flexAuthorityRole: "primary_show_quote",
+            registryHierarchyStatus: show.flex?.hierarchyStatus || null,
+          },
+        },
+      };
+    }
+    const related = (show?.flex?.documents || []).find(document => {
+      const matches = (elementId && String(document?.elementId || "").trim().toLowerCase() === elementId)
+        || (documentNumber && String(document?.documentNumber || "").trim().toUpperCase() === documentNumber);
+      return matches && document?.role !== "primary_show_quote";
+    });
+    if (related) {
+      return {
+        action: "defer",
+        reason: "known_related_flex_document_attaches_to_parent_show",
+        metadata: {
+          canonicalShowId: show.id,
+          canonicalShowName: show.name,
+          primaryShowQuote: primary || null,
+          relatedDocumentRole: related.role || "related",
+        },
+      };
+    }
+  }
+  // This is a verified tenant list filtered to the Confirmed MMP Quote
+  // definition. Unknown rows create provisional show awareness. The Active
+  // Show Index then reconciles the operational identity and hierarchy.
+  return {
+    action: "observe",
+    observation: {
+      metadata: {
+        flexAuthorityRole: "confirmed_mmp_quote_candidate",
+        registryHierarchyStatus: "awaiting_active_show_index_reconciliation",
+      },
+    },
+  };
+}
+
+async function discoverFlexConfirmedQuoteSnapshot(options = {}) {
+  let config;
+  try {
+    config = getFlexConfirmedQuoteSnapshotConfig();
+  } catch (error) {
+    return {
+      ok: false,
+      available: false,
+      configured: false,
+      status: "flex_connection_not_configured",
+      error: error?.message || String(error),
+    };
+  }
+  const foundation = await defaultCueFoundationStore.read();
+  const activeShows = Object.values(foundation.showRegistry || {}).filter(show =>
+    show.lifecycle?.status === "active" || show.activeShowsIndex || show.source?.activeShowsIndex
+  );
+  const activeElementIds = new Set();
+  const activeDocumentNumbers = new Set();
+  for (const show of activeShows) {
+    for (const document of show.flex?.documents || []) {
+      if (document.elementId) activeElementIds.add(String(document.elementId).toLowerCase());
+      if (document.documentNumber) activeDocumentNumbers.add(String(document.documentNumber).toUpperCase());
+    }
+  }
+  return runFlexConfirmedQuoteSnapshot({
+    connectorName: FLEX_CONFIRMED_QUOTE_SNAPSHOT_CONNECTOR,
+    confirmedStatusId: config.confirmedStatusId,
+    lookbackDays: config.lookbackDays,
+    activeElementIds,
+    activeDocumentNumbers,
+    fullReconciliation: Boolean(options.fullReconciliation),
+    fetchConfirmedPage: async ({ pageIndex }) => fetchJsonFromFlex(buildFlexConfirmedQuoteListUrl(config.baseUrl, {
+      definitionId: config.definitionId,
+      confirmedStatusId: config.confirmedStatusId,
+      locationId: config.locationId,
+      pageSize: config.pageSize,
+      pageIndex,
+    })),
+    fetchStatusHistory: elementId => fetchJsonFromFlex(buildFlexStatusHistoryUrl(config.baseUrl, elementId)),
+    prepareObservation: input => confirmedQuoteRegistryDisposition(input.quote, activeShows),
+    observe: observation => defaultCueFoundationStore.observeFlexQuoteStatus(observation, {
+      confirmedStatuses: options.confirmedStatuses || [],
+    }),
+    getState: connectorName => defaultCueFoundationStore.getConnectorState(connectorName),
+    saveState: (connectorName, state) => defaultCueFoundationStore.saveConnectorState(connectorName, state),
+    checkpoint: checkpoint => defaultCueFoundationStore.checkpointConnectorRun(checkpoint),
+  });
+}
+
+async function discoverAuthoritativeFlexQuoteLifecycle(options = {}) {
+  let feedConfig = null;
+  try {
+    feedConfig = getFlexLifecycleFeedConfig();
+  } catch {
+    // The verified confirmed-quote snapshot remains available even if an
+    // optional tenant-wide change-feed setting is invalid.
+  }
+  return feedConfig
+    ? discoverConfiguredFlexQuoteLifecycle(options)
+    : discoverFlexConfirmedQuoteSnapshot(options);
 }
 
 function classifyFlexEventFolderQuote(name) {
@@ -6672,6 +6948,11 @@ function isAutomationAllowedPath(pathname) {
     "/api/slack-operational-signals/review/reject",
     "/api/slack-operational-signals/general",
     "/api/slack-operational-signals/rematch",
+    "/api/foundation/source-first/sync",
+    "/api/foundation/flex/lifecycle/discover",
+    "/api/foundation/flex/lifecycle/status",
+    "/api/foundation/flex/confirmed-snapshot/sync",
+    "/api/foundation/flex/confirmed-snapshot/status",
   ].includes(pathname);
 }
 
@@ -8358,102 +8639,15 @@ const server = http.createServer(async (req, res) => {
     const ACTIVE_SHOWS_INDEX_SHEET_NAME =
       process.env.ACTIVE_SHOWS_INDEX_SHEET_NAME || "Active Shows Index";
 
-    function activeShowsSlug(value) {
-      return String(value || "")
-        .toLowerCase()
-        .replace(/&/g, " and ")
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "active-show";
-    }
-
-    function normalizeActiveShowsHeader(value) {
-      return String(value || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, "");
-    }
-
-    function getActiveShowsCell(rowObject, names) {
-      for (const name of names) {
-        const key = normalizeActiveShowsHeader(name);
-
-        if (rowObject[key] != null && String(rowObject[key]).trim() !== "") {
-          return String(rowObject[key]).trim();
-        }
-      }
-
-      return "";
-    }
-
     function activeShowsIndexRowsToObjects(csvRows) {
-      if (!Array.isArray(csvRows) || csvRows.length < 2) return [];
-
-      const headerRowIndex = csvRows.findIndex((row) =>
-        row.some((cell) => /show\s*\/\s*project|event date|technical coverage|risk/i.test(String(cell || "")))
-      );
-
-      if (headerRowIndex < 0) return [];
-
-      const headers = csvRows[headerRowIndex].map((header) => String(header || "").trim());
-      const dataRows = csvRows.slice(headerRowIndex + 1);
-
-      return dataRows
-        .map((row) => {
-          const object = {};
-
-          headers.forEach((header, index) => {
-            const key = normalizeActiveShowsHeader(header);
-            if (!key) return;
-            object[key] = row[index] || "";
-          });
-
-          return object;
-        })
-        .filter((rowObject) =>
-          getActiveShowsCell(rowObject, ["Show / Project", "Show", "Project"])
-        );
+      return parseActiveShowIndexRows(csvRows);
     }
 
     function mapActiveShowsIndexRow(rowObject) {
-      const name = getActiveShowsCell(rowObject, ["Show / Project", "Show", "Project"]);
-      const eventDate = getActiveShowsCell(rowObject, ["Event Date"]);
-      const daysOut = getActiveShowsCell(rowObject, ["Days Out"]);
-      const status = getActiveShowsCell(rowObject, ["Status"]);
-      const client = getActiveShowsCell(rowObject, ["Client / Account", "Client", "Account"]);
-      const showFolder = getActiveShowsCell(rowObject, ["Show Folder"]);
-      const keyDocs = getActiveShowsCell(rowObject, ["Key Docs / Subfolders Found", "Key Docs"]);
-      const technicalCoverage = getActiveShowsCell(rowObject, ["Technical Coverage"]);
-      const risk = getActiveShowsCell(rowObject, ["Risk / Missing Items", "Risk", "Missing Items"]);
-      const priority = getActiveShowsCell(rowObject, ["Priority"]);
-      const lastMapped = getActiveShowsCell(rowObject, ["Last Mapped"]);
-
-      return {
-        id: activeShowsSlug(name),
-        name,
-        timing: [eventDate, daysOut ? `${daysOut} days out` : ""].filter(Boolean).join(" / "),
-        priority: priority || "Medium",
-        readinessStatus: status || "Active",
-        changeSignal: lastMapped ? `Drive Index - last mapped ${lastMapped}` : "Drive Index",
-        topIssue: risk || "No risk/missing-items note mapped in Active Shows Index.",
-        nextAction: risk || "Review current Active Shows Index row and confirm owner / readiness status.",
-        flexSignal: [
-          keyDocs,
-          technicalCoverage,
-          risk,
-        ]
-          .filter(Boolean)
-          .join(" "),
-        trucking: risk || technicalCoverage || "No trucking note mapped in Active Shows Index row.",
-        activeShowsIndex: {
-          eventDate: eventDate || null,
-          daysOut: daysOut || null,
-          client: client || null,
-          showFolder: showFolder || null,
-          keyDocs: keyDocs || null,
-          technicalCoverage: technicalCoverage || null,
-          risk: risk || null,
-          lastMapped: lastMapped || null,
-        },
-      };
+      return mapActiveShowIndexAuthorityRow(rowObject, {
+        sheetId: ACTIVE_SHOWS_INDEX_SHEET_ID,
+        sheetName: ACTIVE_SHOWS_INDEX_SHEET_NAME,
+      });
     }
 
     async function fetchActiveShowsFromIndexSheet() {
@@ -8543,39 +8737,78 @@ const server = http.createServer(async (req, res) => {
       return enriched;
     }
 
-    // Slack matching and the Active Shows screen must consume the same FLEX-
-    // enriched objects. Raw sheet rows contain names and document hints but do
-    // not contain the verified UUID/type hierarchy needed by Intake.
-    slackMatchDeps.getCandidateShows = async () => {
+    async function refreshActiveShowAuthority(options = {}) {
       const source = await getActiveShowsRowsWithFallback();
-      const showsWithHints = [
-        ...source.shows,
-        ...buildMissingEventFolderHintShows(source.shows),
-      ];
-      const enrichedShows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: true });
-      await defaultCueFoundationStore.syncCanonicalShowRegistry(enrichedShows, {
+      if (source.usedFallback) {
+        const canonicalShows = await defaultCueFoundationStore.listCanonicalShows({ activeOnly: true });
+        return {
+          source,
+          authoritative: false,
+          shows: source.shows,
+          canonicalShows,
+          registrySync: {
+            ok: true,
+            skipped: true,
+            reason: "fallback_not_authoritative",
+          },
+          intakeSync: null,
+        };
+      }
+
+      // Only actual rows from the live Active Shows Index define the current
+      // show universe. FLEX/event-folder hints may help resolve a row, but are
+      // never allowed to create or deactivate canonical shows themselves.
+      const shows = await enrichActiveShowsOnce(source.shows, { resolveByName: true });
+      const registrySync = await defaultCueFoundationStore.syncCanonicalShowRegistry(shows, {
         source: source.source,
         sheetId: source.sheetId,
         sheetName: source.sheetName,
       });
+      let intakeSync = null;
+      if (options.ingestEvidence) {
+        const batch = buildActiveShowIndexBatch(shows, {
+          sheetId: source.sheetId,
+          sheetName: source.sheetName,
+          connectorVersion: "source-first-v1",
+        });
+        intakeSync = await defaultCueFoundationStore.ingestSourceRecords(batch.records, {
+          sourceType: "drive",
+          connectorName: "active-show-index",
+          connectorVersion: "source-first-v1",
+          cursorAfter: options.cursorAfter || null,
+          metadata: {
+            identityAuthority: true,
+            sheetId: source.sheetId,
+            sheetName: source.sheetName,
+          },
+        });
+      }
       const canonicalShows = await defaultCueFoundationStore.listCanonicalShows({ activeOnly: true });
-      return canonicalShows.map(canonicalShowToSlackCandidate);
+      return {
+        source,
+        authoritative: true,
+        shows,
+        canonicalShows,
+        registrySync,
+        intakeSync,
+      };
+    }
+
+    // Slack matching and the Active Shows screen must consume the same FLEX-
+    // enriched objects. Raw sheet rows contain names and document hints but do
+    // not contain the verified UUID/type hierarchy needed by Intake.
+    slackMatchDeps.getCandidateShows = async () => {
+      const authority = await refreshActiveShowAuthority();
+      return authority.canonicalShows.map(canonicalShowToSlackCandidate);
     };
     slackMatchDeps.resolveQuoteCandidate = resolveSlackCandidateFromFlexQuote;
 
     async function buildActiveShowsResponse(sourceLabel) {
-      const activeShowsSource = await getActiveShowsRowsWithFallback();
-      const showsWithHints = [
-        ...activeShowsSource.shows,
-        ...buildMissingEventFolderHintShows(activeShowsSource.shows),
-      ];
-      const shows = await enrichActiveShowsOnce(showsWithHints, { resolveByName: true });
-      const registrySync = await defaultCueFoundationStore.syncCanonicalShowRegistry(shows, {
-        source: activeShowsSource.source,
-        sheetId: activeShowsSource.sheetId,
-        sheetName: activeShowsSource.sheetName,
-      });
-      const canonicalShows = await defaultCueFoundationStore.listCanonicalShows({ activeOnly: true });
+      const authority = await refreshActiveShowAuthority();
+      const activeShowsSource = authority.source;
+      const shows = authority.shows;
+      const registrySync = authority.registrySync;
+      const canonicalShows = authority.canonicalShows;
       const canonicalById = new Map(canonicalShows.map(show => [show.id, show]));
 
       // One shared Slack cache read — no per-show Slack API calls.
@@ -8815,7 +9048,7 @@ const server = http.createServer(async (req, res) => {
 
       const result = await fetchFlexRowData(elementId);
 
-      sendJson(res, 200, result);
+      sendJson(res, result.ok ? 200 : 502, result);
       return;
     }
 
@@ -8970,6 +9203,256 @@ const server = http.createServer(async (req, res) => {
       const snapshot = await slackOperationalSignalsService.getSlackOperationalSnapshot();
       const foundation = await defaultCueFoundationStore.syncSlackSnapshot(snapshot);
       sendJson(res, 200, { ok: true, telemetry, foundation });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/source-first/sync") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const emailMessages = Array.isArray(body.emailMessages) ? body.emailMessages : [];
+      const driveFiles = Array.isArray(body.driveFiles) ? body.driveFiles : [];
+      const flexQuoteStatuses = Array.isArray(body.flexQuoteStatuses) ? body.flexQuoteStatuses : [];
+      const result = await runSourceFirstIntakeSync({
+        discoverFlexQuoteStatuses: body.discoverFlexLifecycle === false
+          ? null
+          : () => discoverAuthoritativeFlexQuoteLifecycle({
+            confirmedStatuses: Array.isArray(body.confirmedFlexQuoteStatuses) ? body.confirmedFlexQuoteStatuses : [],
+            fullReconciliation: Boolean(body.fullFlexReconciliation),
+          }),
+        flexQuoteStatuses,
+        observeFlexQuoteStatuses: async observations => {
+          const items = [];
+          for (const observation of observations) {
+            items.push(await defaultCueFoundationStore.observeFlexQuoteStatus(observation, {
+              confirmedStatuses: Array.isArray(body.confirmedFlexQuoteStatuses) ? body.confirmedFlexQuoteStatuses : [],
+            }));
+          }
+          return {
+            count: items.length,
+            triggered: items.filter(item => item.triggered).length,
+            idempotent: items.filter(item => item.idempotent).length,
+            items,
+          };
+        },
+        loadActiveShowIndex: getActiveShowsRowsWithFallback,
+        prepareActiveShows: shows => enrichActiveShowsOnce(shows, { resolveByName: true }),
+        syncCanonicalRegistry: (shows, source) => defaultCueFoundationStore.syncCanonicalShowRegistry(shows, {
+          source: source.source,
+          sheetId: source.sheetId,
+          sheetName: source.sheetName,
+        }),
+        ingestActiveShowIndex: async (shows, source) => {
+          const batch = buildActiveShowIndexBatch(shows, {
+            sheetId: source.sheetId,
+            sheetName: source.sheetName,
+            connectorVersion: "source-first-v1",
+          });
+          return defaultCueFoundationStore.ingestSourceRecords(batch.records, {
+            sourceType: "drive",
+            connectorName: "active-show-index",
+            connectorVersion: "source-first-v1",
+            cursorBefore: body.cursorBefore ?? null,
+            cursorAfter: body.cursorAfter ?? null,
+            metadata: {
+              identityAuthority: true,
+              sheetId: source.sheetId,
+              sheetName: source.sheetName,
+            },
+          });
+        },
+        getVerifiedFlexDocuments: async () => {
+          const foundation = await defaultCueFoundationStore.read();
+          return Object.values(foundation.flexDocumentRegistry || {});
+        },
+        emailMessages,
+        ingestEmail: (messages, verifiedFlexDocuments) => {
+          const records = messages.map(message => adaptEmailMessageToIntakeRecord(message, {
+            connectorName: String(body.emailConnectorName || "gmail-operational-intake").trim(),
+            connectorVersion: "source-first-v1",
+            verifiedFlexDocuments,
+          }));
+          return defaultCueFoundationStore.ingestSourceRecords(records, {
+            sourceType: "email",
+            connectorName: String(body.emailConnectorName || "gmail-operational-intake").trim(),
+            connectorVersion: "source-first-v1",
+          });
+        },
+        driveFiles,
+        ingestDrive: (files, verifiedFlexDocuments) => {
+          const records = files.map(file => adaptDriveFileToIntakeRecord(file, {
+            connectorName: String(body.driveConnectorName || "google-drive-operational-intake").trim(),
+            connectorVersion: "source-first-v1",
+            verifiedFlexDocuments,
+          }));
+          return defaultCueFoundationStore.ingestSourceRecords(records, {
+            sourceType: "drive",
+            connectorName: String(body.driveConnectorName || "google-drive-operational-intake").trim(),
+            connectorVersion: "source-first-v1",
+          });
+        },
+        syncSlack: body.syncSlack === false ? null : async () => {
+          const rematch = await slackOperationalSignalsService.rematchAll(null, { expandQuotes: false });
+          const snapshot = await slackOperationalSignalsService.getSlackOperationalSnapshot();
+          const foundation = await defaultCueFoundationStore.syncSlackSnapshot(snapshot);
+          return { rematch, foundation };
+        },
+      });
+      sendJson(res, result.ok ? 200 : 502, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/flex/lifecycle/status") {
+      let config = null;
+      let configurationError = null;
+      try {
+        config = getFlexLifecycleFeedConfig();
+      } catch (error) {
+        configurationError = error?.message || String(error);
+      }
+      const cursor = await defaultCueFoundationStore.getConnectorCursor(FLEX_LIFECYCLE_CONNECTOR_NAME);
+      sendJson(res, 200, {
+        ok: true,
+        connectorName: FLEX_LIFECYCLE_CONNECTOR_NAME,
+        configured: Boolean(config),
+        available: Boolean(config) && !configurationError,
+        status: configurationError ? "endpoint_configuration_invalid" : config ? "configured" : "endpoint_not_configured",
+        endpointPath: config?.url?.pathname || null,
+        cursor: cursor?.cursor ?? null,
+        requiredFields: [...FLEX_LIFECYCLE_REQUIRED_FIELDS],
+        error: configurationError,
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/flex/confirmed-snapshot/status") {
+      const state = await defaultCueFoundationStore.getConnectorState(FLEX_CONFIRMED_QUOTE_SNAPSHOT_CONNECTOR);
+      const runs = await defaultCueFoundationStore.listConnectorRuns({
+        connectorName: FLEX_CONFIRMED_QUOTE_SNAPSHOT_CONNECTOR,
+        limit: 1,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        connectorName: FLEX_CONFIRMED_QUOTE_SNAPSHOT_CONNECTOR,
+        strategy: "confirmed_quote_snapshot_with_status_history",
+        authoritativeForShowExistence: true,
+        snapshot: state ? {
+          baselineCompletedAt: state.baselineCompletedAt,
+          lastSuccessfulAt: state.lastSuccessfulAt,
+          lastFullReconciliationAt: state.lastFullReconciliationAt,
+          confirmedCount: Object.keys(state.confirmedQuotes || {}).length,
+          counts: state.counts || {},
+        } : null,
+        latestRun: runs[0] || null,
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/flex/confirmed-snapshot/sync") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const result = await discoverFlexConfirmedQuoteSnapshot({
+        confirmedStatuses: Array.isArray(body.confirmedStatuses) ? body.confirmedStatuses : [],
+        fullReconciliation: Boolean(body.fullReconciliation),
+      });
+      sendJson(res, result.ok === false && result.available !== false ? 502 : 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/flex/lifecycle/discover") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const result = await discoverAuthoritativeFlexQuoteLifecycle({
+        cursorBefore: body.cursorBefore ?? undefined,
+        confirmedStatuses: Array.isArray(body.confirmedStatuses) ? body.confirmedStatuses : [],
+        fullReconciliation: Boolean(body.fullReconciliation),
+      });
+      sendJson(res, result.ok === false && result.available ? 502 : 200, result);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/flex/quote-status/observe") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const observations = Array.isArray(body.quotes)
+        ? body.quotes
+        : body.quote ? [body.quote] : [];
+      if (!observations.length) {
+        sendJson(res, 400, { error: "quotes must contain at least one FLEX quote-status observation." });
+        return;
+      }
+      const items = [];
+      for (const observation of observations) {
+        items.push(await defaultCueFoundationStore.observeFlexQuoteStatus(observation, {
+          confirmedStatuses: Array.isArray(body.confirmedStatuses) ? body.confirmedStatuses : [],
+        }));
+      }
+      const ok = items.every(item => item.ok);
+      sendJson(res, ok ? 200 : 400, {
+        ok,
+        count: items.length,
+        triggered: items.filter(item => item.triggered).length,
+        idempotent: items.filter(item => item.idempotent).length,
+        items,
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/flex/quote-status/poll") {
+      const rawBody = await readRequestBody(req);
+      const body = JSON.parse(rawBody || "{}");
+      const quotes = Array.isArray(body.quotes) ? body.quotes : body.quote ? [body.quote] : [];
+      if (!quotes.length) {
+        sendJson(res, 400, { error: "quotes must contain at least one FLEX quote with an elementId." });
+        return;
+      }
+      const items = [];
+      for (const quote of quotes) {
+        const elementId = String(quote.elementId || "").trim();
+        if (!isFlexElementId(elementId)) {
+          items.push({ ok: false, status: 400, error: "A valid FLEX quote elementId is required." });
+          continue;
+        }
+        try {
+          const header = await fetchFlexHeaderData(elementId);
+          const context = buildShowContext(header.data, elementId);
+          if (!context.status) {
+            items.push({
+              ok: false,
+              status: 422,
+              elementId,
+              error: "FLEX header-data did not expose quote status. Configure the FLEX status-change endpoint or send the status through /observe.",
+            });
+            continue;
+          }
+          items.push(await defaultCueFoundationStore.observeFlexQuoteStatus({
+            ...quote,
+            ...context,
+            documentType: "quote",
+            documentNumber: context.documentNumber || quote.documentNumber,
+            showName: context.showName || quote.showName,
+            source: "flex_header_poll",
+            metadata: { ...(quote.metadata || {}), statusId: context.statusId },
+          }, {
+            confirmedStatuses: Array.isArray(body.confirmedStatuses) ? body.confirmedStatuses : [],
+          }));
+        } catch (error) {
+          items.push({ ok: false, status: 502, elementId, error: error?.message || String(error) });
+        }
+      }
+      const ok = items.every(item => item.ok);
+      sendJson(res, ok ? 200 : 422, {
+        ok,
+        count: items.length,
+        triggered: items.filter(item => item.triggered).length,
+        idempotent: items.filter(item => item.idempotent).length,
+        items,
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/flex/confirmed-quotes") {
+      const items = await defaultCueFoundationStore.listFlexQuoteStatusObservations({ confirmedOnly: true });
+      sendJson(res, 200, { count: items.length, items });
       return;
     }
 

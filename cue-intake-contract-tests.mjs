@@ -160,6 +160,11 @@ const slackIntake = Object.values(db.intakeItems).find(item => db.sourceRecords[
 assert.equal(slackIntake.status, "needs_match", "Slack cannot establish identity from a name alone");
 assert.equal(slackIntake.matchedShowId, null);
 assert.equal(Object.keys(db.proposedUpdates).length, 1, "connector proposals share the same proposed-update collection");
+assert.equal(
+  Object.keys(db.readiness).length,
+  0,
+  "connector evidence and uncertain matches never mutate Show Readiness before an authorized decision or authoritative lifecycle event"
+);
 
 const legacySlackStore = createCueFoundationStore({ filePath: path.join(dir, "legacy-slack.json") });
 await legacySlackStore.syncSlackSnapshot({ messages: {
