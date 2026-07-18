@@ -87,18 +87,12 @@ Roadmap steps can be updated explicitly through the workflow's manual dispatch i
 `npm run board:step`. Explicit step updates continue to use optimistic locking and preserve prior
 notes when new notes are omitted.
 
-The workflow is deliberately non-blocking. Missing credentials, temporary network failures,
+The workflow is deliberately non-blocking. Temporary identity or network failures,
 unregistered branches, stale versions, and ambiguous branch ownership are reported but do not
 fail the product build. No event creates a workstream automatically; a chat, developer, or agent
 must register intent and file ownership before implementation starts.
 
-Configure these GitHub repository secrets:
-
-```text
-CONTROL_BOARD_SERVICE_SECRET
-CONTROL_BOARD_SITES_TOKEN
-```
-
-Optional repository variables are `CONTROL_BOARD_URL` and `CONTROL_BOARD_SERVICE_ID`; the workflow
-defaults them to the canonical CUE Board URL and `cue-server`. Keep the service credential in
-GitHub's protected secret store and never echo it in workflow output.
+GitHub Actions OIDC supplies a short-lived signed identity for each run. The connector accepts it
+only when the repository and workflow path match its allowlist, then forwards through the existing
+private Board credentials. No Control Board credential or Sites bypass token is stored in GitHub.
+Pull requests from forks are deliberately excluded from reporting.

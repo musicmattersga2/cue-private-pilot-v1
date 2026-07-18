@@ -41,6 +41,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   report:
@@ -48,11 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     continue-on-error: true
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
-      CONTROL_BOARD_URL: ${{ vars.CONTROL_BOARD_URL || 'https://cue-intake-spine-control-board.aaronsoriero619.chatgpt.site' }}
-      CONTROL_BOARD_SERVICE_ID: ${{ vars.CONTROL_BOARD_SERVICE_ID || 'cue-server' }}
-      CONTROL_BOARD_SERVICE_SECRET: ${{ secrets.CONTROL_BOARD_SERVICE_SECRET }}
-      CONTROL_BOARD_SITES_TOKEN: ${{ secrets.CONTROL_BOARD_SITES_TOKEN }}
+      CONTROL_BOARD_URL: https://intake-spine-control-board-connector.aaronsoriero619.chatgpt.site/github-control-board
+      CONTROL_BOARD_GITHUB_OIDC_AUDIENCE: https://intake-spine-control-board-connector.aaronsoriero619.chatgpt.site/github-actions
       CONTROL_BOARD_AGENT: CUE GitHub Actions · ${{ github.repository }} · ${{ github.ref_name }}
     steps:
       - name: Check out the event revision

@@ -18,7 +18,7 @@ function controlBoardEndpoint(value) {
   }
   if (url.username || url.password) throw new Error("CONTROL_BOARD_URL must not contain credentials");
   const path = url.pathname.replace(/\/$/, "");
-  url.pathname = path.endsWith("/api/control-board")
+  url.pathname = path.endsWith("/api/control-board") || path.endsWith("/github-control-board")
     ? path
     : `${path}/api/control-board`.replace(/\/{2,}/g, "/");
   url.search = "";
@@ -47,6 +47,16 @@ export class ControlBoardError extends Error {
 }
 
 export function controlBoardConfigFromEnv(env = process.env) {
+  const oidcAudience = String(env.CONTROL_BOARD_GITHUB_OIDC_AUDIENCE || "").trim();
+  if (oidcAudience) {
+    return {
+      baseUrl: required(env.CONTROL_BOARD_URL, "CONTROL_BOARD_URL"),
+      oidcAudience,
+      oidcRequestUrl: required(env.ACTIONS_ID_TOKEN_REQUEST_URL, "ACTIONS_ID_TOKEN_REQUEST_URL"),
+      oidcRequestToken: required(env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, "ACTIONS_ID_TOKEN_REQUEST_TOKEN"),
+      agent: String(env.CONTROL_BOARD_AGENT || DEFAULT_AGENT).trim() || DEFAULT_AGENT,
+    };
+  }
   return {
     baseUrl: required(env.CONTROL_BOARD_URL, "CONTROL_BOARD_URL"),
     serviceId: required(env.CONTROL_BOARD_SERVICE_ID, "CONTROL_BOARD_SERVICE_ID"),
@@ -59,10 +69,21 @@ export function controlBoardConfigFromEnv(env = process.env) {
 export class ControlBoardClient {
   constructor(options = {}) {
     this.endpoint = controlBoardEndpoint(options.baseUrl);
-    this.serviceId = required(options.serviceId, "serviceId").toLowerCase();
-    if (!SERVICE_ID_PATTERN.test(this.serviceId)) throw new Error("serviceId is invalid");
-    this.serviceSecret = required(options.serviceSecret, "serviceSecret");
-    this.sitesToken = required(options.sitesToken, "sitesToken");
+    this.oidcAudience = String(options.oidcAudience || "").trim();
+    this.oidcRequestUrl = String(options.oidcRequestUrl || "").trim();
+    this.oidcRequestToken = String(options.oidcRequestToken || "").trim();
+    this.serviceId = String(options.serviceId || "").trim().toLowerCase();
+    this.serviceSecret = String(options.serviceSecret || "");
+    this.sitesToken = String(options.sitesToken || "");
+    if (this.oidcAudience) {
+      required(this.oidcRequestUrl, "oidcRequestUrl");
+      required(this.oidcRequestToken, "oidcRequestToken");
+    } else {
+      required(this.serviceId, "serviceId");
+      if (!SERVICE_ID_PATTERN.test(this.serviceId)) throw new Error("serviceId is invalid");
+      required(this.serviceSecret, "serviceSecret");
+      required(this.sitesToken, "sitesToken");
+    }
     this.agent = String(options.agent || DEFAULT_AGENT).trim().slice(0, 200) || DEFAULT_AGENT;
     this.fetch = options.fetch || globalThis.fetch;
     if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
@@ -71,12 +92,28 @@ export class ControlBoardClient {
     this.requestTimeoutMs = Math.max(250, Math.min(30_000, Number(options.requestTimeoutMs || 5_000)));
   }
 
-  headers(hasBody = false) {
+  async oidcToken() {
+    const url = new URL(this.oidcRequestUrl);
+    url.searchParams.set("audience", this.oidcAudience);
+    const response = await this.fetch(url, {
+      headers: { authorization: `Bearer ${this.oidcRequestToken}`, accept: "application/json" },
+    });
+    const body = safeJson(await response.text());
+    if (!response.ok || typeof body.value !== "string" || !body.value) {
+      throw new Error("GitHub did not issue an OIDC identity token");
+    }
+    return body.value;
+  }
+
+  async headers(hasBody = false) {
+    const authorization = this.oidcAudience
+      ? `Bearer ${await this.oidcToken()}`
+      : `Bearer ${this.serviceId}.${this.serviceSecret}`;
     return {
       accept: "application/json",
       ...(hasBody ? { "content-type": "application/json" } : {}),
-      authorization: `Bearer ${this.serviceId}.${this.serviceSecret}`,
-      "oai-sites-authorization": `Bearer ${this.sitesToken}`,
+      authorization,
+      ...(!this.oidcAudience ? { "oai-sites-authorization": `Bearer ${this.sitesToken}` } : {}),
       "x-cue-agent": this.agent,
     };
   }
@@ -92,7 +129,7 @@ export class ControlBoardClient {
       try {
         response = await this.fetch(this.endpoint, {
           method,
-          headers: this.headers(serialized !== undefined),
+          headers: await this.headers(serialized !== undefined),
           signal: controller.signal,
           ...(serialized === undefined ? {} : { body: serialized }),
         });

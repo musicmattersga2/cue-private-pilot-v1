@@ -54,6 +54,37 @@ test("environment configuration requires both application and Sites credentials"
   assert.equal(config.serviceId, "cue-server");
 });
 
+test("GitHub OIDC configuration does not require reusable Board credentials", () => {
+  const config = controlBoardConfigFromEnv({
+    CONTROL_BOARD_URL: "https://connector.test/github-control-board",
+    CONTROL_BOARD_GITHUB_OIDC_AUDIENCE: "https://connector.test/github-actions",
+    ACTIONS_ID_TOKEN_REQUEST_URL: "https://github.test/oidc?api-version=1",
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runner-request-token",
+  });
+  assert.equal(config.oidcAudience, "https://connector.test/github-actions");
+  assert.equal(config.serviceSecret, undefined);
+});
+
+test("GitHub OIDC client exchanges the runner token and omits the Sites credential", async () => {
+  const calls = [];
+  const oidcClient = new ControlBoardClient({
+    baseUrl: "https://connector.test/github-control-board",
+    oidcAudience: "https://connector.test/github-actions",
+    oidcRequestUrl: "https://github.test/oidc?api-version=1",
+    oidcRequestToken: "runner-request-token",
+    fetch: async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).startsWith("https://github.test/oidc")) return Response.json({ value: "signed-oidc-token" });
+      return Response.json({ boardVersion: 31, workstreams: [] });
+    },
+  });
+  await oidcClient.read();
+  assert.match(calls[0].url, /audience=https%3A%2F%2Fconnector.test%2Fgithub-actions/);
+  assert.equal(calls[0].init.headers.authorization, "Bearer runner-request-token");
+  assert.equal(calls[1].init.headers.authorization, "Bearer signed-oidc-token");
+  assert.equal(calls[1].init.headers["oai-sites-authorization"], undefined);
+});
+
 test("read sends both authentication layers without placing credentials in the URL", async () => {
   const mock = mockFetch([jsonResponse({ schemaVersion: 3, boardVersion: 7, workstreams: [] })]);
   const result = await client(mock).read();
