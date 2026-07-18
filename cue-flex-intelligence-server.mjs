@@ -28,6 +28,8 @@ import {
 } from "./cue-intake-evidence-adapters.mjs";
 import {
   activeShowIndexRowsToObjects as parseActiveShowIndexRows,
+  extractActiveShowFlexDocumentRefs,
+  extractActiveShowFlexDocumentNumbers,
   mapActiveShowIndexAuthorityRow,
   runSourceFirstIntakeSync,
 } from "./active-show-index-authority.mjs";
@@ -8130,23 +8132,7 @@ const server = http.createServer(async (req, res) => {
     ];
     
     function extractActiveShowDocumentNumbers(show) {
-      const textToScan = [
-        show.id,
-        show.name,
-        show.timing,
-        show.priority,
-        show.readinessStatus,
-        show.changeSignal,
-        show.topIssue,
-        show.nextAction,
-        show.flexSignal,
-        show.trucking,
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-      const quoteMatches = textToScan.match(/\b\d{2}-\d{3,6}\b/g) || [];
-      return [...new Set(quoteMatches.map((item) => item.trim()))];
+      return extractActiveShowFlexDocumentNumbers(show);
     }
 
     function getFlexSoldDepartments(detail) {
@@ -8199,8 +8185,79 @@ const server = http.createServer(async (req, res) => {
       };
     }
 
-    async function resolveActiveShowFlexDocument(documentNumber, show = {}) {
+    async function resolveActiveShowFlexDocument(documentNumber, show = {}, reference = null) {
       try {
+        if (isFlexElementId(reference?.elementId)) {
+          const intake = await fetchFlexShowIntake(reference.elementId);
+          const detail = buildFlexDocumentDetail(intake);
+          const context = detail.showContext || {};
+          const expectedNumber = String(documentNumber || reference.documentNumber || "").trim().toUpperCase();
+          const actualNumber = String(context.documentNumber || "").trim().toUpperCase();
+          if (expectedNumber && actualNumber && expectedNumber !== actualNumber) {
+            throw new Error(`Active Show Index FLEX reference conflict: ${expectedNumber} resolves to ${actualNumber}.`);
+          }
+
+          const referenceType = inferFlexDocumentType(reference.documentType, "unknown");
+          let verifiedType = inferFlexDocumentType(
+            `${context.documentType || ""} ${context.definitionName || ""}`,
+            "unknown"
+          );
+          let parentElementId = isFlexElementId(reference.parentElementId)
+            ? reference.parentElementId
+            : null;
+          try {
+            const tree = await fetchFlexElementTree(reference.elementId);
+            const node = normalizeFlexElementTree(tree.data).find(candidate =>
+              String(candidate.elementId || "").toLowerCase() === String(reference.elementId).toLowerCase()
+            );
+            if (node) {
+              const treeType = inferFlexDocumentType(
+                `${node.type || ""} ${node.name || ""} ${node.domainId || ""}`,
+                "unknown"
+              );
+              if (treeType !== "unknown") verifiedType = treeType;
+              if (isFlexElementId(node.parentId)) parentElementId = node.parentId;
+            }
+          } catch {
+            // The header and typed Active Show Index reference remain usable
+            // when this FLEX tenant does not expose the element tree.
+          }
+          if (referenceType !== "unknown" && verifiedType !== "unknown" && referenceType !== verifiedType) {
+            throw new Error(
+              `Active Show Index FLEX type conflict for ${actualNumber || expectedNumber || reference.elementId}: expected ${referenceType}, FLEX reports ${verifiedType}.`
+            );
+          }
+          const documentType = verifiedType !== "unknown" ? verifiedType : referenceType;
+          const resolvedNumber = actualNumber || expectedNumber || null;
+          return {
+            status: "Verified",
+            approvalNeeded: false,
+            documentNumber: resolvedNumber,
+            documentType,
+            role: reference.role || "related",
+            parentElementId,
+            elementId: reference.elementId,
+            showName: context.showName || show.name || show.showName || null,
+            client: context.client || null,
+            venue: context.venue || null,
+            plannedStartDate: context.plannedStartDate || null,
+            plannedEndDate: context.plannedEndDate || null,
+            loadInDate: context.loadInDate || null,
+            loadOutDate: context.loadOutDate || null,
+            soldDepartments: getFlexSoldDepartments(detail),
+            totals: detail.summary?.totals || null,
+            financials: detail.summary?.financials || null,
+            counts: detail.counts || null,
+            quoteLookup: {
+              found: true,
+              source: "active_show_index_element_id",
+              elementId: reference.elementId,
+              documentNumber: resolvedNumber,
+              documentType,
+            },
+          };
+        }
+
         const quoteLookup = await findFlexQuoteByDocumentNumber(documentNumber, {
           showName: show.name || show.showName || null,
           client: show.activeShowsIndex?.client || show.client || null,
@@ -8240,6 +8297,7 @@ const server = http.createServer(async (req, res) => {
           approvalNeeded: false,
           documentNumber,
           documentType: quoteLookup.documentType || "unknown",
+          role: reference?.role || "related",
           parentElementId: quoteLookup.parentElementId || null,
           elementId: quoteLookup.elementId,
           showName:
@@ -8261,8 +8319,9 @@ const server = http.createServer(async (req, res) => {
           status: "Error",
           approvalNeeded: true,
           documentNumber,
-          documentType: "unknown",
-          elementId: null,
+          documentType: inferFlexDocumentType(reference?.documentType, "unknown"),
+          role: reference?.role || "related",
+          elementId: isFlexElementId(reference?.elementId) ? reference.elementId : null,
           showName: null,
           client: null,
           venue: null,
@@ -8389,6 +8448,7 @@ const server = http.createServer(async (req, res) => {
 
     async function enrichActiveShowWithFlex(show, options = {}) {
       let documentNumbers = extractActiveShowDocumentNumbers(show);
+      const structuredDocumentRefs = extractActiveShowFlexDocumentRefs(show);
       let identityResolvedDocument = null;
       const lastPullAt = new Date().toISOString();
 
@@ -8501,8 +8561,16 @@ const server = http.createServer(async (req, res) => {
       let documents = identityResolvedDocument
         ? [identityResolvedDocument]
         : await Promise.all(
-            documentNumbers.map((documentNumber) =>
-              resolveActiveShowFlexDocument(documentNumber, show)
+            [
+              ...structuredDocumentRefs.map(reference => ({
+                documentNumber: reference.documentNumber,
+                reference,
+              })),
+              ...documentNumbers
+                .filter(documentNumber => !structuredDocumentRefs.some(reference => reference.documentNumber === documentNumber))
+                .map(documentNumber => ({ documentNumber, reference: null })),
+            ].map(target =>
+              resolveActiveShowFlexDocument(target.documentNumber, show, target.reference)
             )
           );
 
@@ -8723,6 +8791,14 @@ const server = http.createServer(async (req, res) => {
         id: show.id,
         name: show.name,
         documents: extractActiveShowDocumentNumbers(show),
+        documentRefs: extractActiveShowFlexDocumentRefs(show).map(reference => ({
+          documentNumber: reference.documentNumber,
+          elementId: reference.elementId,
+          documentType: reference.documentType,
+          role: reference.role,
+          parentElementId: reference.parentElementId,
+          status: reference.status,
+        })),
         client: show.activeShowsIndex?.client || show.client || null,
       })).concat([{ resolveByName: options.resolveByName !== false }]));
       if (activeShowsEnrichmentCache.signature === signature && activeShowsEnrichmentCache.expiresAt > Date.now()) {
