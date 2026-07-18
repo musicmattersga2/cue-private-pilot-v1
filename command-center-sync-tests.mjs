@@ -18,6 +18,11 @@ assert.match(
   /FLEX → Active Shows → Email\/Drive → Slack/,
   "the operator feedback must make source ordering visible",
 );
+assert.match(
+  html,
+  /partialStages/,
+  "the Command Center must report partial source completion instead of claiming a clean sync",
+);
 
 console.log(JSON.stringify({
   ok: true,

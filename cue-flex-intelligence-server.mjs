@@ -56,6 +56,11 @@ import {
   buildFlexStatusHistoryUrl,
   runFlexConfirmedQuoteSnapshot,
 } from "./flex-confirmed-quote-snapshot.mjs";
+import {
+  fetchFlexJson,
+  getFlexRequestTimeoutMs,
+  isSkippableFlexRequestError,
+} from "./flex-request-client.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -503,31 +508,10 @@ async function fetchFlexSalesGoalsRow(year) {
 }
 
 async function fetchJsonFromFlex(url) {
-  const response = await fetch(url, {
-    method: "GET",
+  return fetchFlexJson(url, {
     headers: buildFlexHeaders(),
+    timeoutMs: getFlexRequestTimeoutMs(),
   });
-
-  const responseText = await response.text();
-
-  let data;
-  try {
-    data = JSON.parse(responseText);
-  } catch {
-    data = responseText;
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      `FLEX request failed: ${response.status} ${response.statusText}. ${
-        typeof data === "string"
-          ? data.slice(0, 1000)
-          : JSON.stringify(data).slice(0, 1000)
-      }`
-    );
-  }
-
-  return data;
 }
 
 async function fetchFlexRowData(elementId) {
@@ -8315,8 +8299,9 @@ const server = http.createServer(async (req, res) => {
           quoteLookup,
         };
       } catch (error) {
+        const skipped = isSkippableFlexRequestError(error);
         return {
-          status: "Error",
+          status: skipped ? "Skipped" : "Error",
           approvalNeeded: true,
           documentNumber,
           documentType: inferFlexDocumentType(reference?.documentType, "unknown"),
@@ -8334,6 +8319,8 @@ const server = http.createServer(async (req, res) => {
           financials: null,
           counts: null,
           quoteLookup: null,
+          skipped,
+          skipReason: skipped ? error.code || "flex_request_unavailable" : null,
           message: error.message || "FLEX enrichment failed.",
         };
       }
@@ -8639,7 +8626,9 @@ const server = http.createServer(async (req, res) => {
 
       const hasCanonicalQuote = primary?.documentType === "quote";
       const status = verifiedDocuments.length === 0
-        ? unresolvedDocuments.some((document) => document.status === "Error")
+        ? unresolvedDocuments.some((document) => document.status === "Skipped")
+          ? "Partial"
+          : unresolvedDocuments.some((document) => document.status === "Error")
           ? "Error"
           : "Missing"
         : !hasCanonicalQuote

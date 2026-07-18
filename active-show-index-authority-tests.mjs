@@ -177,6 +177,38 @@ assert.equal(failedDiscovery.degraded, true);
 assert.deepEqual(failedDiscovery.failedStages, ["flex_quote_discovery"]);
 assert.equal(registryRanAfterDiscoveryFailure, true, "other authoritative sources still reconcile during a degraded FLEX discovery run");
 
+let registryRanAfterSkippedDocument = false;
+const skippedDocument = await runSourceFirstIntakeSync({
+  loadActiveShowIndex: async () => ({ usedFallback: false, shows: [mapped], source: "live" }),
+  prepareActiveShows: async shows => shows.map(show => ({
+    ...show,
+    flex: {
+      ...show.flex,
+      status: "Partial",
+      documents: [{
+        documentNumber: "26-1846",
+        elementId: mapped.flex.primary.elementId,
+        status: "Skipped",
+        skipped: true,
+        skipReason: "flex_request_timeout",
+        message: "FLEX request timed out after 30000ms.",
+      }],
+    },
+  })),
+  syncCanonicalRegistry: async () => {
+    registryRanAfterSkippedDocument = true;
+    return { ok: true };
+  },
+  getVerifiedFlexDocuments: async () => [],
+});
+assert.equal(skippedDocument.ok, false, "a skipped authoritative FLEX document is reported as a partial sync");
+assert.equal(skippedDocument.degraded, true);
+assert.deepEqual(skippedDocument.failedStages, []);
+assert.deepEqual(skippedDocument.partialStages, ["active_show_index"]);
+assert.equal(registryRanAfterSkippedDocument, true, "one skipped FLEX document does not block registry reconciliation");
+assert.equal(skippedDocument.stages[0].flexEnrichment.skippedDocuments.length, 1);
+assert.equal(skippedDocument.stages[0].flexEnrichment.skippedDocuments[0].reason, "flex_request_timeout");
+
 let registryCalled = false;
 const fallback = await runSourceFirstIntakeSync({
   loadActiveShowIndex: async () => ({ usedFallback: true, shows: [{ id: "mock" }] }),
@@ -193,5 +225,6 @@ console.log(JSON.stringify({
   primaryQuote: mapped.flex.primary.documentNumber,
   sourceFirstOrder: order,
   failedDiscoveryReported: failedDiscovery.degraded,
+  skippedDocumentReported: skippedDocument.degraded,
   fallbackGuarded: !registryCalled,
 }, null, 2));

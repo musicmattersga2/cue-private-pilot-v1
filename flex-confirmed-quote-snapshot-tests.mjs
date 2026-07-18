@@ -9,6 +9,11 @@ import {
   confirmedTransitionFromHistory,
   runFlexConfirmedQuoteSnapshot,
 } from "./flex-confirmed-quote-snapshot.mjs";
+import {
+  FlexRequestError,
+  fetchFlexJson,
+  isSkippableFlexRequestError,
+} from "./flex-request-client.mjs";
 
 const baseUrl = "https://m2.flexrentalsolutions.com/f5";
 const confirmedListUrl = buildFlexConfirmedQuoteListUrl(baseUrl, {
@@ -203,6 +208,44 @@ assert.equal(saveCount, 4, "only successful runs advance state");
 assert.equal(checkpoints.at(-1).status, "partial");
 assert.equal(checkpoints.at(-1).metadata.snapshotAdvanced, false);
 
+await assert.rejects(
+  fetchFlexJson("https://flex.test/stalled-row-data", {
+    timeoutMs: 1_000,
+    fetchImpl: async (_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    }),
+  }),
+  error => {
+    assert.ok(error instanceof FlexRequestError);
+    assert.equal(error.code, "flex_request_timeout");
+    assert.equal(error.retryable, true);
+    assert.equal(isSkippableFlexRequestError(error), true);
+    return true;
+  },
+  "a stalled FLEX document request aborts instead of hanging reconciliation",
+);
+
+await assert.rejects(
+  fetchFlexJson("https://flex.test/inaccessible-row-data", {
+    timeoutMs: 1_000,
+    fetchImpl: async () => new Response(
+      JSON.stringify({ exceptionCode: "FLEX_5000", exceptionMessage: "Access Denied" }),
+      { status: 401, statusText: "Unauthorized" },
+    ),
+  }),
+  error => {
+    assert.equal(error.code, "flex_http_401");
+    assert.equal(error.status, 401);
+    assert.equal(isSkippableFlexRequestError(error), true);
+    return true;
+  },
+  "an inaccessible FLEX document is classified as skippable",
+);
+
 console.log(JSON.stringify({
   ok: true,
   baselineHydrated: baseline.candidateCount,
@@ -210,4 +253,6 @@ console.log(JSON.stringify({
   relatedDocumentsDeferred: deferred.deferred.length,
   snapshotSize: Object.keys(state.confirmedQuotes).length,
   partialReplaySafe: true,
+  stalledRequestAborted: true,
+  inaccessibleDocumentSkippable: true,
 }, null, 2));

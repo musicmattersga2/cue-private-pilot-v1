@@ -347,6 +347,31 @@ export function extractActiveShowFlexDocumentNumbers(show = {}) {
   ]);
 }
 
+export function summarizeActiveShowFlexEnrichment(shows = []) {
+  const documents = shows.flatMap(show => (show?.flex?.documents || []).map(document => ({
+    showId: show.id || show.canonicalShowId || show.showId || null,
+    showName: show.name || show.showName || null,
+    documentNumber: document?.documentNumber || null,
+    elementId: document?.elementId || null,
+    status: document?.status || "Unknown",
+    reason: document?.skipReason || null,
+    message: document?.message || null,
+  })));
+  const skippedDocuments = documents.filter(document => document.status === "Skipped");
+  const errorDocuments = documents.filter(document => document.status === "Error");
+  return {
+    shows: shows.length,
+    verifiedShows: shows.filter(show => show?.flex?.status === "Verified").length,
+    partialShows: shows.filter(show => show?.flex?.status === "Partial").length,
+    missingShows: shows.filter(show => show?.flex?.status === "Missing").length,
+    errorShows: shows.filter(show => show?.flex?.status === "Error").length,
+    documents: documents.length,
+    verifiedDocuments: documents.filter(document => document.status === "Verified").length,
+    skippedDocuments,
+    errorDocuments,
+  };
+}
+
 export async function runSourceFirstIntakeSync(options = {}) {
   const stages = [];
   if (options.discoverFlexQuoteStatuses) {
@@ -369,8 +394,16 @@ export async function runSourceFirstIntakeSync(options = {}) {
     const preparedShows = options.prepareActiveShows
       ? await options.prepareActiveShows(source.shows || [])
       : source.shows || [];
+    const flexEnrichment = summarizeActiveShowFlexEnrichment(preparedShows);
     const registry = await options.syncCanonicalRegistry(preparedShows, source);
-    stages.push({ name: "active_show_index", status: "completed", count: preparedShows.length, registry });
+    const enrichmentPartial = flexEnrichment.skippedDocuments.length > 0 || flexEnrichment.errorDocuments.length > 0;
+    stages.push({
+      name: "active_show_index",
+      status: enrichmentPartial ? "partial" : "completed",
+      count: preparedShows.length,
+      registry,
+      flexEnrichment,
+    });
     if (options.ingestActiveShowIndex) {
       const intake = await options.ingestActiveShowIndex(preparedShows, source);
       stages.push({ name: "active_show_index_evidence", status: "completed", intake });
@@ -392,12 +425,14 @@ export async function runSourceFirstIntakeSync(options = {}) {
     stages.push({ name: "slack", status: "completed", result });
   }
   const failedStages = stages.filter(stage => stage.status === "failed");
+  const partialStages = stages.filter(stage => stage.status === "partial");
   return {
-    ok: failedStages.length === 0,
-    degraded: failedStages.length > 0,
+    ok: failedStages.length === 0 && partialStages.length === 0,
+    degraded: failedStages.length > 0 || partialStages.length > 0,
     sourceFirst: true,
     authoritativeSourceAvailable: !source?.usedFallback,
     failedStages: failedStages.map(stage => stage.name),
+    partialStages: partialStages.map(stage => stage.name),
     stages,
   };
 }
