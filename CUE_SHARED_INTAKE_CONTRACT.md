@@ -218,6 +218,21 @@ reads `element-status-change/{elementUuid}` to obtain the authoritative
 transition ID, timestamp, and actor. A global feed or webhook remains a useful
 future optimization, not a correctness dependency.
 
+### Local FLEX connector configuration and verification
+
+Copy `.env.example` to the ignored `.env` file and configure `FLEX_BASE_URL`,
+`FLEX_AUTH_HEADER`, and `FLEX_AUTH_VALUE` locally. Prefer a dedicated read-only
+FLEX credential when one is available. A temporary authenticated browser cookie
+may be used for local development, but it must never be committed, pasted into
+project chat, or written to logs.
+
+Run `npm run smoke:flex-confirmed` before enabling a live sync. The smoke test
+performs exactly two read-only requests: one small confirmed MMP Quote page and
+one status-history request for a returned quote. It does not write CUE state,
+does not call a FLEX mutation endpoint, never prints the authentication value,
+and exits nonzero when authentication, filtering, JSON shape, or the confirmed
+transition cannot be verified.
+
 When available, the optional lifecycle adapter is configured with
 `CUE_FLEX_LIFECYCLE_FEED_PATH`. The path must resolve to the same origin as
 `FLEX_BASE_URL`; credentials continue to use the existing authenticated FLEX
