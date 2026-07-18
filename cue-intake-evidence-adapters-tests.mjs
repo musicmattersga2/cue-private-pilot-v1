@@ -126,6 +126,35 @@ assert.deepEqual(
   "transient FLEX failures never rewrite authoritative Active Show Index evidence references",
 );
 
+const activeRowWithoutSheetFlex = {
+  ...activeRow,
+  keyDocs: "No FLEX document linked",
+  primaryFlexDocument: null,
+  flexDocuments: [],
+  row: { show: "LiteFlair Shoot", client: "LiteFlair", keyDocs: "No FLEX document linked" },
+};
+const nameResolvedEvidenceRecord = adaptActiveShowIndexRowToIntakeRecord({
+  ...activeRowWithoutSheetFlex,
+  flex: {
+    status: "Verified",
+    primary: quote,
+    documents: [{ ...quote, status: "Verified" }],
+    lastPullAt: "2026-07-18T12:40:00.000Z",
+  },
+}, { sheetId: "sheet-active-shows", sheetName: "Active Shows" });
+const rateLimitedEvidenceRecord = adaptActiveShowIndexRowToIntakeRecord({
+  ...activeRowWithoutSheetFlex,
+  flex: {
+    status: "Missing",
+    primary: null,
+    documents: [],
+    lastPullAt: "2026-07-18T12:42:57.000Z",
+    message: "FLEX request failed: 429 Too Many Requests.",
+  },
+}, { sheetId: "sheet-active-shows", sheetName: "Active Shows" });
+assert.deepEqual(nameResolvedEvidenceRecord.flexDocumentRefs, [], "name lookup does not manufacture sheet evidence");
+assert.deepEqual(rateLimitedEvidenceRecord.flexDocumentRefs, [], "a skipped name lookup preserves the same empty sheet evidence");
+
 const batch = buildActiveShowIndexBatch([activeRow], {
   sheetId: "sheet-active-shows",
   sheetName: "Active Shows",
@@ -170,6 +199,20 @@ assert.equal(verifiedFlexIngest.intakeCreated, 1);
 assert.equal(skippedFlexIngest.deduplicated, 1, "a transient FLEX skip reuses the existing Active Show Index Source Record");
 assert.equal(skippedFlexIngest.intakeCreated, 0, "a transient FLEX skip does not churn Intake identity");
 assert.equal(Object.keys(volatileFlexDb.intakeItems).length, 1, "repeated sheet evidence retains one Intake item");
+
+const nameResolvedIngest = await volatileFlexStore.ingestSourceRecords([nameResolvedEvidenceRecord], {
+  sourceType: "drive",
+  connectorName: "active-show-index",
+  startedAt: "2026-07-18T12:44:00.000Z",
+});
+const rateLimitedIngest = await volatileFlexStore.ingestSourceRecords([rateLimitedEvidenceRecord], {
+  sourceType: "drive",
+  connectorName: "active-show-index",
+  startedAt: "2026-07-18T12:45:00.000Z",
+});
+assert.equal(nameResolvedIngest.intakeCreated, 1);
+assert.equal(rateLimitedIngest.deduplicated, 1, "a skipped name lookup reuses the no-document sheet Source Record");
+assert.equal(rateLimitedIngest.intakeCreated, 0, "name lookup availability never churns Intake identity");
 
 const foundation = await store.read();
 const verifiedFlexDocuments = Object.values(foundation.flexDocumentRegistry);

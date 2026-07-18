@@ -314,9 +314,13 @@ function activeShowIndexEvidenceFlexDocuments(row = {}) {
     ...list(row.flexDocuments || row.documents),
     row.primaryFlexDocument,
   ].filter(Boolean);
-  if (!authoritative.length) return activeShowFlexDocuments(row);
   const keyDocs = text(row.keyDocs || row.activeShowsIndex?.keyDocs);
   const extracted = extractFlexDocumentRefs(keyDocs, { source: "active-show-index" });
+  const hasMappedSheetRow = Boolean(row.row && typeof row.row === "object");
+  // A mapped sheet row with no typed document is still authoritative evidence
+  // of that absence. Do not let name-based live FLEX lookup results leak into
+  // its immutable Source Record on later retries.
+  if (!authoritative.length && !hasMappedSheetRow) return activeShowFlexDocuments(row);
   return mergeFlexRefs(authoritative, extracted);
 }
 
