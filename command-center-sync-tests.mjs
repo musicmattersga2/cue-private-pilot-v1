@@ -13,11 +13,9 @@ assert.doesNotMatch(
   /await api\('\/api\/foundation\/slack\/sync'/,
   "the primary foundation sync must never bypass FLEX and the Active Show Index",
 );
-assert.match(
-  html,
-  /FLEX → Active Shows → Email\/Drive → Slack/,
-  "the operator feedback must make source ordering visible",
-);
+assert.match(html, /function syncStageSummary/, "operator feedback must be derived from actual source stages");
+assert.match(html, /Gmail.*Drive.*Slack/, "the source-stage labels preserve source-first order");
+assert.doesNotMatch(html, /Foundation synced: FLEX → Active Shows → Email\/Drive → Slack/, "disabled Google sources must not be reported as synchronized");
 assert.match(
   html,
   /partialStages/,
@@ -38,4 +36,5 @@ console.log(JSON.stringify({
   ok: true,
   syncEndpoint: "/api/foundation/source-first/sync",
   sourceOrder: ["flex", "active_show_index", "email_drive", "slack"],
+  truthfulStageReporting: true,
 }, null, 2));

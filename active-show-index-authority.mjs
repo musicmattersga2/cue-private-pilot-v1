@@ -374,6 +374,44 @@ export function summarizeActiveShowFlexEnrichment(shows = []) {
 
 export async function runSourceFirstIntakeSync(options = {}) {
   const stages = [];
+  const runEvidenceStage = async ({ name, records, loader, ingest, recordKey }) => {
+    if (!ingest) return;
+    let source = null;
+    try {
+      source = loader ? await loader() : {
+        status: "completed",
+        [recordKey]: Array.isArray(records) ? records : [],
+        cursorBefore: null,
+        cursorAfter: null,
+        errors: [],
+      };
+    } catch {
+      stages.push({ name, status: "failed", reason: "connector_failed", errors: [{ message: `${name} connector failed.` }] });
+      return;
+    }
+    if (source?.status === "skipped") {
+      stages.push({ name, status: "skipped", reason: source.reason || "not_configured", connector: source });
+      return;
+    }
+    const items = Array.isArray(source?.[recordKey]) ? source[recordKey] : [];
+    if (source?.status === "failed" && items.length === 0) {
+      stages.push({ name, status: "failed", reason: "connector_failed", connector: source });
+      return;
+    }
+    try {
+      const result = await ingest(items, verifiedFlexDocuments, source);
+      const partial = source?.status === "partial" || result?.ok === false || Number(result?.failed || 0) > 0;
+      stages.push({
+        name,
+        status: partial ? "partial" : "completed",
+        reason: partial ? "some_items_skipped_or_failed" : null,
+        connector: source,
+        result,
+      });
+    } catch {
+      stages.push({ name, status: "failed", reason: "ingestion_failed", connector: source, errors: [{ message: `${name} ingestion failed.` }] });
+    }
+  };
   if (options.discoverFlexQuoteStatuses) {
     const result = await options.discoverFlexQuoteStatuses();
     stages.push({
@@ -412,13 +450,23 @@ export async function runSourceFirstIntakeSync(options = {}) {
   const verifiedFlexDocuments = options.getVerifiedFlexDocuments
     ? await options.getVerifiedFlexDocuments()
     : [];
-  if (options.emailMessages?.length && options.ingestEmail) {
-    const result = await options.ingestEmail(options.emailMessages, verifiedFlexDocuments);
-    stages.push({ name: "email", status: "completed", result });
+  if (options.ingestEmail && (options.loadEmailMessages || Array.isArray(options.emailMessages))) {
+    await runEvidenceStage({
+      name: "gmail",
+      records: options.emailMessages,
+      loader: options.loadEmailMessages,
+      ingest: options.ingestEmail,
+      recordKey: "messages",
+    });
   }
-  if (options.driveFiles?.length && options.ingestDrive) {
-    const result = await options.ingestDrive(options.driveFiles, verifiedFlexDocuments);
-    stages.push({ name: "drive", status: "completed", result });
+  if (options.ingestDrive && (options.loadDriveFiles || Array.isArray(options.driveFiles))) {
+    await runEvidenceStage({
+      name: "drive",
+      records: options.driveFiles,
+      loader: options.loadDriveFiles,
+      ingest: options.ingestDrive,
+      recordKey: "files",
+    });
   }
   if (options.syncSlack) {
     const result = await options.syncSlack();
@@ -426,6 +474,7 @@ export async function runSourceFirstIntakeSync(options = {}) {
   }
   const failedStages = stages.filter(stage => stage.status === "failed");
   const partialStages = stages.filter(stage => stage.status === "partial");
+  const skippedStages = stages.filter(stage => stage.status === "skipped");
   return {
     ok: failedStages.length === 0 && partialStages.length === 0,
     degraded: failedStages.length > 0 || partialStages.length > 0,
@@ -433,6 +482,7 @@ export async function runSourceFirstIntakeSync(options = {}) {
     authoritativeSourceAvailable: !source?.usedFallback,
     failedStages: failedStages.map(stage => stage.name),
     partialStages: partialStages.map(stage => stage.name),
+    skippedStages: skippedStages.map(stage => stage.name),
     stages,
   };
 }

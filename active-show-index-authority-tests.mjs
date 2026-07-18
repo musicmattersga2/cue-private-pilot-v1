@@ -140,6 +140,22 @@ const result = await runSourceFirstIntakeSync({
 });
 assert.equal(result.ok, true);
 assert.deepEqual(order, ["flex-discovery", "flex-confirmations", "prepare", "registry", "index-evidence", "flex-registry", "email", "drive", "slack"]);
+assert.deepEqual(result.stages.filter(stage => ["gmail", "drive", "slack"].includes(stage.name)).map(stage => `${stage.name}:${stage.status}`), ["gmail:completed", "drive:completed", "slack:completed"]);
+
+const degradedOrder = [];
+const degradedGoogle = await runSourceFirstIntakeSync({
+  loadActiveShowIndex: async () => ({ usedFallback: false, shows: [mapped], source: "live" }),
+  syncCanonicalRegistry: async () => ({ ok: true }),
+  getVerifiedFlexDocuments: async () => [],
+  loadEmailMessages: async () => ({ status: "failed", messages: [], errors: [{ message: "Google Workspace request failed with HTTP 503." }] }),
+  ingestEmail: async () => { degradedOrder.push("gmail-ingest"); },
+  loadDriveFiles: async () => ({ status: "partial", files: [{ id: "drive-1" }], skippedFiles: [{ externalId: "drive-2" }] }),
+  ingestDrive: async () => { degradedOrder.push("drive"); return { ok: true }; },
+  syncSlack: async () => { degradedOrder.push("slack"); return { ok: true }; },
+});
+assert.deepEqual(degradedGoogle.failedStages, ["gmail"]);
+assert.deepEqual(degradedGoogle.partialStages, ["drive"]);
+assert.deepEqual(degradedOrder, ["drive", "slack"], "a Gmail failure must not block Drive or Slack");
 
 const unavailableDiscovery = await runSourceFirstIntakeSync({
   discoverFlexQuoteStatuses: async () => ({
@@ -224,6 +240,7 @@ console.log(JSON.stringify({
   mappedShow: mapped.id,
   primaryQuote: mapped.flex.primary.documentNumber,
   sourceFirstOrder: order,
+  degradedGoogleContinued: degradedOrder,
   failedDiscoveryReported: failedDiscovery.degraded,
   skippedDocumentReported: skippedDocument.degraded,
   fallbackGuarded: !registryCalled,

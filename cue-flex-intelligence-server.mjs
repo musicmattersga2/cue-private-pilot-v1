@@ -65,6 +65,10 @@ import { loadIntelligenceRulesCatalog } from "./cue-intelligence-rules-catalog.m
 import { adaptActiveShowToIntelligenceSnapshot } from "./cue-intelligence-show-snapshot.mjs";
 import { evaluateIntelligenceRules } from "./cue-intelligence-rules-engine.mjs";
 import { defaultIntelligenceFindingsStore } from "./cue-intelligence-findings-store.mjs";
+import {
+  createGoogleWorkspaceIntakeConnectors,
+  readGoogleWorkspaceConfig,
+} from "./google-workspace-intake-connectors.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -74,6 +78,107 @@ const CUE_LOGO_FILE = path.resolve("./cue-logo.svg");
 const CUE_PILOT_PASSWORD = process.env.CUE_PILOT_PASSWORD || "";
 const CUE_PILOT_SESSION_SECRET =
   process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
+const googleWorkspaceConfig = readGoogleWorkspaceConfig(process.env);
+const googleWorkspaceConnectors = createGoogleWorkspaceIntakeConnectors({ config: googleWorkspaceConfig });
+let googleWorkspaceSyncInFlight = null;
+
+async function googleConnectorCursor(connectorName) {
+  const record = await defaultCueFoundationStore.getConnectorCursor(connectorName);
+  return record?.cursor ?? null;
+}
+
+async function pullGoogleSource(kind) {
+  const connector = kind === "gmail" ? googleWorkspaceConfig.gmail : googleWorkspaceConfig.drive;
+  const cursorBefore = await googleConnectorCursor(connector.connectorName);
+  const result = kind === "gmail"
+    ? await googleWorkspaceConnectors.pullGmail({ cursorBefore })
+    : await googleWorkspaceConnectors.pullDrive({ cursorBefore });
+  if (["skipped", "failed"].includes(result.status)) {
+    await defaultCueFoundationStore.checkpointConnectorRun({
+      connectorName: connector.connectorName,
+      connectorVersion: "google-workspace-v1",
+      sourceType: kind === "gmail" ? "email" : "drive",
+      status: result.status,
+      cursorBefore: result.cursorBefore,
+      cursorAfter: result.cursorAfter,
+      errors: result.errors || [],
+      counts: { received: 0, skipped: result.errors?.length || 0 },
+      metadata: { reason: result.reason || null, ...(result.metadata || {}) },
+    });
+  }
+  return result;
+}
+
+async function ingestGoogleSource(kind, items, verifiedFlexDocuments, source = {}) {
+  const connector = kind === "gmail" ? googleWorkspaceConfig.gmail : googleWorkspaceConfig.drive;
+  if (!items.length) {
+    return defaultCueFoundationStore.checkpointConnectorRun({
+      connectorName: connector.connectorName,
+      connectorVersion: "google-workspace-v1",
+      sourceType: kind === "gmail" ? "email" : "drive",
+      status: source.status === "partial" ? "partial" : "completed",
+      cursorBefore: source.cursorBefore,
+      cursorAfter: source.cursorAfter,
+      errors: source.errors || [],
+      counts: { received: 0, skipped: source.skippedFiles?.length || 0, failed: source.errors?.length || 0 },
+      metadata: source.metadata || {},
+    });
+  }
+  const records = items.map(item => kind === "gmail"
+    ? adaptEmailMessageToIntakeRecord(item, {
+      connectorName: connector.connectorName,
+      connectorVersion: "google-workspace-v1",
+      verifiedFlexDocuments,
+    })
+    : adaptDriveFileToIntakeRecord(item, {
+      connectorName: connector.connectorName,
+      connectorVersion: "google-workspace-v1",
+      verifiedFlexDocuments,
+    }));
+  return defaultCueFoundationStore.ingestSourceRecords(records, {
+    sourceType: kind === "gmail" ? "email" : "drive",
+    connectorName: connector.connectorName,
+    connectorVersion: "google-workspace-v1",
+    cursorBefore: source.cursorBefore ?? null,
+    cursorAfter: source.cursorAfter ?? source.cursorBefore ?? null,
+    status: source.status,
+    errors: source.errors || [],
+    metadata: { ...(source.metadata || {}), skippedFiles: source.skippedFiles || [] },
+  });
+}
+
+async function runGoogleWorkspacePoll() {
+  if (googleWorkspaceSyncInFlight) return googleWorkspaceSyncInFlight;
+  googleWorkspaceSyncInFlight = (async () => {
+    const foundation = await defaultCueFoundationStore.read();
+    const verifiedFlexDocuments = Object.values(foundation.flexDocumentRegistry || {});
+    const stages = [];
+    for (const kind of ["gmail", "drive"]) {
+      try {
+        const source = await pullGoogleSource(kind);
+        if (source.status === "skipped" || source.status === "failed") {
+          stages.push({ name: kind, status: source.status, reason: source.reason || "connector_failed", connector: source });
+          continue;
+        }
+        const items = kind === "gmail" ? source.messages : source.files;
+        const result = await ingestGoogleSource(kind, items || [], verifiedFlexDocuments, source);
+        stages.push({ name: kind, status: source.status === "partial" || result?.ok === false ? "partial" : "completed", connector: source, result });
+      } catch {
+        stages.push({ name: kind, status: "failed", reason: "connector_failed", errors: [{ message: `${kind} connector failed.` }] });
+      }
+    }
+    return {
+      ok: stages.every(stage => ["completed", "skipped"].includes(stage.status)),
+      degraded: stages.some(stage => ["partial", "failed"].includes(stage.status)),
+      stages,
+      failedStages: stages.filter(stage => stage.status === "failed").map(stage => stage.name),
+      partialStages: stages.filter(stage => stage.status === "partial").map(stage => stage.name),
+      skippedStages: stages.filter(stage => stage.status === "skipped").map(stage => stage.name),
+    };
+  })();
+  try { return await googleWorkspaceSyncInFlight; }
+  finally { googleWorkspaceSyncInFlight = null; }
+}
 
 function resolveCueBuildId() {
   try {
@@ -6939,6 +7044,8 @@ function isAutomationAllowedPath(pathname) {
     "/api/slack-operational-signals/general",
     "/api/slack-operational-signals/rematch",
     "/api/foundation/source-first/sync",
+    "/api/foundation/google-workspace/status",
+    "/api/foundation/google-workspace/sync",
     "/api/foundation/flex/lifecycle/discover",
     "/api/foundation/flex/lifecycle/status",
     "/api/foundation/flex/confirmed-snapshot/sync",
@@ -9453,8 +9560,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/foundation/source-first/sync") {
       const rawBody = await readRequestBody(req);
       const body = JSON.parse(rawBody || "{}");
-      const emailMessages = Array.isArray(body.emailMessages) ? body.emailMessages : [];
-      const driveFiles = Array.isArray(body.driveFiles) ? body.driveFiles : [];
+      const suppliedEmailMessages = Array.isArray(body.emailMessages) ? body.emailMessages : null;
+      const suppliedDriveFiles = Array.isArray(body.driveFiles) ? body.driveFiles : null;
       const flexQuoteStatuses = Array.isArray(body.flexQuoteStatuses) ? body.flexQuoteStatuses : [];
       const result = await runSourceFirstIntakeSync({
         discoverFlexQuoteStatuses: body.discoverFlexLifecycle === false
@@ -9508,8 +9615,14 @@ const server = http.createServer(async (req, res) => {
           const foundation = await defaultCueFoundationStore.read();
           return Object.values(foundation.flexDocumentRegistry || {});
         },
-        emailMessages,
-        ingestEmail: (messages, verifiedFlexDocuments) => {
+        emailMessages: suppliedEmailMessages,
+        loadEmailMessages: suppliedEmailMessages !== null
+          ? null
+          : body.syncEmail === false
+            ? async () => ({ status: "skipped", reason: "disabled_for_request", messages: [] })
+            : () => pullGoogleSource("gmail"),
+        ingestEmail: (messages, verifiedFlexDocuments, source = {}) => {
+          if (suppliedEmailMessages === null) return ingestGoogleSource("gmail", messages, verifiedFlexDocuments, source);
           const records = messages.map(message => adaptEmailMessageToIntakeRecord(message, {
             connectorName: String(body.emailConnectorName || "gmail-operational-intake").trim(),
             connectorVersion: "source-first-v1",
@@ -9521,8 +9634,14 @@ const server = http.createServer(async (req, res) => {
             connectorVersion: "source-first-v1",
           });
         },
-        driveFiles,
-        ingestDrive: (files, verifiedFlexDocuments) => {
+        driveFiles: suppliedDriveFiles,
+        loadDriveFiles: suppliedDriveFiles !== null
+          ? null
+          : body.syncDrive === false
+            ? async () => ({ status: "skipped", reason: "disabled_for_request", files: [] })
+            : () => pullGoogleSource("drive"),
+        ingestDrive: (files, verifiedFlexDocuments, source = {}) => {
+          if (suppliedDriveFiles === null) return ingestGoogleSource("drive", files, verifiedFlexDocuments, source);
           const records = files.map(file => adaptDriveFileToIntakeRecord(file, {
             connectorName: String(body.driveConnectorName || "google-drive-operational-intake").trim(),
             connectorVersion: "source-first-v1",
@@ -9541,6 +9660,31 @@ const server = http.createServer(async (req, res) => {
           return { rematch, foundation };
         },
       });
+      sendJson(res, result.ok ? 200 : 502, result);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/google-workspace/status") {
+      const gmailCursor = await defaultCueFoundationStore.getConnectorCursor(googleWorkspaceConfig.gmail.connectorName);
+      const driveCursor = await defaultCueFoundationStore.getConnectorCursor(googleWorkspaceConfig.drive.connectorName);
+      const gmailRuns = await defaultCueFoundationStore.listConnectorRuns({ connectorName: googleWorkspaceConfig.gmail.connectorName, limit: 1 });
+      const driveRuns = await defaultCueFoundationStore.listConnectorRuns({ connectorName: googleWorkspaceConfig.drive.connectorName, limit: 1 });
+      sendJson(res, 200, {
+        ok: true,
+        workspaceEnabled: googleWorkspaceConfig.workspaceEnabled,
+        configured: googleWorkspaceConfig.configured,
+        configurationErrors: googleWorkspaceConfig.errors,
+        connectors: {
+          gmail: { enabled: googleWorkspaceConfig.gmail.enabled, bounded: Boolean(googleWorkspaceConfig.gmail.query), cursor: gmailCursor?.cursor ?? null, latestRun: gmailRuns[0] || null },
+          drive: { enabled: googleWorkspaceConfig.drive.enabled, bounded: Boolean(googleWorkspaceConfig.drive.query || googleWorkspaceConfig.drive.folderIds.length), cursor: driveCursor?.cursor ?? null, latestRun: driveRuns[0] || null },
+        },
+        polling: { enabled: googleWorkspaceConfig.syncIntervalMinutes >= 5, intervalMinutes: googleWorkspaceConfig.syncIntervalMinutes },
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/google-workspace/sync") {
+      const result = await runGoogleWorkspacePoll();
       sendJson(res, result.ok ? 200 : 502, result);
       return;
     }
@@ -10615,6 +10759,7 @@ console.log("[CUE AI MODEL SELECT]", {
       error: error.message || "Unexpected server error",
     });
   }
+
 });
 
 server.listen(PORT, async () => {
@@ -10663,5 +10808,17 @@ server.listen(PORT, async () => {
     } catch (error) {
       console.warn("[CUE SLACK SIGNALS] Background sync not started.", error?.message || error);
     }
+  }
+
+  if (googleWorkspaceConfig.syncIntervalMinutes >= 5 && (googleWorkspaceConfig.gmail.enabled || googleWorkspaceConfig.drive.enabled)) {
+    const intervalMs = googleWorkspaceConfig.syncIntervalMinutes * 60_000;
+    setInterval(() => {
+      runGoogleWorkspacePoll().catch(error => {
+        console.warn("[CUE GOOGLE WORKSPACE] Background sync failed.", error?.message || error);
+      });
+    }, intervalMs).unref?.();
+    console.log(`[CUE GOOGLE WORKSPACE] Background sync enabled every ${googleWorkspaceConfig.syncIntervalMinutes} minutes.`);
+  } else {
+    console.log("[CUE GOOGLE WORKSPACE] Background sync not enabled (enable a connector and set CUE_GOOGLE_SYNC_INTERVAL_MINUTES >= 5).");
   }
 });

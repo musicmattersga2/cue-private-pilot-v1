@@ -196,7 +196,11 @@ export function createCueFoundationStore(options = {}) {
       const connectorName = cleanText(options.connectorName || "shared-intake");
       const runId = connectorRunId(connectorName, startedAt, options.cursorBefore || null);
       const counts = { received: 0, created: 0, deduplicated: 0, superseded: 0, intakeCreated: 0, intakeSuperseded: 0, matched: 0, needsMatch: 0, routed: 0, failed: 0 };
-      const errors = [];
+      const errors = Array.isArray(options.errors) ? options.errors.map(error => ({
+        message: cleanText(error?.message || "Connector item failed."),
+        externalId: cleanText(error?.externalId) || null,
+        reason: cleanText(error?.reason) || null,
+      })) : [];
       db.connectorRuns[runId] = {
         id: runId,
         connectorName,
@@ -304,7 +308,9 @@ export function createCueFoundationStore(options = {}) {
       }
       const finishedAt = now();
       const run = db.connectorRuns[runId];
-      run.status = counts.failed ? (counts.created || counts.deduplicated ? "partial" : "failed") : "completed";
+      run.status = counts.failed ? (counts.created || counts.deduplicated ? "partial" : "failed")
+        : options.status === "partial" ? "partial"
+          : "completed";
       run.cursorAfter = options.cursorAfter ?? options.cursorBefore ?? null;
       run.finishedAt = finishedAt;
       if (run.cursorAfter !== null) {
