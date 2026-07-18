@@ -59,6 +59,7 @@ npm run board:complete -- --id "<workstream-id>" --summary "Completed and verifi
 Every mutation first reads the latest `boardVersion` unless an explicit `--expected-version` is
 provided. A `409` is surfaced for human or agent reconciliation; the client never blindly
 overwrites newer shared state. Network and temporary server retries reuse the same idempotency key.
+Every request is time-bounded so a Control Board outage cannot hang CUE development or CI.
 
 For `step`, omitting `--notes` or `--completed-at` preserves the current canonical value. If an
 explicit version is supplied, provide both fields because that mode deliberately avoids the
@@ -74,3 +75,30 @@ await board.updateStep("api-versioning", "complete", {
   notes: "CUE server integration verified",
 });
 ```
+
+## Automatic repository progress
+
+`.github/workflows/control-board-progress.yml` reports pushes and pull-request lifecycle events.
+It finds one active workstream by the exact Git branch and records the commit, actor, run, and
+evidence link in that workstream's summary. A merged pull request completes the matching
+workstream. It never infers that a roadmap step is complete from a commit or pull request.
+
+Roadmap steps can be updated explicitly through the workflow's manual dispatch inputs or through
+`npm run board:step`. Explicit step updates continue to use optimistic locking and preserve prior
+notes when new notes are omitted.
+
+The workflow is deliberately non-blocking. Missing credentials, temporary network failures,
+unregistered branches, stale versions, and ambiguous branch ownership are reported but do not
+fail the product build. No event creates a workstream automatically; a chat, developer, or agent
+must register intent and file ownership before implementation starts.
+
+Configure these GitHub repository secrets:
+
+```text
+CONTROL_BOARD_SERVICE_SECRET
+CONTROL_BOARD_SITES_TOKEN
+```
+
+Optional repository variables are `CONTROL_BOARD_URL` and `CONTROL_BOARD_SERVICE_ID`; the workflow
+defaults them to the canonical CUE Board URL and `cue-server`. Keep the service credential in
+GitHub's protected secret store and never echo it in workflow output.

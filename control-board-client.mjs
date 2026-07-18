@@ -68,6 +68,7 @@ export class ControlBoardClient {
     if (typeof this.fetch !== "function") throw new Error("A fetch implementation is required");
     this.maxAttempts = Math.max(1, Math.min(3, Number(options.maxAttempts || 2)));
     this.retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? 200));
+    this.requestTimeoutMs = Math.max(250, Math.min(30_000, Number(options.requestTimeoutMs || 5_000)));
   }
 
   headers(hasBody = false) {
@@ -85,10 +86,14 @@ export class ControlBoardClient {
     let lastNetworkError;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
       let response;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+      timeout.unref?.();
       try {
         response = await this.fetch(this.endpoint, {
           method,
           headers: this.headers(serialized !== undefined),
+          signal: controller.signal,
           ...(serialized === undefined ? {} : { body: serialized }),
         });
       } catch (error) {
@@ -101,6 +106,8 @@ export class ControlBoardClient {
           code: "network_error",
           body: { cause: error instanceof Error ? error.message : "Network request failed" },
         });
+      } finally {
+        clearTimeout(timeout);
       }
 
       const parsed = safeJson(await response.text());

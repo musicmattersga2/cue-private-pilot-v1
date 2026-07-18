@@ -13,7 +13,8 @@
     "board:step": "node scripts/control-board.mjs step",
     "board:focus": "node scripts/control-board.mjs focus",
     "board:workstream": "node scripts/control-board.mjs workstream",
-    "board:complete": "node scripts/control-board.mjs complete"
+    "board:complete": "node scripts/control-board.mjs complete",
+    "board:event": "node scripts/control-board-event.mjs"
   },
   "keywords": [],
   "author": "",

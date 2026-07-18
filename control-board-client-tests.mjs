@@ -6,6 +6,10 @@ import {
   ControlBoardError,
   controlBoardConfigFromEnv,
 } from "./control-board-client.mjs";
+import {
+  normalizeGithubEvent,
+  reportControlBoardEvent,
+} from "./scripts/control-board-event.mjs";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -130,6 +134,25 @@ test("409 conflict is surfaced without automatic overwrite or retry", async () =
   assert.equal(mock.calls.length, 2);
 });
 
+test("requests are time-bounded when the Control Board does not respond", async () => {
+  const fetch = async (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+  });
+  const stalled = new ControlBoardClient({
+    baseUrl: "https://control-board.example.test/",
+    serviceId: "cursor",
+    serviceSecret: "application-secret",
+    sitesToken: "sites-dispatch-secret",
+    fetch,
+    maxAttempts: 1,
+    requestTimeoutMs: 250,
+  });
+  await assert.rejects(
+    () => stalled.read(),
+    (error) => error instanceof ControlBoardError && error.code === "network_error",
+  );
+});
+
 test("explicit expectedVersion avoids an extra read", async () => {
   const mock = mockFetch([jsonResponse({ ok: true, boardVersion: 5 })]);
   await client(mock).updateWorkstream("ws-1", "complete", {}, {
@@ -140,4 +163,100 @@ test("explicit expectedVersion avoids an extra read", async () => {
   const payload = JSON.parse(mock.calls[0].init.body);
   assert.equal(payload.expectedVersion, 4);
   assert.equal(payload.action, "update_workstream");
+});
+
+test("GitHub event normalization uses the pull request head branch", () => {
+  const event = normalizeGithubEvent("pull_request", {
+    action: "synchronize",
+    pull_request: {
+      head: { ref: "feature/control-board-client", sha: "abcdef1234567890" },
+      html_url: "https://github.example.test/pull/7",
+      merged: false,
+    },
+    repository: { full_name: "musicmattersga2/cue-private-pilot-v1" },
+    sender: { login: "developer" },
+  }, { GITHUB_RUN_ID: "99", GITHUB_RUN_ATTEMPT: "2" });
+  assert.equal(event.branch, "feature/control-board-client");
+  assert.equal(event.workstreamStatus, "in_progress");
+  assert.equal(event.runId, "99");
+});
+
+test("manual dispatch no-change choices do not create accidental updates", () => {
+  const event = normalizeGithubEvent("workflow_dispatch", {
+    inputs: {
+      branch: "feature/control-board-client",
+      workstream_status: "no_change",
+      step_status: "no_change",
+    },
+  }, { GITHUB_RUN_ID: "100", GITHUB_RUN_ATTEMPT: "1" });
+  assert.equal(event.workstreamStatus, "in_progress");
+  assert.equal(event.stepId, "");
+  assert.equal(event.stepStatus, "");
+});
+
+test("automatic event updates only the active workstream matching the branch", async () => {
+  const mock = mockFetch([
+    jsonResponse({
+      boardVersion: 30,
+      workstreams: [
+        { id: "ws-intake", branch: "feature/cue-foundation-slack-readiness", status: "in_progress", summary: "Intake" },
+        { id: "ws-board", branch: "feature/control-board-client", status: "in_progress", summary: "Automation intent" },
+      ],
+    }),
+    jsonResponse({ ok: true, boardVersion: 31 }),
+  ]);
+  const result = await reportControlBoardEvent(client(mock), {
+    eventName: "push",
+    action: "push",
+    branch: "feature/control-board-client",
+    sha: "1234567890abcdef",
+    repository: "musicmattersga2/cue-private-pilot-v1",
+    actor: "developer",
+    evidenceUrl: "https://github.example.test/compare/1...2",
+    runId: "101",
+    runAttempt: "1",
+    workstreamId: "",
+    workstreamStatus: "in_progress",
+    stepId: "",
+  });
+  assert.equal(result.workstreamId, "ws-board");
+  const payload = JSON.parse(mock.calls[1].init.body);
+  assert.equal(payload.action, "update_workstream");
+  assert.equal(payload.id, "ws-board");
+  assert.match(payload.summary, /Automation intent/);
+  assert.match(payload.summary, /commit 1234567890ab/);
+  assert.match(payload.idempotencyKey, /^cue-gh-workstream-/);
+});
+
+test("unmatched branches skip safely without a mutation", async () => {
+  const mock = mockFetch([jsonResponse({ boardVersion: 30, workstreams: [] })]);
+  const result = await reportControlBoardEvent(client(mock), {
+    eventName: "push",
+    action: "push",
+    branch: "feature/unregistered",
+    runId: "102",
+    runAttempt: "1",
+    workstreamStatus: "in_progress",
+    workstreamId: "",
+    stepId: "",
+  });
+  assert.equal(result.skipped, true);
+  assert.equal(mock.calls.length, 1);
+});
+
+test("a merged pull request completes its exact branch workstream", async () => {
+  const mock = mockFetch([
+    jsonResponse({
+      boardVersion: 40,
+      workstreams: [{ id: "ws-board", branch: "feature/control-board-client", status: "ready_to_merge", summary: "Ready" }],
+    }),
+    jsonResponse({ ok: true, boardVersion: 41 }),
+  ]);
+  const event = normalizeGithubEvent("pull_request", {
+    action: "closed",
+    pull_request: { merged: true, head: { ref: "feature/control-board-client", sha: "abc123" } },
+  }, { GITHUB_RUN_ID: "103", GITHUB_RUN_ATTEMPT: "1" });
+  await reportControlBoardEvent(client(mock), event);
+  const payload = JSON.parse(mock.calls[1].init.body);
+  assert.equal(payload.status, "complete");
 });
