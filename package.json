@@ -5,8 +5,8 @@
   "main": "cue-flex-intelligence-server.mjs",
   "scripts": {
     "start": "node cue-flex-intelligence-server.mjs",
-    "test": "node slack-operational-signals-tests.mjs && node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs && node flex-quote-link-tests.mjs && node canonical-show-registry-tests.mjs",
-    "test:foundation": "node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs",
+    "test": "node slack-operational-signals-tests.mjs && node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs && node source-first-flex-intake-tests.mjs && node command-center-sync-tests.mjs && node flex-quote-link-tests.mjs && node canonical-show-registry-tests.mjs",
+    "test:foundation": "node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs && node source-first-flex-intake-tests.mjs && node command-center-sync-tests.mjs",
     "smoke:flex-confirmed": "node flex-confirmed-quote-live-smoke.mjs"
   },
   "keywords": [],
