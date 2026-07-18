@@ -5,9 +5,19 @@
   "main": "cue-flex-intelligence-server.mjs",
   "scripts": {
     "start": "node cue-flex-intelligence-server.mjs",
-    "test": "node slack-operational-signals-tests.mjs && node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs && node source-first-flex-intake-tests.mjs && node command-center-sync-tests.mjs && node flex-quote-link-tests.mjs && node canonical-show-registry-tests.mjs",
+    "test": "node slack-operational-signals-tests.mjs && node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs && node source-first-flex-intake-tests.mjs && node command-center-sync-tests.mjs && node flex-quote-link-tests.mjs && node canonical-show-registry-tests.mjs && node cue-intelligence-rules-tests.mjs",
     "test:foundation": "node cue-foundation-store-tests.mjs && node cue-intake-contract-tests.mjs && node cue-intake-evidence-adapters-tests.mjs && node flex-lifecycle-discovery-tests.mjs && node active-show-index-authority-tests.mjs && node flex-confirmed-quote-tests.mjs && node flex-confirmed-quote-snapshot-tests.mjs && node source-first-flex-intake-tests.mjs && node command-center-sync-tests.mjs",
-    "smoke:flex-confirmed": "node flex-confirmed-quote-live-smoke.mjs"
+    "test:intelligence": "node cue-intelligence-rules-tests.mjs",
+    "test:control-board": "node control-board-client-tests.mjs",
+    "smoke:flex-confirmed": "node flex-confirmed-quote-live-smoke.mjs",
+    "board": "node scripts/control-board.mjs",
+    "board:status": "node scripts/control-board.mjs status",
+    "board:start": "node scripts/control-board.mjs start",
+    "board:step": "node scripts/control-board.mjs step",
+    "board:focus": "node scripts/control-board.mjs focus",
+    "board:workstream": "node scripts/control-board.mjs workstream",
+    "board:complete": "node scripts/control-board.mjs complete",
+    "board:event": "node scripts/control-board-event.mjs"
   },
   "keywords": [],
   "author": "",

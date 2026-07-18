@@ -61,6 +61,10 @@ import {
   getFlexRequestTimeoutMs,
   isSkippableFlexRequestError,
 } from "./flex-request-client.mjs";
+import { loadIntelligenceRulesCatalog } from "./cue-intelligence-rules-catalog.mjs";
+import { adaptActiveShowToIntelligenceSnapshot } from "./cue-intelligence-show-snapshot.mjs";
+import { evaluateIntelligenceRules } from "./cue-intelligence-rules-engine.mjs";
+import { defaultIntelligenceFindingsStore } from "./cue-intelligence-findings-store.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -9260,6 +9264,181 @@ const server = http.createServer(async (req, res) => {
         showKey,
         comparison,
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/intelligence-rules/catalog") {
+      try {
+        const catalog = loadIntelligenceRulesCatalog();
+        sendJson(res, 200, {
+          ok: true,
+          catalog_version: catalog.catalog_version,
+          status: catalog.status,
+          finding_contract_version: catalog.finding_contract_version,
+          default_mode: catalog.default_mode,
+          pilot_rule_ids: catalog.pilotRuleIds,
+          rules: catalog.rules,
+        });
+      } catch (error) {
+        sendJson(res, 500, {
+          error: error?.message || "Failed to load intelligence rules catalog.",
+        });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/intelligence-rules/findings") {
+      const showId = String(url.searchParams.get("showId") || "").trim();
+      const status = String(url.searchParams.get("status") || "").trim() || null;
+      const ruleId = String(url.searchParams.get("ruleId") || "").trim() || null;
+      const findings = await defaultIntelligenceFindingsStore.listFindings({
+        showId: showId || null,
+        status,
+        ruleId,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        mode: "observe_only",
+        count: findings.length,
+        items: findings,
+      });
+      return;
+    }
+
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/intelligence-rules/evaluate"
+    ) {
+      try {
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        let snapshot = body.snapshot || null;
+        let showId = String(body.showId || body.show_id || "").trim();
+
+        if (!snapshot) {
+          if (!showId) {
+            sendJson(res, 400, {
+              error: "showId or snapshot is required.",
+            });
+            return;
+          }
+          const payload = await buildActiveShowsResponse(
+            "intelligence-rules-evaluate"
+          );
+          const show = (payload.shows || []).find(
+            (item) =>
+              item.id === showId ||
+              item.showKey === showId ||
+              item.show_id === showId
+          );
+          if (!show) {
+            sendJson(res, 404, { error: `Show not found: ${showId}` });
+            return;
+          }
+          const adapted = adaptActiveShowToIntelligenceSnapshot(show, {
+            staffing: body.staffing || undefined,
+            trucking: body.trucking || undefined,
+            warehouse: body.warehouse || undefined,
+            extraFactCandidates: body.extraFactCandidates || undefined,
+          });
+          if (!adapted.ok) {
+            sendJson(res, 400, {
+              error: "Unable to adapt Active Show to Intelligence snapshot.",
+              missing_inputs: adapted.missing_inputs,
+              notes: adapted.notes,
+            });
+            return;
+          }
+          snapshot = adapted.snapshot;
+          showId = snapshot.show.show_id;
+        } else {
+          showId = snapshot.show?.show_id || showId;
+        }
+
+        if (!showId) {
+          sendJson(res, 400, { error: "snapshot.show.show_id is required." });
+          return;
+        }
+
+        const existingFindings =
+          await defaultIntelligenceFindingsStore.listFindings({ showId });
+        const result = evaluateIntelligenceRules(snapshot, {
+          existingFindings,
+          now: body.now ? new Date(body.now) : new Date(),
+          ruleIds: body.ruleIds || undefined,
+        });
+        if (!result.ok) {
+          sendJson(res, 400, { error: result.error || "Evaluation failed." });
+          return;
+        }
+        await defaultIntelligenceFindingsStore.replaceShowFindings(
+          showId,
+          result.findings
+        );
+        sendJson(res, 200, {
+          ok: true,
+          mode: "observe_only",
+          show_id: showId,
+          evaluated_at: result.evaluated_at,
+          stats: result.stats,
+          missing_inputs: result.missing_inputs,
+          telemetry: result.telemetry,
+          count: result.findings.length,
+          findings: result.findings,
+          actionable: result.actionable,
+        });
+      } catch (error) {
+        sendJson(res, 500, {
+          error: error?.message || "Intelligence evaluation failed.",
+        });
+      }
+      return;
+    }
+
+    const intelligenceLifecycleMatch = url.pathname.match(
+      /^\/api\/intelligence-rules\/findings\/([^/]+)\/(acknowledge|snooze|dismiss|reopen)$/
+    );
+    if (req.method === "POST" && intelligenceLifecycleMatch) {
+      try {
+        const findingId = decodeURIComponent(intelligenceLifecycleMatch[1]);
+        const action = intelligenceLifecycleMatch[2];
+        const rawBody = await readRequestBody(req);
+        const body = rawBody ? JSON.parse(rawBody) : {};
+        let result;
+        if (action === "acknowledge") {
+          result = await defaultIntelligenceFindingsStore.acknowledge(
+            findingId,
+            {
+              actorId: body.actorId || "active-shows-user",
+              note: body.note || body.rationale || null,
+            }
+          );
+        } else if (action === "snooze") {
+          result = await defaultIntelligenceFindingsStore.snooze(findingId, {
+            until: body.until || body.snooze_until,
+            reason: body.reason || body.rationale || null,
+            actorId: body.actorId || "active-shows-user",
+          });
+        } else if (action === "dismiss") {
+          result = await defaultIntelligenceFindingsStore.dismiss(findingId, {
+            reason: body.reason || body.rationale || null,
+            actorId: body.actorId || "active-shows-user",
+          });
+        } else {
+          result = await defaultIntelligenceFindingsStore.reopen(findingId, {
+            reason: body.reason || body.rationale || null,
+          });
+        }
+        if (!result.ok) {
+          sendJson(res, result.error === "Finding not found." ? 404 : 400, result);
+          return;
+        }
+        sendJson(res, 200, { ok: true, mode: "observe_only", finding: result.finding });
+      } catch (error) {
+        sendJson(res, 500, {
+          error: error?.message || "Finding lifecycle update failed.",
+        });
+      }
       return;
     }
 

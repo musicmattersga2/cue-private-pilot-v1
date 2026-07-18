@@ -1,0 +1,66 @@
+{
+  "id": "G01",
+  "rule_id": "INT-002",
+  "description": "Two reliable sources disagree on show.venue",
+  "now": "2026-07-01T12:00:00.000Z",
+  "expect": {
+    "rule_ids": ["INT-002"],
+    "min_findings": 1,
+    "severity": "needs_attention"
+  },
+  "snapshot": {
+    "snapshot_id": "g01",
+    "snapshot_version": "intelligence-show-snapshot.v1",
+    "generated_at": "2026-07-01T12:00:00.000Z",
+    "show": {
+      "show_id": "fixture-g01-conflict",
+      "name": "Conflict Venue Show",
+      "status": "active",
+      "client": "Acme",
+      "venue": "Hall A",
+      "ship_at": "2026-07-10T08:00:00.000Z",
+      "load_in_at": "2026-07-11T14:00:00.000Z",
+      "show_start_at": "2026-07-12T19:00:00.000Z",
+      "load_out_at": "2026-07-13T02:00:00.000Z",
+      "project_manager": "PM",
+      "source_refs": []
+    },
+    "active_fact_candidates": [
+      {
+        "field_path": "show.venue",
+        "normalized_value": "hall a",
+        "display_value": "Hall A",
+        "source_type": "flex",
+        "source_id": "flex:1",
+        "source_timestamp": "2026-06-30T10:00:00.000Z",
+        "source_reliability": "high",
+        "confidence": "high",
+        "active": true,
+        "superseded": false
+      },
+      {
+        "field_path": "show.venue",
+        "normalized_value": "hall b",
+        "display_value": "Hall B",
+        "source_type": "active_shows",
+        "source_id": "sheet:1",
+        "source_timestamp": "2026-06-30T11:00:00.000Z",
+        "source_reliability": "high",
+        "confidence": "high",
+        "active": true,
+        "superseded": false
+      }
+    ],
+    "staffing": { "source_status": "unavailable", "positions": [] },
+    "trucking": { "source_status": "unavailable", "runs": [] },
+    "warehouse": {
+      "source_status": "unavailable",
+      "pull_required": null,
+      "pull_status": null,
+      "pull_progress": null,
+      "source_refs": []
+    },
+    "milestones": [],
+    "adapter_telemetry": { "missing_inputs": [], "notes": [] }
+  }
+}

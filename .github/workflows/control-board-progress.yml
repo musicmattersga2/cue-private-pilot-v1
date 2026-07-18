@@ -1,0 +1,67 @@
+name: Control Board progress
+
+on:
+  push:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch whose active workstream should be updated
+        required: true
+        type: string
+      workstream_id:
+        description: Optional exact workstream ID
+        required: false
+        type: string
+      workstream_status:
+        description: Workstream status
+        required: false
+        type: choice
+        default: no_change
+        options: [no_change, in_progress, blocked, ready_to_merge, complete, canceled]
+      step_id:
+        description: Optional roadmap step ID to update explicitly
+        required: false
+        type: string
+      step_status:
+        description: Roadmap step status
+        required: false
+        type: choice
+        default: no_change
+        options: [no_change, in_progress, blocked, complete, not_started]
+      step_notes:
+        description: Optional verification or architecture notes
+        required: false
+        type: string
+      completed_at:
+        description: Optional ISO-8601 completion time
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  report:
+    name: Report repository progress
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    continue-on-error: true
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      CONTROL_BOARD_URL: https://intake-spine-control-board-connector.aaronsoriero619.chatgpt.site/github-control-board
+      CONTROL_BOARD_GITHUB_OIDC_AUDIENCE: https://intake-spine-control-board-connector.aaronsoriero619.chatgpt.site/github-actions
+      CONTROL_BOARD_AGENT: CUE GitHub Actions · ${{ github.repository }} · ${{ github.ref_name }}
+    steps:
+      - name: Check out the event revision
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Report without blocking product work
+        run: node scripts/control-board-event.mjs --soft-fail
