@@ -85,6 +85,47 @@ assert.equal(activeRecord.connectorName, "active-show-index");
 assert.equal(activeRecord.canonicalShowId, "liteflair-shoot");
 assert.equal(activeRecord.intakeMetadata.identityAuthority, true);
 
+const activeRowWithVerifiedFlex = {
+  ...activeRow,
+  row: { show: "LiteFlair Shoot", client: "LiteFlair", quote: "26-1790" },
+  flexDocuments: [quote],
+  flex: {
+    status: "Verified",
+    primary: quote,
+    documents: [{ ...quote, status: "Verified", message: null }],
+    lastPullAt: "2026-07-18T12:40:00.000Z",
+  },
+};
+const activeRowWithSkippedFlex = {
+  ...activeRowWithVerifiedFlex,
+  flex: {
+    status: "Partial",
+    primary: null,
+    documents: [{
+      documentNumber: "26-1790",
+      documentType: "quote",
+      role: "primary_show_quote",
+      status: "Skipped",
+      skipReason: "flex_http_429",
+      message: "FLEX request failed: 429 Too Many Requests.",
+    }],
+    lastPullAt: "2026-07-18T12:42:57.000Z",
+  },
+};
+const verifiedEvidenceRecord = adaptActiveShowIndexRowToIntakeRecord(activeRowWithVerifiedFlex, {
+  sheetId: "sheet-active-shows",
+  sheetName: "Active Shows",
+});
+const skippedEvidenceRecord = adaptActiveShowIndexRowToIntakeRecord(activeRowWithSkippedFlex, {
+  sheetId: "sheet-active-shows",
+  sheetName: "Active Shows",
+});
+assert.deepEqual(
+  skippedEvidenceRecord.flexDocumentRefs,
+  verifiedEvidenceRecord.flexDocumentRefs,
+  "transient FLEX failures never rewrite authoritative Active Show Index evidence references",
+);
+
 const batch = buildActiveShowIndexBatch([activeRow], {
   sheetId: "sheet-active-shows",
   sheetName: "Active Shows",
@@ -107,6 +148,28 @@ const activeIngest = await store.ingestSourceRecords(batch.records, {
   startedAt: "2026-07-14T01:10:00Z",
 });
 assert.equal(activeIngest.matched, 1, "Active Show Index rows establish existing canonical show identity");
+
+const volatileFlexStore = createCueFoundationStore({ filePath: path.join(dir, "volatile-flex-foundation.json") });
+await volatileFlexStore.syncCanonicalShowRegistry(batch.shows, {
+  source: "active-show-index",
+  sheetId: "sheet-active-shows",
+  sheetName: "Active Shows",
+});
+const verifiedFlexIngest = await volatileFlexStore.ingestSourceRecords([verifiedEvidenceRecord], {
+  sourceType: "drive",
+  connectorName: "active-show-index",
+  startedAt: "2026-07-18T12:40:00.000Z",
+});
+const skippedFlexIngest = await volatileFlexStore.ingestSourceRecords([skippedEvidenceRecord], {
+  sourceType: "drive",
+  connectorName: "active-show-index",
+  startedAt: "2026-07-18T12:43:00.000Z",
+});
+const volatileFlexDb = await volatileFlexStore.read();
+assert.equal(verifiedFlexIngest.intakeCreated, 1);
+assert.equal(skippedFlexIngest.deduplicated, 1, "a transient FLEX skip reuses the existing Active Show Index Source Record");
+assert.equal(skippedFlexIngest.intakeCreated, 0, "a transient FLEX skip does not churn Intake identity");
+assert.equal(Object.keys(volatileFlexDb.intakeItems).length, 1, "repeated sheet evidence retains one Intake item");
 
 const foundation = await store.read();
 const verifiedFlexDocuments = Object.values(foundation.flexDocumentRegistry);

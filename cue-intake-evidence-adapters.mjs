@@ -304,6 +304,22 @@ function activeShowFlexDocuments(row = {}) {
   return mergeFlexRefs(explicit, extracted);
 }
 
+function activeShowIndexEvidenceFlexDocuments(row = {}) {
+  // Source Record identity for the Active Show Index must reflect only the
+  // authoritative sheet row. Live FLEX enrichment is transient: a later run
+  // may verify a document, time out, or receive 429 without the sheet changing.
+  // Mapped sheet rows retain their original typed references in these fields
+  // even after the server adds row.flex enrichment for registry/readiness use.
+  const authoritative = [
+    ...list(row.flexDocuments || row.documents),
+    row.primaryFlexDocument,
+  ].filter(Boolean);
+  if (!authoritative.length) return activeShowFlexDocuments(row);
+  const keyDocs = text(row.keyDocs || row.activeShowsIndex?.keyDocs);
+  const extracted = extractFlexDocumentRefs(keyDocs, { source: "active-show-index" });
+  return mergeFlexRefs(authoritative, extracted);
+}
+
 export function canonicalShowFromActiveShowIndexRow(row = {}, options = {}) {
   const id = text(row.canonicalShowId || row.showId || row.showKey || row.id);
   const name = text(row.showName || row.name || row.eventName);
@@ -347,7 +363,19 @@ export function adaptActiveShowIndexRowToIntakeRecord(row = {}, options = {}) {
   const show = canonicalShowFromActiveShowIndexRow(row, options);
   const sheetId = text(options.sheetId || row.sheetId || "active-show-index");
   const externalId = text(row.externalId) || `${sheetId}:${row.rowNumber ?? show.id}`;
-  const flexDocumentRefs = activeShowFlexDocuments(row);
+  const flexDocumentRefs = activeShowIndexEvidenceFlexDocuments(row);
+  const authoritativePrimary = flexDocumentRefs.find(document =>
+    text(document.role).toLowerCase() === "primary_show_quote"
+  ) || null;
+  const authoritativeShow = canonicalShowFromActiveShowIndexRow({
+    ...row,
+    flexDocuments: flexDocumentRefs,
+    primaryFlexDocument: authoritativePrimary,
+    flex: {
+      primary: authoritativePrimary,
+      documents: flexDocumentRefs,
+    },
+  }, options);
   const normalizedText = [
     `Active Show Index: ${show.name}`,
     show.client && `Client: ${show.client}`,
@@ -384,7 +412,7 @@ export function adaptActiveShowIndexRowToIntakeRecord(row = {}, options = {}) {
     }),
     payload: {
       row: row.row && typeof row.row === "object" ? row.row : row,
-      canonicalShow: show,
+      canonicalShow: authoritativeShow,
     },
     intakeMetadata: {
       evidenceKind: "active_show_index_row",
