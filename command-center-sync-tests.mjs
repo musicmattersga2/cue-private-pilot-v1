@@ -23,6 +23,16 @@ assert.match(
   /partialStages/,
   "the Command Center must report partial source completion instead of claiming a clean sync",
 );
+assert.match(
+  html,
+  /reportedPartial=Boolean\(data\?\.degraded\)&&Array\.isArray\(data\?\.partialStages\)/,
+  "the Command Center must consume a structured partial result even when the API returns 502",
+);
+assert.match(
+  html,
+  /if\(!r\.ok&&!reportedPartial\)throw Error/,
+  "non-partial API errors must still fail normally",
+);
 
 console.log(JSON.stringify({
   ok: true,
