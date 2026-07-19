@@ -25,6 +25,9 @@ const env = {
   CUE_GMAIL_QUERY: "label:CUE newer_than:30d",
   CUE_GMAIL_MAX_MESSAGES: "2",
   CUE_DRIVE_FOLDER_IDS: "folder-one",
+  CUE_DRIVE_RECURSIVE: "true",
+  CUE_DRIVE_MAX_FOLDER_DEPTH: "4",
+  CUE_DRIVE_MAX_FOLDERS: "20",
   CUE_DRIVE_MAX_FILES: "3",
   CUE_GOOGLE_CURSOR_OVERLAP_SECONDS: "60",
 };
@@ -40,10 +43,17 @@ const fetch = async (input, init = {}) => {
     labelIds: ["CUE"], payload: { mimeType: "text/plain", headers: [{ name: "Subject", value: "Moonchild" }], body: { data: Buffer.from("Quote 26-1846").toString("base64url") } },
   });
   if (url.endsWith("/messages/m2?format=full")) return { ok: false, status: 503, json: async () => ({}) };
-  if (url.includes("www.googleapis.com/drive/v3/files?") ) return json({ files: [
-    { id: "d1", name: "LiteFlair.txt", mimeType: "text/plain", modifiedTime: "2026-07-18T10:00:00.000Z", version: "1" },
-    { id: "d2", name: "Binary.pdf", mimeType: "application/pdf", modifiedTime: "2026-07-18T10:01:00.000Z", version: "2" },
-  ] });
+  if (url.includes("www.googleapis.com/drive/v3/files?") ) {
+    const query = new URL(url).searchParams.get("q");
+    if (query.includes("mimeType = 'application/vnd.google-apps.folder'") && query.includes("'folder-one' in parents")) {
+      return json({ files: [{ id: "nested-show", name: "Moonchild", mimeType: "application/vnd.google-apps.folder", parents: ["folder-one"] }] });
+    }
+    if (query.includes("mimeType = 'application/vnd.google-apps.folder'")) return json({ files: [] });
+    return json({ files: [
+      { id: "d1", name: "LiteFlair.txt", mimeType: "text/plain", modifiedTime: "2026-07-18T10:00:00.000Z", version: "1" },
+      { id: "d2", name: "Binary.pdf", mimeType: "application/pdf", modifiedTime: "2026-07-18T10:01:00.000Z", version: "2" },
+    ] });
+  }
   if (url.includes("/drive/v3/files/d1?alt=media")) return { ok: true, status: 200, text: async () => "LiteFlair quote 26-1790", json: async () => ({}) };
   throw new Error(`Unexpected request: ${url}`);
 };
@@ -62,9 +72,13 @@ assert.equal(drive.status, "partial");
 assert.equal(drive.files.length, 2, "unsupported binary files still contribute safe metadata");
 assert.equal(drive.skippedFiles.length, 1);
 assert.equal(drive.files[0].extractedText, "LiteFlair quote 26-1790");
-const driveList = calls.find(call => call.url.includes("drive/v3/files?"));
+const driveLists = calls.filter(call => call.url.includes("drive/v3/files?"));
+const driveList = driveLists.find(call => !new URL(call.url).searchParams.get("q").includes("mimeType = 'application/vnd.google-apps.folder'"));
 assert.match(new URL(driveList.url).searchParams.get("q"), /'folder-one' in parents/);
+assert.match(new URL(driveList.url).searchParams.get("q"), /'nested-show' in parents/, "recursive roots include discovered show folders");
+assert.match(new URL(driveList.url).searchParams.get("q"), /mimeType != 'application\/vnd\.google-apps\.folder'/, "folder metadata does not consume the file limit");
 assert.match(new URL(driveList.url).searchParams.get("q"), /modifiedTime > '2026-07-18T09:29:00.000Z'/);
+assert.equal(drive.metadata.recursive, true);
 
 const serialized = JSON.stringify({ gmail, drive });
 assert.doesNotMatch(serialized, /client-do-not-leak|secret-do-not-leak|refresh-do-not-leak|access-token/);

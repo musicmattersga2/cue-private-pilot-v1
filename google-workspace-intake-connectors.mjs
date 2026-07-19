@@ -64,6 +64,9 @@ export function readGoogleWorkspaceConfig(env = process.env) {
       enabled: driveEnabled,
       connectorName: DRIVE_CONNECTOR,
       folderIds: csv(env.CUE_DRIVE_FOLDER_IDS),
+      recursive: enabled(env.CUE_DRIVE_RECURSIVE),
+      maxFolderDepth: number(env.CUE_DRIVE_MAX_FOLDER_DEPTH, 8, 0, 20),
+      maxFolders: number(env.CUE_DRIVE_MAX_FOLDERS, 500, 1, 5000),
       query: text(env.CUE_DRIVE_QUERY),
       maxFiles: number(env.CUE_DRIVE_MAX_FILES, 100, 1, 1000),
       maxContentBytes: number(env.CUE_DRIVE_MAX_CONTENT_BYTES, 1_000_000, 1_000, 10_000_000),
@@ -202,13 +205,64 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     };
   }
 
-  function driveQuery(cursorBefore) {
-    const clauses = ["trashed = false"];
-    if (config.drive.folderIds.length) clauses.push(`(${config.drive.folderIds.map(id => `'${id.replace(/'/g, "\\'")}' in parents`).join(" or ")})`);
+  function driveQuery(cursorBefore, folderIds = config.drive.folderIds) {
+    const clauses = ["trashed = false", "mimeType != 'application/vnd.google-apps.folder'"];
+    if (folderIds.length) clauses.push(`(${folderIds.map(id => `'${id.replace(/'/g, "\\'")}' in parents`).join(" or ")})`);
     if (config.drive.query) clauses.push(`(${config.drive.query})`);
     const after = overlapCursor(cursorBefore, config.cursorOverlapSeconds);
     if (after) clauses.push(`modifiedTime > '${after}'`);
     return clauses.join(" and ");
+  }
+
+  function folderQuery(folderIds) {
+    const parents = folderIds.map(id => `'${id.replace(/'/g, "\\'")}' in parents`).join(" or ");
+    return `trashed = false and mimeType = 'application/vnd.google-apps.folder' and (${parents})`;
+  }
+
+  async function driveList(query, pageSize, pageToken = null) {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", query);
+    url.searchParams.set("pageSize", String(pageSize));
+    url.searchParams.set("orderBy", "modifiedTime asc");
+    url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,description,modifiedTime,createdTime,version,headRevisionId,webViewLink,parents,driveId,owners,shared,ownedByMe,size,trashed,lastModifyingUser)");
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    return authorized(url);
+  }
+
+  async function discoverDriveFolders(errors) {
+    const roots = config.drive.folderIds;
+    if (!config.drive.recursive || !roots.length || config.drive.maxFolderDepth === 0) return roots;
+    const seen = new Set(roots);
+    let frontier = roots.map(id => ({ id, depth: 0 }));
+    while (frontier.length && seen.size < config.drive.maxFolders) {
+      const next = [];
+      for (let offset = 0; offset < frontier.length && seen.size < config.drive.maxFolders; offset += 20) {
+        const batch = frontier.slice(offset, offset + 20);
+        let pageToken = null;
+        try {
+          do {
+            const page = await driveList(folderQuery(batch.map(item => item.id)), Math.min(1000, config.drive.maxFolders - seen.size), pageToken);
+            for (const folder of page.files || []) {
+              const parentDepths = batch.filter(parent => (folder.parents || []).includes(parent.id)).map(parent => parent.depth);
+              const depth = (parentDepths.length ? Math.min(...parentDepths) : batch[0].depth) + 1;
+              if (depth <= config.drive.maxFolderDepth && !seen.has(folder.id)) {
+                seen.add(folder.id);
+                next.push({ id: folder.id, depth });
+                if (seen.size >= config.drive.maxFolders) break;
+              }
+            }
+            pageToken = seen.size < config.drive.maxFolders ? page.nextPageToken || null : null;
+          } while (pageToken);
+        } catch (error) {
+          errors.push({ reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error), operation: "folder_discovery" });
+        }
+      }
+      frontier = next.filter(item => item.depth < config.drive.maxFolderDepth);
+    }
+    if (frontier.length) errors.push({ reason: "folder_limit_reached", message: "Drive folder discovery reached its configured safety limit.", operation: "folder_discovery" });
+    return [...seen];
   }
 
   async function driveContent(file) {
@@ -238,29 +292,32 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     const files = [];
     const skippedFiles = [];
     const errors = [];
-    let pageToken = null;
-    const query = driveQuery(cursorBefore);
+    const queries = [];
     try {
-      do {
-        const url = new URL("https://www.googleapis.com/drive/v3/files");
-        url.searchParams.set("q", query);
-        url.searchParams.set("pageSize", String(Math.min(1000, config.drive.maxFiles - files.length)));
-        url.searchParams.set("orderBy", "modifiedTime asc");
-        url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,description,modifiedTime,createdTime,version,headRevisionId,webViewLink,parents,driveId,owners,shared,ownedByMe,size,trashed,lastModifyingUser)");
-        if (pageToken) url.searchParams.set("pageToken", pageToken);
-        const page = await authorized(url);
-        for (const file of page.files || []) {
-          if (files.length >= config.drive.maxFiles) break;
-          try {
-            const content = await driveContent(file);
-            if (content.skipped) skippedFiles.push({ externalId: file.id, reason: content.reason, message: "Drive file metadata was ingested without unsupported binary content." });
-            files.push({ ...file, fileId: file.id, extractedText: content.text, externalRevisionId: file.headRevisionId || file.version || file.modifiedTime });
-          } catch (error) {
-            errors.push({ externalId: file.id || null, modifiedTime: file.modifiedTime || null, reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
+      const folderIds = await discoverDriveFolders(errors);
+      const batches = folderIds.length ? Array.from({ length: Math.ceil(folderIds.length / 20) }, (_, index) => folderIds.slice(index * 20, index * 20 + 20)) : [[]];
+      const seenFiles = new Set();
+      for (const batch of batches) {
+        if (files.length >= config.drive.maxFiles) break;
+        const query = driveQuery(cursorBefore, batch);
+        queries.push(query);
+        let pageToken = null;
+        do {
+          const page = await driveList(query, Math.min(1000, config.drive.maxFiles - files.length), pageToken);
+          for (const file of page.files || []) {
+            if (files.length >= config.drive.maxFiles || seenFiles.has(file.id)) continue;
+            seenFiles.add(file.id);
+            try {
+              const content = await driveContent(file);
+              if (content.skipped) skippedFiles.push({ externalId: file.id, reason: content.reason, message: "Drive file metadata was ingested without unsupported binary content." });
+              files.push({ ...file, fileId: file.id, extractedText: content.text, externalRevisionId: file.headRevisionId || file.version || file.modifiedTime });
+            } catch (error) {
+              errors.push({ externalId: file.id || null, modifiedTime: file.modifiedTime || null, reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
+            }
           }
-        }
-        pageToken = files.length < config.drive.maxFiles ? page.nextPageToken || null : null;
-      } while (pageToken);
+          pageToken = files.length < config.drive.maxFiles ? page.nextPageToken || null : null;
+        } while (pageToken);
+      }
     } catch (error) {
       errors.push({ reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
     }
@@ -273,7 +330,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
       files,
       skippedFiles,
       errors,
-      metadata: { query, received: files.length, skipped: skippedFiles.length, failed: errors.length },
+      metadata: { query: queries.join(" OR "), queries, recursive: config.drive.recursive, received: files.length, skipped: skippedFiles.length, failed: errors.length },
     };
   }
 
