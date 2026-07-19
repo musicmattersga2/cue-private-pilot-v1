@@ -1,0 +1,1051 @@
+/**
+ * CUE Foundation compatibility store.
+ *
+ * Production target: PostgreSQL tables in migrations/20260712_cue_foundation_v1.sql.
+ * Pilot target: atomic JSON persistence that proves the canonical lifecycle without
+ * breaking the existing Slack Operational Signals cache or Active Shows UI.
+ */
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import {
+  buildCanonicalShowRegistry,
+} from "./canonical-show-registry.mjs";
+import {
+  connectorRunId,
+  normalizeConnectorRecord,
+} from "./cue-intake-contract.mjs";
+import {
+  buildProvisionalShowFromConfirmedQuote,
+  confirmedQuoteMatchesShow,
+  normalizeConfirmedQuoteObservation,
+} from "./flex-confirmed-quote.mjs";
+
+const DEFAULT_PATH = path.resolve(
+  process.env.CUE_FOUNDATION_STORE_PATH || "./data/cue-foundation-v1.json"
+);
+let writeChain = Promise.resolve();
+
+function now() { return new Date().toISOString(); }
+function cleanText(value) {
+  const original = String(value ?? "");
+  let decoded = original;
+  if (/[Ââ]/.test(original)) {
+    const candidate = Buffer.from(original, "latin1").toString("utf8");
+    if (!candidate.includes("�")) decoded = candidate;
+  }
+  return decoded
+    .replace(/â€™|â/g, "'")
+    .replace(/â|â/g, '"')
+    .replace(/â|â/g, "-")
+    .replace(/âs\b/g, "'s")
+    .replace(/â¢/g, "•")
+    .replace(/â(?=\s|$)/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/Â/g, "")
+    .trim();
+}
+function id(prefix, value) {
+  const hash = crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 24);
+  return `${prefix}_${hash}`;
+}
+function blank() {
+  return { version: 1, updatedAt: now(), connectorRuns: {}, connectorCursors: {}, connectorState: {}, sourceRecords: {}, intakeItems: {}, matchCandidates: {}, candidateFacts: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {}, showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, flexQuoteStatusObservations: {}, showIdRedirects: {}, showRegistry: {}, flexDocumentRegistry: {} };
+}
+function readFile(filePath) {
+  if (!fs.existsSync(filePath)) return blank();
+  try { return { ...blank(), ...JSON.parse(fs.readFileSync(filePath, "utf8")) }; }
+  catch { return blank(); }
+}
+function writeFile(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: now() }, null, 2));
+  fs.renameSync(tmp, filePath);
+}
+function primaryMatch(message) {
+  const rank = { manually_approved: 0, auto_attached: 1, needs_review: 2, general_queue: 3, manually_rejected: 4 };
+  return [...(message.matches || [])]
+    .sort((a, b) => {
+      const stateDelta = (rank[a?.matchState] ?? 9) - (rank[b?.matchState] ?? 9);
+      if (stateDelta !== 0) return stateDelta;
+      return Number(b?.score || 0) - Number(a?.score || 0);
+    })[0] || null;
+}
+function isReviewable(message) {
+  if (!message || message.deleted || message.matchState === "excluded_system") return false;
+  const cats = message.operationalClassification?.categories || [];
+  if (!cats.length) return false;
+  const text = cleanText(message.text).toLowerCase();
+  if (/birthday|barcade|happy birthday|thanks for the wishes|tame impala|hope you have a blast/.test(text)) return false;
+  const operational = /flex|quote|pull\s*sheet|pack|prep|load|truck|trailer|driver|delivery|return|rental|cross.?rent|short|missing|equipment|audio|lighting|video|rigging|motor|cable|truss|steel|shackle|guardrail|hazer|earbud|galaxy|staffing|meeting|warehouse|dock|bol|shipment|pickup|client|venue|spec sheet|pixel map|inventory|bar.?code/i.test(text);
+  if (cats.length === 1 && cats[0] === "general_operations" && !operational) return false;
+  if (text.length < 18 && !operational) return false;
+  return true;
+}
+function domainOf(message) {
+  const cats = message.operationalClassification?.categories || [];
+  const text = cleanText(message.text);
+  if (/missing items?|shortage|need .+ more|followspots?|hazer|galaxy|earbuds?|cat6|cables?|guardrails?|shackles?|pear rings?|truss|steel/i.test(text)) return "equipment";
+  if (/pull(?:ed|ing|\s+sheet)?|prep|pack|loaded|warehouse/i.test(text)) return "warehouse";
+  if (cats.includes("trucking") || cats.includes("dock") || cats.includes("bol")) return "trucking";
+  if (cats.includes("staffing")) return "staffing";
+  if (cats.includes("warehouse")) return "warehouse";
+  if (cats.includes("equipment")) return "equipment";
+  if (cats.includes("schedule")) return "schedule";
+  return "operations";
+}
+function scopeOf(message, match, domain) {
+  const text = cleanText(message.text).toLowerCase();
+  const score = Number(match?.score || 0);
+  if (["auto_attached", "manually_approved", "needs_review"].includes(match?.matchState) || (match?.showKey && score >= 45)) return "show_specific";
+  if (domain === "staffing" || /staffing meeting|crew call|labor coordinator|availability/.test(text)) return "staffing";
+  if (/vendor|supplier|source|buy|purchase|does anyone know a company|cross.?rent|subrent/.test(text)) return "procurement_vendor";
+  if (/inventory|in stock|bar.?code|longest length|how many|flex does not have dims|weights and dims/.test(text)) return "inventory";
+  if (/warehouse|at the shop|shop now|receive the delivery|pack(?:ed|ing)?|prep(?:ped|ping)?|pull sheet/.test(text)) return "warehouse_shop";
+  if (domain === "trucking" || /truck|driver|delivery|shipment|pickup|return|on the road|logistics/.test(text)) return "trucking_logistics";
+  return "company_operations";
+}
+function cardTypeOf(message) {
+  const text = String(message.text || "");
+  const classification = message.operationalClassification || {};
+  if (/\b(?:could|can|would)\s+(?:i|we|you)|\bplease\b|\bmake sure\b|\bneed someone\b/i.test(text)) return "task_request";
+  if (classification.status === "blocked" || classification.status === "at_risk" || /missing items?|shortage|waiting on|may need|maybe|tbd/i.test(text)) return "risk_review";
+  if (classification.status === "resolved" || /\bis\s+(?:getting\s+)?loaded\b|\bis ready\b|\bready to prep\b/i.test(text)) return "state_confirmation";
+  return "signal_review";
+}
+function sourceFlexDocumentType(message) {
+  const text = cleanText(message?.text || "").toLowerCase();
+  if (/pull\s*sheet|pullsheet/.test(text)) return "pull_sheet";
+  if (/event\s*folder/.test(text)) return "event_folder";
+  if (/manifest/.test(text)) return "manifest";
+  if (/purchase\s*order|\blpo\b/.test(text)) return "purchase_order";
+  if (/invoice/.test(text)) return "invoice";
+  if (/\bquote\b/.test(text)) return "quote";
+  return "unknown";
+}
+function shouldCreateDecisionCard(message, matchState) {
+  const type = cardTypeOf(message);
+  const match = primaryMatch(message);
+  const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
+  const candidateNeedsReview = match?.matchState === "needs_review";
+  // General/unmatched communication remains searchable Intake evidence. It
+  // must not flood the show-focused My Decisions queue.
+  if (!match?.showKey || (!confirmedMatch && !candidateNeedsReview)) return false;
+  // Routine affirmative state is evidence/current-state input, not a decision.
+  if (type === "state_confirmation") return false;
+  // Ambiguous show candidates require a human match decision.
+  if (candidateNeedsReview) return true;
+  // High-confidence matched requests/risks still require operational treatment.
+  return ["task_request", "risk_review"].includes(type) && confirmedMatch;
+}
+function readinessStatusFor(openCards, events) {
+  const statuses = openCards.map((x) => x.impact);
+  if (statuses.includes("critical")) return "blocked";
+  if (statuses.includes("material")) return "at_risk";
+  if (openCards.length) return "in_progress";
+  // Accepting a requirement is not the same as satisfying it. Until the native
+  // owning module emits fulfillment (for example trucking.run.assigned), the
+  // affected gate remains at risk.
+  if (events.some((x) => /\.signal\.accepted$/.test(x.eventType))) return "at_risk";
+  if (events.length) return "ready";
+  return "not_started";
+}
+
+export function createCueFoundationStore(options = {}) {
+  const filePath = path.resolve(options.filePath || DEFAULT_PATH);
+  const locked = (fn) => { const p = writeChain.then(fn, fn); writeChain = p.then(() => undefined, () => undefined); return p; };
+
+  function flexDocumentFor(db, ref = {}) {
+    const elementId = cleanText(ref.elementId || "").toLowerCase();
+    if (elementId && db.flexDocumentRegistry?.[elementId]) return db.flexDocumentRegistry[elementId];
+    if (!ref.verified || !ref.documentNumber) return null;
+    const matches = Object.values(db.flexDocumentRegistry || {}).filter(document =>
+      String(document.documentNumber || "") === String(ref.documentNumber)
+      && (!ref.documentType || ref.documentType === "unknown" || document.documentType === ref.documentType)
+      && document.elementId
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function resolveConnectorShow(db, intake = {}) {
+    if (intake.canonicalShowId && db.showRegistry?.[intake.canonicalShowId]) {
+      return { showId: intake.canonicalShowId, reason: "Explicit canonical show ID", confidence: 100 };
+    }
+    const candidates = [];
+    for (const ref of intake.flexDocumentRefs || []) {
+      const document = flexDocumentFor(db, ref);
+      for (const showId of document?.showIds || []) {
+        if (db.showRegistry?.[showId]) candidates.push({ showId, document, ref });
+      }
+    }
+    const showIds = [...new Set(candidates.map(candidate => candidate.showId))];
+    if (showIds.length !== 1) return null;
+    const match = candidates.find(candidate => candidate.showId === showIds[0]);
+    return {
+      showId: showIds[0],
+      reason: `Verified FLEX ${match.document.documentType || "document"}: ${match.document.documentNumber || match.document.elementId}`,
+      confidence: 100,
+    };
+  }
+
+  async function ingestSourceRecords(records = [], options = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const startedAt = options.startedAt || now();
+      const connectorName = cleanText(options.connectorName || "shared-intake");
+      const runId = connectorRunId(connectorName, startedAt, options.cursorBefore || null);
+      const counts = { received: 0, created: 0, deduplicated: 0, superseded: 0, intakeCreated: 0, intakeSuperseded: 0, matched: 0, needsMatch: 0, routed: 0, failed: 0 };
+      const errors = Array.isArray(options.errors) ? options.errors.map(error => ({
+        message: cleanText(error?.message || "Connector item failed."),
+        externalId: cleanText(error?.externalId) || null,
+        reason: cleanText(error?.reason) || null,
+      })) : [];
+      db.connectorRuns[runId] = {
+        id: runId,
+        connectorName,
+        connectorVersion: cleanText(options.connectorVersion || "v1"),
+        sourceType: cleanText(options.sourceType || "mixed") || "mixed",
+        status: "running",
+        cursorBefore: options.cursorBefore || null,
+        cursorAfter: null,
+        startedAt,
+        finishedAt: null,
+        counts,
+        errors,
+        metadata: options.metadata || {},
+      };
+      for (const input of records || []) {
+        counts.received += 1;
+        try {
+          const normalized = normalizeConnectorRecord(input, options);
+          const sourceRecord = normalized.sourceRecord;
+          const intakeSeed = normalized.intake;
+          const exact = db.sourceRecords[sourceRecord.id];
+          if (exact) {
+            counts.deduplicated += 1;
+            continue;
+          }
+          const revisions = Object.values(db.sourceRecords).filter(record =>
+            record.sourceType === sourceRecord.sourceType
+            && record.externalId === sourceRecord.externalId
+          ).sort((a, b) => String(b.ingestedAt || "").localeCompare(String(a.ingestedAt || "")));
+          if (revisions[0]) {
+            sourceRecord.supersedesSourceRecordId = revisions[0].id;
+            counts.superseded += 1;
+          } else {
+            sourceRecord.supersedesSourceRecordId = null;
+          }
+          db.sourceRecords[sourceRecord.id] = sourceRecord;
+          counts.created += 1;
+
+          const intakeId = id("intake", sourceRecord.id);
+          const previousIntake = revisions[0]
+            ? Object.values(db.intakeItems).find(item => item.sourceRecordId === revisions[0].id)
+            : null;
+          const resolved = resolveConnectorShow(db, intakeSeed);
+          const requiresShowMatch = intakeSeed.requiresShowMatch;
+          const status = resolved ? "matched" : requiresShowMatch ? "needs_match" : "routed";
+          const flexDocumentNumbers = [...new Set((intakeSeed.flexDocumentRefs || []).map(ref => ref.documentNumber).filter(Boolean))];
+          db.intakeItems[intakeId] = {
+            id: intakeId,
+            sourceRecordId: sourceRecord.id,
+            status,
+            category: intakeSeed.category,
+            scope: intakeSeed.scope,
+            urgency: intakeSeed.urgency,
+            impact: intakeSeed.impact,
+            summary: intakeSeed.summary,
+            matchedShowId: resolved?.showId || null,
+            candidateShowId: resolved ? null : intakeSeed.candidateShowId,
+            matchedShowName: resolved ? db.showRegistry[resolved.showId]?.name || null : intakeSeed.showNameHint,
+            matchConfidence: resolved?.confidence || null,
+            matchReasons: resolved ? [resolved.reason] : intakeSeed.showNameHint ? [`Unverified show hint: ${intakeSeed.showNameHint}`] : [],
+            flexDocumentNumbers,
+            primaryFlexDocumentNumber: (intakeSeed.flexDocumentRefs || []).find(ref => ref.role === "primary_show_quote" && flexDocumentFor(db, ref))?.documentNumber || null,
+            flexDocumentRefs: intakeSeed.flexDocumentRefs || [],
+            sourceMentionedFlexDocuments: (intakeSeed.flexDocumentRefs || []).filter(ref => ref.role === "mentioned_source"),
+            connectorName: sourceRecord.connectorName,
+            connectorRunId: runId,
+            intakeMetadata: intakeSeed.metadata,
+            supersedesIntakeItemId: previousIntake?.id || null,
+            createdAt: now(),
+            updatedAt: now(),
+          };
+          if (previousIntake && previousIntake.status !== "superseded") {
+            previousIntake.status = "superseded";
+            previousIntake.supersededByIntakeItemId = intakeId;
+            previousIntake.updatedAt = now();
+            counts.intakeSuperseded += 1;
+            for (const proposal of Object.values(db.proposedUpdates)) {
+              if (proposal.intakeItemId !== previousIntake.id || proposal.status !== "proposed") continue;
+              proposal.status = "superseded";
+              proposal.supersededByIntakeItemId = intakeId;
+              proposal.updatedAt = now();
+            }
+          }
+          counts.intakeCreated += 1;
+          if (status === "matched") counts.matched += 1;
+          else if (status === "needs_match") counts.needsMatch += 1;
+          else counts.routed += 1;
+
+          for (const [index, proposed] of (intakeSeed.proposedUpdates || []).entries()) {
+            const proposedId = id("proposal", `${intakeId}:${index}:${JSON.stringify(proposed)}`);
+            db.proposedUpdates[proposedId] = {
+              id: proposedId,
+              intakeItemId: intakeId,
+              showId: resolved?.showId || null,
+              status: "proposed",
+              ...proposed,
+              createdAt: now(),
+              updatedAt: now(),
+            };
+          }
+        } catch (error) {
+          counts.failed += 1;
+          errors.push({ message: error?.message || String(error), externalId: input?.externalId || null });
+        }
+      }
+      const finishedAt = now();
+      const run = db.connectorRuns[runId];
+      run.status = counts.failed ? (counts.created || counts.deduplicated ? "partial" : "failed")
+        : options.status === "partial" ? "partial"
+          : "completed";
+      run.cursorAfter = options.cursorAfter ?? options.cursorBefore ?? null;
+      run.finishedAt = finishedAt;
+      if (run.cursorAfter !== null) {
+        db.connectorCursors[connectorName] = { connectorName, cursor: run.cursorAfter, connectorRunId: runId, updatedAt: finishedAt };
+      }
+      writeFile(filePath, db);
+      return { ok: run.status !== "failed", connectorRun: run, ...counts };
+    });
+  }
+
+  async function checkpointConnectorRun(input = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const startedAt = input.startedAt || now();
+      const finishedAt = input.finishedAt || now();
+      const connectorName = cleanText(input.connectorName || "shared-intake");
+      const cursorBefore = input.cursorBefore ?? null;
+      const cursorAfter = input.cursorAfter ?? cursorBefore;
+      const runId = connectorRunId(connectorName, startedAt, cursorBefore);
+      const status = ["completed", "partial", "failed", "unavailable", "skipped"].includes(input.status)
+        ? input.status
+        : "completed";
+      db.connectorRuns[runId] = {
+        id: runId,
+        connectorName,
+        connectorVersion: cleanText(input.connectorVersion || "v1"),
+        sourceType: cleanText(input.sourceType || "flex") || "flex",
+        status,
+        cursorBefore,
+        cursorAfter,
+        startedAt,
+        finishedAt,
+        counts: input.counts || {},
+        errors: input.errors || [],
+        metadata: input.metadata || {},
+      };
+      if (["completed", "partial"].includes(status) && cursorAfter !== null) {
+        db.connectorCursors[connectorName] = {
+          connectorName,
+          cursor: cursorAfter,
+          connectorRunId: runId,
+          updatedAt: finishedAt,
+        };
+      }
+      writeFile(filePath, db);
+      return { ok: !["failed"].includes(status), connectorRun: db.connectorRuns[runId] };
+    });
+  }
+
+  async function saveConnectorState(connectorName, state = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const normalizedName = cleanText(connectorName);
+      if (!normalizedName) throw new Error("Connector name is required.");
+      db.connectorState[normalizedName] = {
+        ...state,
+        connectorName: normalizedName,
+        updatedAt: now(),
+      };
+      writeFile(filePath, db);
+      return db.connectorState[normalizedName];
+    });
+  }
+
+  function migrateShowReferences(db, fromShowId, toShowId, timestamp) {
+    if (!fromShowId || !toShowId || fromShowId === toShowId) return;
+    db.showIdRedirects[fromShowId] = {
+      fromShowId,
+      toShowId,
+      reason: "active_show_index_reconciliation",
+      reconciledAt: timestamp,
+    };
+    for (const event of Object.values(db.events || {})) {
+      if (event.showId === fromShowId) event.showId = toShowId;
+    }
+    for (const intake of Object.values(db.intakeItems || {})) {
+      if (intake.matchedShowId === fromShowId) intake.matchedShowId = toShowId;
+      if (intake.candidateShowId === fromShowId) intake.candidateShowId = toShowId;
+      if (intake.canonicalShowId === fromShowId) intake.canonicalShowId = toShowId;
+    }
+    for (const candidate of Object.values(db.matchCandidates || {})) {
+      if (candidate.candidateEntityId === fromShowId) candidate.candidateEntityId = toShowId;
+    }
+    for (const update of Object.values(db.proposedUpdates || {})) {
+      if (update.showId === fromShowId) update.showId = toShowId;
+    }
+    for (const card of Object.values(db.decisionCards || {})) {
+      if (card.showId === fromShowId) card.showId = toShowId;
+      if (card.candidateShowId === fromShowId) card.candidateShowId = toShowId;
+      if (card.cardType === "show_onboarding" && card.showId === toShowId) {
+        if (card.status === "open") card.status = "decided";
+        card.resolution = "active_show_index_reconciled";
+        card.updatedAt = timestamp;
+      }
+    }
+    for (const document of Object.values(db.flexDocumentRegistry || {})) {
+      document.showIds = [...new Set((document.showIds || []).map(showId => showId === fromShowId ? toShowId : showId))];
+    }
+    const oldState = db.showState[fromShowId];
+    if (oldState) {
+      db.showState[toShowId] = { ...oldState, showId: toShowId, projectedAt: timestamp };
+      delete db.showState[fromShowId];
+    }
+    const oldReadiness = db.readiness[fromShowId];
+    if (oldReadiness) {
+      db.readiness[toShowId] = {
+        ...oldReadiness,
+        showId: toShowId,
+        milestoneRollup: {
+          ...(oldReadiness.milestoneRollup || {}),
+          quote_confirmed: { status: "ready" },
+          active_show_index: { status: "ready" },
+        },
+        evaluatedAt: timestamp,
+      };
+      delete db.readiness[fromShowId];
+    }
+  }
+
+  async function observeFlexQuoteStatus(input = {}, options = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      let observation;
+      try {
+        observation = normalizeConfirmedQuoteObservation(input, options);
+      } catch (error) {
+        return { ok: false, status: 400, error: error?.message || String(error) };
+      }
+      const key = observation.elementId;
+      const previous = db.flexQuoteStatusObservations[key] || null;
+      const transitionId = cleanText(observation.sourceEventId || "") || null;
+      const confirmationEventIds = [...new Set([
+        ...(previous?.confirmationEventIds || []),
+        ...(observation.confirmed && transitionId ? [transitionId] : []),
+      ])];
+      const transitionAlreadyRecorded = Boolean(
+        observation.confirmed
+        && transitionId
+        && (previous?.confirmationEventIds || []).includes(transitionId)
+      );
+      const triggered = observation.confirmed
+        && !previous?.confirmationTriggeredAt
+        && !transitionAlreadyRecorded;
+      const confirmationTriggeredAt = previous?.confirmationTriggeredAt
+        || (triggered ? observation.changedAt || observation.observedAt : null);
+      db.flexQuoteStatusObservations[key] = {
+        ...previous,
+        ...observation,
+        previousStatus: previous?.status || null,
+        firstObservedAt: previous?.firstObservedAt || observation.observedAt,
+        lastObservedAt: observation.observedAt,
+        confirmationTriggeredAt,
+        confirmationEventIds,
+        latestConfirmationEventId: observation.confirmed
+          ? transitionId || previous?.latestConfirmationEventId || null
+          : previous?.latestConfirmationEventId || null,
+      };
+      if (!triggered) {
+        writeFile(filePath, db);
+        return {
+          ok: true,
+          triggered: false,
+          idempotent: Boolean(observation.confirmed && (confirmationTriggeredAt || transitionAlreadyRecorded)),
+          transitionRecorded: Boolean(observation.confirmed && transitionId && !transitionAlreadyRecorded),
+          observation: db.flexQuoteStatusObservations[key],
+          show: db.showRegistry[previous?.provisionalShowId || observation.provisionalShowId] || null,
+        };
+      }
+
+      const timestamp = confirmationTriggeredAt;
+      const provisionalShowId = observation.provisionalShowId;
+      const provisional = buildProvisionalShowFromConfirmedQuote(
+        observation,
+        db.showRegistry[provisionalShowId] || {}
+      );
+      db.showRegistry[provisionalShowId] = provisional;
+      db.flexDocumentRegistry[key] = {
+        ...(db.flexDocumentRegistry[key] || {}),
+        ...provisional.flex.primaryShowQuote,
+        key,
+        showIds: [...new Set([...(db.flexDocumentRegistry[key]?.showIds || []), provisionalShowId])],
+        lastSeenAt: observation.observedAt,
+      };
+
+      const confirmationIdentity = transitionId || timestamp;
+      const sourceId = id("src", `flex-confirmed:${observation.elementId}:${confirmationIdentity}`);
+      const intakeId = id("intake", sourceId);
+      const cardId = id("card", intakeId);
+      const eventId = id("event", `flex.quote.confirmed:${observation.elementId}:${confirmationIdentity}`);
+      db.sourceRecords[sourceId] = {
+        id: sourceId,
+        sourceType: "flex",
+        externalId: observation.sourceEventId || `${observation.elementId}:${timestamp}`,
+        sourceUrl: observation.metadata?.flexUrl || null,
+        capturedAt: observation.observedAt,
+        occurredAt: observation.changedAt || observation.observedAt,
+        author: { id: "flex", name: "FLEX" },
+        normalizedText: `FLEX quote ${observation.documentNumber} confirmed: ${observation.showName}`,
+        rawPayload: observation,
+        contentHash: id("hash", JSON.stringify(observation)),
+        metadata: { documentType: "quote", status: observation.status },
+      };
+      db.intakeItems[intakeId] = {
+        id: intakeId,
+        sourceRecordId: sourceId,
+        status: "matched",
+        category: "operations",
+        scope: "show_specific",
+        urgency: "normal",
+        impact: "material",
+        summary: `FLEX quote ${observation.documentNumber} was confirmed. Start show onboarding and readiness tracking.`,
+        matchedShowId: provisionalShowId,
+        matchedShowName: observation.showName,
+        primaryFlexDocumentNumber: observation.documentNumber,
+        flexDocumentNumbers: [observation.documentNumber],
+        flexDocumentRefs: [{ ...provisional.flex.primaryShowQuote }],
+        flexElementId: observation.elementId,
+        matchConfidence: 100,
+        matchReasons: ["Authoritative FLEX quote status transition"],
+        createdAt: observation.observedAt,
+        updatedAt: observation.observedAt,
+      };
+      db.decisionCards[cardId] = {
+        id: cardId,
+        intakeItemId: intakeId,
+        showId: provisionalShowId,
+        status: "open",
+        cardType: "show_onboarding",
+        domain: "operations",
+        headline: `New confirmed show: ${observation.showName} (${observation.documentNumber})`,
+        explanation: "FLEX confirmed this quote. CUE created the initial show-readiness object and is waiting for the Active Show Index to begin operational tracking.",
+        recommendation: "Confirm ownership, review initial readiness, and allow the Active Show Index to reconcile the operational record.",
+        urgency: "normal",
+        impact: "material",
+        confidence: "authoritative",
+        sourceRecordId: sourceId,
+        createdAt: observation.observedAt,
+        updatedAt: observation.observedAt,
+      };
+      db.events[eventId] = {
+        id: eventId,
+        eventType: "flex.quote.confirmed",
+        showId: provisionalShowId,
+        domain: "operations",
+        entityType: "flex_quote",
+        entityId: observation.elementId,
+        occurredAt: observation.changedAt || observation.observedAt,
+        effectiveAt: observation.changedAt || observation.observedAt,
+        recordedAt: observation.observedAt,
+        actorType: "system",
+        actorId: "system:flex-confirmation",
+        sourceType: observation.source,
+        sourceRecordId: sourceId,
+        intakeItemId: intakeId,
+        newValue: observation,
+        idempotencyKey: `flex.quote.confirmed:${observation.elementId}:${timestamp}`,
+      };
+      db.showState[provisionalShowId] = {
+        showId: provisionalShowId,
+        projectionName: "show_lifecycle",
+        lastEventId: eventId,
+        state: {
+          lifecycleStage: "awaiting_active_show_index",
+          confirmedQuote: provisional.flex.primaryShowQuote,
+          confirmedAt: timestamp,
+        },
+        projectedAt: observation.observedAt,
+      };
+      db.readiness[provisionalShowId] = {
+        showId: provisionalShowId,
+        overallStatus: "in_progress",
+        overallScore: 10,
+        domainRollup: {},
+        milestoneRollup: {
+          quote_confirmed: { status: "ready" },
+          active_show_index: { status: "not_started" },
+        },
+        blockers: [],
+        warnings: [cardId],
+        nextActions: [{ decisionCardId: cardId, headline: "Complete initial show onboarding" }],
+        rulesetVersion: "confirmed-quote-v1",
+        lastEventId: eventId,
+        evaluatedAt: observation.observedAt,
+      };
+      writeFile(filePath, db);
+      return {
+        ok: true,
+        triggered: true,
+        idempotent: false,
+        observation: db.flexQuoteStatusObservations[key],
+        show: provisional,
+        event: db.events[eventId],
+        readiness: db.readiness[provisionalShowId],
+      };
+    });
+  }
+
+  async function syncCanonicalShowRegistry(shows = [], metadata = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const timestamp = metadata.timestamp || now();
+      const reconciliations = [];
+      const existingForBuild = { ...(db.showRegistry || {}) };
+      for (const show of shows || []) {
+        const canonicalShowId = cleanText(show?.id || show?.showKey);
+        if (!canonicalShowId) continue;
+        const provisionalEntry = Object.entries(existingForBuild).find(([provisionalShowId, candidate]) =>
+          provisionalShowId !== canonicalShowId
+          && candidate?.lifecycle?.status === "provisional"
+          && confirmedQuoteMatchesShow(candidate, show)
+        );
+        if (!provisionalEntry) continue;
+        const [provisionalShowId, provisional] = provisionalEntry;
+        existingForBuild[canonicalShowId] = {
+          ...provisional,
+          ...(existingForBuild[canonicalShowId] || {}),
+          aliases: [...new Set([...(provisional.aliases || []), ...(existingForBuild[canonicalShowId]?.aliases || [])])],
+          flex: {
+            ...(provisional.flex || {}),
+            ...(existingForBuild[canonicalShowId]?.flex || {}),
+            documents: [
+              ...(provisional.flex?.documents || []),
+              ...(existingForBuild[canonicalShowId]?.flex?.documents || []),
+            ],
+          },
+        };
+        delete existingForBuild[provisionalShowId];
+        reconciliations.push({ provisionalShowId, canonicalShowId });
+      }
+      const result = buildCanonicalShowRegistry(
+        shows,
+        existingForBuild,
+        db.flexDocumentRegistry || {},
+        { ...metadata, timestamp }
+      );
+      db.showRegistry = result.showRegistry;
+      db.flexDocumentRegistry = result.flexDocumentRegistry;
+      for (const reconciliation of reconciliations) {
+        migrateShowReferences(db, reconciliation.provisionalShowId, reconciliation.canonicalShowId, timestamp);
+        const eventId = id("event", `show.identity.reconciled:${reconciliation.provisionalShowId}:${reconciliation.canonicalShowId}`);
+        db.events[eventId] = {
+          id: eventId,
+          eventType: "show.identity.reconciled",
+          showId: reconciliation.canonicalShowId,
+          domain: "operations",
+          entityType: "show",
+          entityId: reconciliation.canonicalShowId,
+          occurredAt: timestamp,
+          effectiveAt: timestamp,
+          recordedAt: timestamp,
+          actorType: "system",
+          actorId: "system:active-show-index",
+          sourceType: metadata.source || "active_show_index",
+          newValue: reconciliation,
+          idempotencyKey: eventId,
+        };
+        if (db.showState[reconciliation.canonicalShowId]) {
+          db.showState[reconciliation.canonicalShowId].lastEventId = eventId;
+          db.showState[reconciliation.canonicalShowId].state = {
+            ...(db.showState[reconciliation.canonicalShowId].state || {}),
+            lifecycleStage: "active_show_index_tracking",
+            reconciledFromShowId: reconciliation.provisionalShowId,
+          };
+        }
+      }
+      writeFile(filePath, db);
+      return { ok: true, ...result.summary, reconciled: reconciliations.length, reconciliations, updatedAt: timestamp };
+    });
+  }
+
+  async function syncSlackSnapshot(snapshot = {}) {
+    return locked(async () => {
+      const db = readFile(filePath); let created = 0; let updated = 0;
+      const activeIntakeIds = new Set();
+      // Slack may deny users.info for mentioned people even though those same
+      // people have authored messages already in the local cache. Build one
+      // deterministic directory from both sources before normalizing evidence.
+      const mentionUsers = { ...(snapshot.users || {}) };
+      for (const cachedMessage of Object.values(snapshot.messages || {})) {
+        const userId = String(cachedMessage?.userId || "").trim();
+        const authorName = cleanText(cachedMessage?.authorName || "");
+        if (!userId || !authorName || authorName === userId || /^unknown$/i.test(authorName)) continue;
+        mentionUsers[userId] = {
+          ...(mentionUsers[userId] || {}),
+          displayName: mentionUsers[userId]?.displayName || authorName,
+        };
+      }
+      for (const message of Object.values(snapshot.messages || {})) {
+        if (!isReviewable(message)) continue;
+        const sourceId = id("src", `slack:${message.messageKey}:${message.contentHash}`);
+        const intakeId = id("intake", sourceId);
+        activeIntakeIds.add(intakeId);
+        const match = primaryMatch(message); const domain = domainOf(message); const scope = scopeOf(message, match, domain);
+        const resolveMentions = value => cleanText(value).replace(/<@([A-Z0-9]+)>/gi, (_, userId) => `@${mentionUsers[userId]?.displayName || mentionUsers[userId]?.realName || "Slack user"}`);
+        const cleanedText = resolveMentions(message.text);
+        const cleanedSummary = resolveMentions(message.operationalClassification?.summary || message.text);
+        const { sourceRecord } = normalizeConnectorRecord({
+          sourceType: "slack",
+          externalId: message.messageKey,
+          externalParentId: message.threadTs ? `${message.channelId}:${message.threadTs}` : null,
+          externalRevisionId: message.editedTs || null,
+          sourceUrl: message.permalink || null,
+          authorExternalId: message.userId || null,
+          observedAt: message.timestampIso || null,
+          ingestedAt: message.ingestedAt || now(),
+          contentHash: message.contentHash,
+          normalizedText: cleanedText,
+          connectorName: "slack-operational-signals",
+          connectorVersion: "slack-operational-signals-v1",
+          permissionsMetadata: { channelId: message.channelId, channelName: message.channelName },
+          payload: { channelId: message.channelId, channelName: message.channelName, authorName: message.authorName, classification: message.operationalClassification, entities: message.extractedEntities },
+        });
+        // Preserve the long-standing deterministic ID during the compatibility
+        // migration. The shared contract intentionally uses the same formula.
+        sourceRecord.id = sourceId;
+        if (db.sourceRecords[sourceId]) updated += 1; else created += 1;
+        db.sourceRecords[sourceId] = sourceRecord;
+        db.sourceRecords[sourceId].metadata = {
+          ...(db.sourceRecords[sourceId].metadata || {}),
+          authorityRole: "operational_signal",
+          canEstablishShow: false,
+        };
+        const confirmedMatch = ["auto_attached", "manually_approved"].includes(match?.matchState);
+        const candidateNeedsReview = match?.matchState === "needs_review";
+        const learnedForIntake = Object.values(db.learnedFlexLinks || {}).filter((item) => (item.intakeItemIds || []).includes(intakeId) && item.source !== "flex_header_verification" && item.status !== "quarantined");
+        const exactMessageQuotes = [...new Set((message.extractedEntities?.quotes || []).map(String).filter(Boolean))];
+        const mentionedDocumentType = sourceFlexDocumentType(message);
+        // A quote number written in the source message is direct evidence. Keep
+        // it even when the proposed Active Shows record has incomplete or
+        // different workstream metadata. This does not confirm the show match.
+        const flexDocumentNumbers = [...new Set([...exactMessageQuotes, ...(match?.documentNumbers || []).map(String).filter(Boolean), ...learnedForIntake.map(item => item.documentNumber)])];
+        // Only an authoritative Active Shows/FLEX hierarchy or an explicit
+        // human primary link may establish the primary show quote. A number in
+        // Slack can identify a pull sheet, manifest, or colliding document and
+        // therefore remains mentioned evidence until its role is verified.
+        const primaryFlexDocumentNumber = learnedForIntake.find(item => item.role === "primary_show_quote")?.documentNumber || match?.primaryDocumentNumber || null;
+        const sourceMentionedFlexDocuments = exactMessageQuotes.map(documentNumber => ({ documentNumber, documentType: mentionedDocumentType, role: "mentioned_source", elementId: null, source: "slack" }));
+        const flexDocumentRefs = [
+          ...(match?.documentRefs || []),
+          ...learnedForIntake.map(item => ({ documentNumber: item.documentNumber, elementId: item.elementId, documentType: item.documentType || "unknown", role: item.role || "linked", flexUrl: item.flexUrl || null, source: item.source || "command_center" })),
+          ...sourceMentionedFlexDocuments,
+        ]
+          .filter(ref => ref?.documentNumber)
+          .map(ref => ({ ...ref, role: ref.documentNumber === primaryFlexDocumentNumber && ref.role !== "mentioned_source" ? "primary_show_quote" : ref.role || "related" }))
+          .filter((ref, index, refs) => {
+            if (ref.role === "mentioned_source") return index === refs.findIndex(candidate => candidate.documentNumber === ref.documentNumber && candidate.role === "mentioned_source");
+            return index === refs.findIndex(candidate => candidate.documentNumber === ref.documentNumber && candidate.documentType === ref.documentType && candidate.role !== "mentioned_source");
+          });
+        const flexQuoteElements = flexDocumentRefs.map(ref => ({ documentNumber: ref.documentNumber, elementId: ref.elementId || null, documentType: ref.documentType || "unknown" }));
+        const status = confirmedMatch ? "matched" : candidateNeedsReview ? "needs_review" : scope === "show_specific" ? "needs_match" : "routed";
+        db.intakeItems[intakeId] = {
+          id: intakeId, sourceRecordId: sourceId, status, category: domain, scope,
+          urgency: message.operationalClassification?.status === "blocked" ? "urgent" : "normal",
+          impact: message.operationalClassification?.status === "blocked" ? "critical" : message.operationalClassification?.status === "at_risk" ? "material" : "minor",
+          summary: cleanedSummary,
+          matchedShowId: confirmedMatch ? match.showKey : null,
+          candidateShowId: candidateNeedsReview ? match.showKey : null,
+          matchedShowName: match?.showName || null,
+          flexDocumentNumbers,
+          primaryFlexDocumentNumber,
+          sourceMentionedFlexDocuments,
+          flexDocumentRefs,
+          flexElementId: match?.elementId || null,
+          flexQuoteElements,
+          matchConfidence: match?.score ?? null,
+          matchReasons: match?.reasons || [], createdAt: db.intakeItems[intakeId]?.createdAt || now(), updatedAt: now(),
+          authorityRole: "operational_signal",
+          canEstablishShow: false,
+        };
+        for (const [rank, candidate] of (message.matches || []).entries()) {
+          const candidateId = id("match", `${intakeId}:${candidate.showKey}`);
+          db.matchCandidates[candidateId] = { id: candidateId, intakeItemId: intakeId, candidateEntityType: "show", candidateEntityId: candidate.showKey, candidateEntityName: candidate.showName || null, documentNumbers: candidate.documentNumbers || [], primaryDocumentNumber: candidate.primaryDocumentNumber || null, elementId: candidate.elementId || null, documentRefs: candidate.documentRefs || [], quoteElements: candidate.quoteElements || [], score: Number(candidate.score || 0), reasons: candidate.reasons || [], rank: rank + 1, selected: ["auto_attached","manually_approved"].includes(candidate.matchState), matcherVersion: "slack-match-v1" };
+        }
+        const factId = id("fact", `${intakeId}:${domain}`);
+        db.candidateFacts[factId] = { id: factId, intakeItemId: intakeId, factType: `slack.${domain}.signal`, value: { text: cleanedText, categories: message.operationalClassification?.categories || [], entities: message.extractedEntities || {} }, confidence: match?.confidenceBand || match?.confidence || null, evidenceSpan: { sourceRecordId: sourceId, text: cleanedText }, extractionVersion: "slack-rules-v1" };
+        const cardId = id("card", intakeId);
+        const cardType = cardTypeOf(message);
+        const cardEligible = shouldCreateDecisionCard(message, status);
+        if (!cardEligible && db.decisionCards[cardId]?.status === "open") {
+          delete db.decisionCards[cardId];
+        }
+        if (!db.decisionCards[cardId] && cardEligible) {
+          db.decisionCards[cardId] = { id: cardId, intakeItemId: intakeId, showId: match?.showKey || null, status: "open", cardType, domain, headline: cleanedSummary, explanation: cardType === "task_request" ? `CUE found a ${domain} request that needs an owner or disposition.` : cardType === "risk_review" ? `CUE found a ${domain} risk or unresolved condition that may affect readiness.` : `CUE needs a human to confirm this signal's show and operational treatment.`, recommendation: cardType === "task_request" ? "Create and assign the task, use as evidence, or reject it." : cardType === "risk_review" ? "Confirm the risk, owner and readiness impact." : match ? "Confirm the show match, then choose how CUE should treat the signal." : "Choose the correct show or mark this as not relevant.", urgency: db.intakeItems[intakeId].urgency, impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact, confidence: match?.confidenceBand || null, sourceRecordId: sourceId, createdAt: now(), updatedAt: now() };
+        } else if (db.decisionCards[cardId]?.status === "open" && cardEligible) {
+          Object.assign(db.decisionCards[cardId], {
+            showId: confirmedMatch ? match.showKey : null,
+            candidateShowId: candidateNeedsReview ? match.showKey : null,
+            cardType: candidateNeedsReview ? "show_match_review" : cardType,
+            domain,
+            headline: cleanedSummary,
+            impact: cardType === "risk_review" && db.intakeItems[intakeId].impact === "minor" ? "material" : db.intakeItems[intakeId].impact,
+            updatedAt: now(),
+          });
+        }
+        if (db.decisionCards[cardId]?.status === "open" && cardEligible) {
+          Object.assign(db.decisionCards[cardId], {
+            showId: confirmedMatch ? match.showKey : null,
+            candidateShowId: candidateNeedsReview ? match.showKey : null,
+            cardType: candidateNeedsReview ? "show_match_review" : cardType,
+          });
+        }
+      }
+      // Reconcile derived Intake: raw messages remain in the Slack source cache,
+      // while non-operational chatter is removed from the operational Intake layer.
+      for (const [intakeId, intake] of Object.entries(db.intakeItems)) {
+        const source = db.sourceRecords[intake.sourceRecordId];
+        if (source?.sourceType !== "slack" || activeIntakeIds.has(intakeId)) continue;
+        delete db.intakeItems[intakeId];
+        for (const [key, value] of Object.entries(db.matchCandidates)) if (value.intakeItemId === intakeId) delete db.matchCandidates[key];
+        for (const [key, value] of Object.entries(db.candidateFacts)) if (value.intakeItemId === intakeId) delete db.candidateFacts[key];
+        for (const [key, value] of Object.entries(db.proposedUpdates)) if (value.intakeItemId === intakeId) delete db.proposedUpdates[key];
+        for (const [key, value] of Object.entries(db.decisionCards)) if (value.intakeItemId === intakeId && value.status === "open") delete db.decisionCards[key];
+      }
+      writeFile(filePath, db); return { created, updated, sourceRecordCount: Object.keys(db.sourceRecords).length, intakeCount: Object.keys(db.intakeItems).length, openDecisionCount: Object.values(db.decisionCards).filter(x => x.status === "open").length };
+    });
+  }
+
+  async function decide(cardId, input = {}) {
+    return locked(async () => {
+      const db = readFile(filePath); const card = db.decisionCards[cardId];
+      if (!card) return { ok: false, status: 404, error: "Decision card not found." };
+      const allowed = ["accept_update","supporting_evidence","create_task","create_issue","create_risk","link_show","choose_another_show","merge","request_confirmation","snooze","ignore_once","reject_incorrect","not_relevant"];
+      if (!allowed.includes(input.action)) return { ok: false, status: 400, error: "Unsupported decision action." };
+      if (!input.actorId) return { ok: false, status: 400, error: "actorId is required." };
+      const decisionId = id("decision", `${cardId}:${input.idempotencyKey || `${input.actorId}:${input.action}`}`);
+      if (db.decisions[decisionId]) return { ok: true, idempotent: true, decision: db.decisions[decisionId], readiness: db.readiness[card.showId] || null };
+      const decision = { id: decisionId, decisionCardId: cardId, action: input.action, actorId: input.actorId, rationale: input.rationale || null, parameters: input.parameters || {}, decidedAt: now() };
+      db.decisions[decisionId] = decision; card.status = input.action === "snooze" ? "waiting" : "decided"; card.updatedAt = now();
+      const intake = db.intakeItems[card.intakeItemId];
+      if (intake) { intake.status = input.action === "snooze" ? "snoozed" : "decided"; intake.decidedAt = now(); }
+      if (["link_show", "choose_another_show"].includes(input.action)) {
+        const selectedShowId = String(input.parameters?.showId || card.candidateShowId || "").trim();
+        if (!selectedShowId) return { ok: false, status: 400, error: "showId is required for a show match decision." };
+        card.showId = selectedShowId;
+        card.candidateShowId = null;
+        if (intake) {
+          intake.matchedShowId = selectedShowId;
+          intake.candidateShowId = null;
+          intake.status = "matched";
+          intake.matchConfidence = 999;
+          intake.matchReasons = ["Manually confirmed in Command Center"];
+        }
+        const alias = cleanText(input.parameters?.alias || "");
+        if (alias) {
+          const key = alias.toLowerCase();
+          db.learnedAliases[key] = { alias, showId: selectedShowId, confirmedBy: input.actorId, confirmedAt: now(), sourceRecordId: card.sourceRecordId };
+        }
+      }
+      let event = null;
+      if (["accept_update","supporting_evidence","create_task","create_issue","create_risk","link_show","choose_another_show"].includes(input.action)) {
+        const eventId = id("event", decisionId);
+        const sourceType = db.sourceRecords[card.sourceRecordId]?.sourceType || "system";
+        const onboardingReview = card.cardType === "show_onboarding" && input.action === "accept_update";
+        event = { id: eventId, eventType: onboardingReview ? "show.onboarding.reviewed" : input.action === "accept_update" ? `${card.domain}.signal.accepted` : `intake.${input.action}.recorded`, showId: card.showId, domain: card.domain, entityType: onboardingReview ? "show_lifecycle" : "intake_signal", entityId: onboardingReview ? card.showId : card.intakeItemId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: "user", actorId: input.actorId, sourceType, sourceRecordId: card.sourceRecordId, intakeItemId: card.intakeItemId, decisionId, newValue: { action: input.action, parameters: input.parameters || {} }, idempotencyKey: decisionId };
+        db.events[eventId] = event;
+      }
+      if (card.showId) {
+        const showEvents = Object.values(db.events).filter(x => x.showId === card.showId);
+        const previousShowState = db.showState[card.showId] || {};
+        const onboardingReview = card.cardType === "show_onboarding" && input.action === "accept_update";
+        db.showState[card.showId] = { ...previousShowState, showId: card.showId, projectionName: onboardingReview ? previousShowState.projectionName || "show_lifecycle" : "operational", lastEventId: event?.id || previousShowState.lastEventId || null, state: { ...(previousShowState.state || {}), acceptedSignalCount: showEvents.length, lastDecision: decision, ...(onboardingReview ? { onboardingReviewedAt: decision.decidedAt, onboardingReviewedBy: input.actorId } : {}) }, projectedAt: now() };
+        const openCards = Object.values(db.decisionCards).filter(x => x.showId === card.showId && ["open","assigned","waiting","escalated"].includes(x.status));
+        if (onboardingReview) {
+          const previousReadiness = db.readiness[card.showId] || {};
+          db.readiness[card.showId] = { ...previousReadiness, showId: card.showId, overallStatus: "in_progress", overallScore: Math.max(20, Number(previousReadiness.overallScore || 0)), milestoneRollup: { ...(previousReadiness.milestoneRollup || {}), quote_confirmed: { status: "ready" }, active_show_index: previousReadiness.milestoneRollup?.active_show_index || { status: "not_started" }, onboarding_reviewed: { status: "ready" } }, blockers: openCards.filter(x => x.impact === "critical").map(x => x.id), warnings: openCards.filter(x => x.impact !== "critical").map(x => x.id), nextActions: openCards.map(x => ({ decisionCardId: x.id, headline: x.headline })), rulesetVersion: "confirmed-quote-v1", lastEventId: event?.id || previousReadiness.lastEventId || null, evaluatedAt: now() };
+        } else {
+          const status = readinessStatusFor(openCards, showEvents);
+          db.readiness[card.showId] = { showId: card.showId, overallStatus: status, overallScore: status === "ready" ? 100 : status === "at_risk" ? 55 : status === "blocked" ? 20 : 70, domainRollup: { [card.domain]: { status, openDecisionCount: openCards.filter(x => x.domain === card.domain).length } }, milestoneRollup: { ready_to_dispatch: { status: card.domain === "trucking" ? status : "not_started" } }, blockers: openCards.filter(x => x.impact === "critical").map(x => x.id), warnings: openCards.filter(x => x.impact !== "critical").map(x => x.id), nextActions: openCards.map(x => ({ decisionCardId: x.id, headline: x.headline })), rulesetVersion: "pilot-v1", lastEventId: event?.id || null, evaluatedAt: now() };
+        }
+      }
+      writeFile(filePath, db); return { ok: true, decision, event, currentShowState: db.showState[card.showId] || null, readiness: db.readiness[card.showId] || null };
+    });
+  }
+
+  async function linkFlexQuote(input = {}) {
+    return locked(async () => {
+      const db = readFile(filePath);
+      const documentNumber = cleanText(input.documentNumber || "");
+      const elementId = cleanText(input.elementId || "");
+      const actorId = cleanText(input.actorId || "");
+      const documentType = cleanText(input.documentType || "unknown") || "unknown";
+      const role = cleanText(input.role || "linked") || "linked";
+      if (!/^\d{2}-\d{3,6}$/.test(documentNumber)) return { ok: false, status: 400, error: "A valid FLEX document number is required." };
+      if (!/^[0-9a-f-]{36}$/i.test(elementId)) return { ok: false, status: 400, error: "A valid FLEX element ID is required." };
+      if (!actorId) return { ok: false, status: 400, error: "actorId is required." };
+      const storageKey = `${documentNumber}:${input.intakeItemId || elementId}`;
+      const previous = db.learnedFlexLinks[storageKey] || {};
+      const intakeItemIds = [...new Set([...(previous.intakeItemIds || []), input.intakeItemId].filter(Boolean))];
+      const learned = { documentNumber, elementId, documentType, role, flexUrl: input.flexUrl || null, actorId, rationale: input.rationale || null, source: input.source || "command_center", intakeItemIds, confirmedAt: now() };
+      db.learnedFlexLinks[storageKey] = learned;
+      const intake = input.intakeItemId ? db.intakeItems[input.intakeItemId] : null;
+      if (intake) {
+        intake.flexDocumentNumbers = [...new Set([...(intake.flexDocumentNumbers || []), documentNumber])];
+        const shouldBecomePrimary = role === "primary_show_quote"
+          || (!intake.primaryFlexDocumentNumber && documentType === "quote");
+        if (shouldBecomePrimary) intake.primaryFlexDocumentNumber = documentNumber;
+        intake.flexDocumentRefs = [
+          ...(intake.flexDocumentRefs || []).filter((item) => !(item.documentNumber === documentNumber && item.documentType === documentType && item.role !== "mentioned_source")),
+          { documentNumber, elementId, documentType, role, flexUrl: input.flexUrl || null, source: input.source || "command_center" },
+        ];
+        if (documentType === "quote") {
+          intake.flexQuoteElements = [
+            ...(intake.flexQuoteElements || []).filter((item) => item.documentNumber !== documentNumber),
+            { documentNumber, elementId },
+          ];
+        }
+        intake.updatedAt = now();
+      }
+      const showId = intake?.matchedShowId || intake?.candidateShowId || cleanText(input.showId || "") || null;
+      if (showId && role === "primary_show_quote" && documentType === "quote") {
+        const existingShow = db.showRegistry?.[showId] || {
+          id: showId,
+          name: cleanText(input.showName || showId),
+          aliases: [],
+          operationalIdentity: {},
+          flex: { documents: [] },
+          lifecycle: { status: "active", firstSeenAt: now(), lastSeenAt: now() },
+        };
+        const primaryShowQuote = {
+          documentNumber,
+          elementId,
+          documentType: "quote",
+          role: "primary_show_quote",
+          status: "Verified",
+          source: input.source || "command_center",
+          flexUrl: input.flexUrl || null,
+          verifiedAt: now(),
+          actorId,
+        };
+        db.showRegistry[showId] = {
+          ...existingShow,
+          flex: {
+            ...(existingShow.flex || {}),
+            status: "Verified",
+            hierarchyStatus: "verified",
+            primaryShowQuote,
+            documents: [
+              ...(existingShow.flex?.documents || []).filter(document => document.elementId !== elementId && document.documentNumber !== documentNumber),
+              primaryShowQuote,
+            ],
+          },
+          identityConfidence: "high",
+          humanConfirmationRequired: false,
+          humanOverrides: {
+            ...(existingShow.humanOverrides || {}),
+            primaryShowQuote,
+          },
+          updatedAt: now(),
+        };
+        const registryKey = elementId.toLowerCase();
+        db.flexDocumentRegistry[registryKey] = {
+          ...(db.flexDocumentRegistry[registryKey] || {}),
+          ...primaryShowQuote,
+          key: registryKey,
+          showIds: [...new Set([...(db.flexDocumentRegistry[registryKey]?.showIds || []), showId])],
+          lastSeenAt: now(),
+        };
+      }
+      const eventId = id("event", `flex-link:${documentNumber}:${elementId}:${actorId}`);
+      db.events[eventId] = { id: eventId, eventType: "intake.flex_quote.linked", showId, domain: intake?.category || "operations", entityType: "flex_quote", entityId: elementId, occurredAt: now(), effectiveAt: now(), recordedAt: now(), actorType: actorId.startsWith("system:") ? "system" : "user", actorId, sourceType: input.source || "command_center", sourceRecordId: intake?.sourceRecordId || null, intakeItemId: intake?.id || null, newValue: learned, idempotencyKey: eventId };
+      writeFile(filePath, db);
+      return { ok: true, learned, intake: intake || null, event: db.events[eventId] };
+    });
+  }
+
+  return {
+    filePath,
+    read: async () => readFile(filePath),
+    observeFlexQuoteStatus,
+    listFlexQuoteStatusObservations: async ({ confirmedOnly = false } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.flexQuoteStatusObservations || {})
+        .filter(observation => !confirmedOnly || observation.confirmationTriggeredAt)
+        .sort((a, b) => String(b.lastObservedAt || "").localeCompare(String(a.lastObservedAt || "")));
+    },
+    syncCanonicalShowRegistry,
+    listCanonicalShows: async ({ activeOnly = false } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.showRegistry || {})
+        .filter(show => !activeOnly || show.lifecycle?.status === "active")
+        .sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+    },
+    getCanonicalShow: async (showId) => readFile(filePath).showRegistry?.[showId] || null,
+    getFlexDocument: async (key) => {
+      const db = readFile(filePath);
+      const lookup = cleanText(key || "").toLowerCase();
+      return db.flexDocumentRegistry?.[lookup]
+        || Object.values(db.flexDocumentRegistry || {}).find(document => String(document.documentNumber || "").toLowerCase() === lookup)
+        || null;
+    },
+    ingestSourceRecords,
+    checkpointConnectorRun,
+    getConnectorState: async (connectorName) => readFile(filePath).connectorState?.[cleanText(connectorName)] || null,
+    saveConnectorState,
+    listConnectorRuns: async ({ connectorName = null, status = null, limit = 100 } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.connectorRuns || {})
+        .filter(run => (!connectorName || run.connectorName === connectorName) && (!status || run.status === status))
+        .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 100, 500)));
+    },
+    getConnectorCursor: async (connectorName) => readFile(filePath).connectorCursors?.[cleanText(connectorName)] || null,
+    syncSlackSnapshot,
+    listDecisionCards: async ({ showId = null, status = null } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.decisionCards)
+        .filter(x => (!showId || x.showId === showId || x.candidateShowId === showId) && (!status || x.status === status))
+        .map(card => ({ ...card, intake: db.intakeItems[card.intakeItemId] || null, sourceRecord: db.sourceRecords[card.sourceRecordId] || null, matchCandidates: Object.values(db.matchCandidates).filter(x => x.intakeItemId === card.intakeItemId).sort((a,b) => b.score - a.score).slice(0,5) }))
+        .sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    },
+    listIntakeItems: async ({ status = null, limit = 200, includeSuperseded = false } = {}) => {
+      const db = readFile(filePath);
+      return Object.values(db.intakeItems)
+        .filter(x => (includeSuperseded || status === "superseded" || x.status !== "superseded") && (!status || x.status === status))
+        .map(item => ({ ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null }))
+        .sort((a,b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, Math.max(1, Math.min(Number(limit) || 200, 500)));
+    },
+    getSummary: async () => {
+      const db = readFile(filePath);
+      const intake = Object.values(db.intakeItems).filter(item => item.status !== "superseded");
+      const cards = Object.values(db.decisionCards);
+      const count = (items, predicate) => items.filter(predicate).length;
+      return { updatedAt: db.updatedAt, intakeTotal: intake.length, matched: count(intake,x=>x.status==="matched"), candidateSignals: count(intake,x=>x.status==="needs_review"), needsMatch: count(intake,x=>x.status==="needs_match"), routedEvidence: count(intake,x=>x.status==="routed"), evidenceOnly: count(intake,x=>!cards.some(c=>c.intakeItemId===x.id && ["open","assigned","waiting","escalated"].includes(c.status))), openDecisions: count(cards,x=>x.status==="open"&&x.cardType!=="show_match_review"), matchDecisions: count(cards,x=>x.status==="open"&&x.cardType==="show_match_review"), waitingDecisions: count(cards,x=>x.status==="waiting"), learnedAliases: Object.keys(db.learnedAliases || {}).length };
+    },
+    getIntakeItem: async (intakeId) => { const db = readFile(filePath); const item = db.intakeItems[intakeId]; if (!item) return null; return { ...item, sourceRecord: db.sourceRecords[item.sourceRecordId] || null, matches: Object.values(db.matchCandidates).filter(x => x.intakeItemId === intakeId), facts: Object.values(db.candidateFacts).filter(x => x.intakeItemId === intakeId), decisionCards: Object.values(db.decisionCards).filter(x => x.intakeItemId === intakeId) }; },
+    getShowReadiness: async (showId) => readFile(filePath).readiness[showId] || { showId, overallStatus: "not_started", overallScore: 0, domainRollup: {}, milestoneRollup: {}, blockers: [], warnings: [], nextActions: [], rulesetVersion: "pilot-v1", evaluatedAt: now() },
+    getShowState: async (showId) => readFile(filePath).showState[showId] || null,
+    getLearnedFlexLink: async (documentNumber, intakeItemId = null) => {
+      const db = readFile(filePath);
+      return Object.values(db.learnedFlexLinks || {}).find(item => item.documentNumber === String(documentNumber || "").trim() && item.source !== "flex_header_verification" && item.status !== "quarantined" && (!intakeItemId || (item.intakeItemIds || []).includes(intakeItemId))) || null;
+    },
+    linkFlexQuote,
+    decide,
+  };
+}
+
+export const defaultCueFoundationStore = createCueFoundationStore();

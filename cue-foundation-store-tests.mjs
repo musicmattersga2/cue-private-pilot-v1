@@ -1,0 +1,238 @@
+import assert from "assert";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { createCueFoundationStore } from "./cue-foundation-store.mjs";
+
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cue-foundation-"));
+const store = createCueFoundationStore({ filePath: path.join(dir, "foundation.json") });
+const message = {
+  messageKey: "CLOG:1783821000.0001", channelId: "CLOG", channelName: "logistics", userId: "U1", authorName: "Brian",
+  text: "Sound Haven may need a third box truck. Please confirm.", contentHash: "h1", timestampIso: "2026-07-12T01:50:00.000Z", ingestedAt: "2026-07-12T01:51:00.000Z",
+  operationalClassification: { categories: ["trucking","unresolved_issue"], status: "needs_review", summary: "Possible third box truck", unresolved: true },
+  extractedEntities: { trucks: [], quotes: [] }, matchState: "needs_review",
+  matches: [{ showKey: "sound-haven", showName: "Sound Haven", documentNumbers: ["26-1421"], elementId: "element-sound-haven", quoteElements: [{ documentNumber: "26-1421", elementId: "element-sound-haven" }], score: 110, confidenceBand: "high", reasons: ["Exact show alias", "Date proximity"], matchState: "auto_attached" }],
+};
+const first = await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
+assert.equal(first.intakeCount, 1); assert.equal(first.openDecisionCount, 1);
+const second = await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
+assert.equal(second.sourceRecordCount, 1, "sync idempotent");
+const initialDb = await store.read();
+const initialIntakeId = Object.keys(initialDb.intakeItems)[0];
+const initialSourceRecord = Object.values(initialDb.sourceRecords)[0];
+const initialIntake = initialDb.intakeItems[initialIntakeId];
+assert.equal(initialSourceRecord.metadata.authorityRole, "operational_signal", "Slack source records are explicitly operational evidence");
+assert.equal(initialSourceRecord.metadata.canEstablishShow, false, "Slack source records cannot establish show identity");
+assert.equal(initialIntake.authorityRole, "operational_signal", "Slack Intake retains its operational-only authority role");
+assert.equal(initialIntake.canEstablishShow, false, "Slack Intake cannot become a show-discovery trigger");
+await store.saveConnectorState("flex-confirmed-quote-snapshot", { baselineCompletedAt: "2026-07-14T00:00:00.000Z", confirmedQuotes: { one: { elementId: "one" } } });
+const savedSnapshot = await store.getConnectorState("flex-confirmed-quote-snapshot");
+assert.equal(savedSnapshot.baselineCompletedAt, "2026-07-14T00:00:00.000Z", "confirmed-quote baseline timestamp persists");
+assert.deepEqual(savedSnapshot.confirmedQuotes, { one: { elementId: "one" } }, "confirmed-quote UUID snapshot persists independently from connector telemetry");
+const linked = await store.linkFlexQuote({ documentNumber: "26-1421", elementId: "85141d01-8008-4d29-8fc2-1749159e35e0", documentType: "quote", role: "primary_show_quote", intakeItemId: initialIntakeId, actorId: "ops-manager", flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#fin-doc/85141d01-8008-4d29-8fc2-1749159e35e0/doc-view/ca6b072c-b122-11df-b8d5-00e08175e43e/header" });
+assert(linked.ok, "authorized operator can link a verified FLEX quote");
+assert.equal((await store.getLearnedFlexLink("26-1421")).elementId, "85141d01-8008-4d29-8fc2-1749159e35e0", "verified FLEX mapping is learned");
+await store.syncSlackSnapshot({ messages: { [message.messageKey]: message } });
+const cards = await store.listDecisionCards({ status: "open" }); assert.equal(cards.length, 1);
+assert.deepEqual(cards[0].intake.flexDocumentNumbers, ["26-1421"], "FLEX quote number follows show match into Intake");
+assert.equal(cards[0].intake.primaryFlexDocumentNumber, "26-1421", "human-confirmed primary FLEX quote survives connector resync");
+assert.equal(cards[0].intake.flexQuoteElements[0].elementId, "85141d01-8008-4d29-8fc2-1749159e35e0", "learned FLEX element identity survives connector resync");
+const result = await store.decide(cards[0].id, { action: "accept_update", actorId: "brian-kee", idempotencyKey: "accept-1" });
+assert(result.ok); assert(result.event); assert.equal(result.readiness.showId, "sound-haven");
+assert.equal(result.readiness.overallStatus, "at_risk", "accepted requirement is not fulfilled readiness");
+const retry = await store.decide(cards[0].id, { action: "accept_update", actorId: "brian-kee", idempotencyKey: "accept-1" });
+assert(retry.ok && retry.idempotent, "decision retry idempotent");
+console.log(JSON.stringify({ ok: true, first, cardId: cards[0].id, eventType: result.event.eventType, readiness: result.readiness.overallStatus }, null, 2));
+
+const routineStore = createCueFoundationStore({ filePath: path.join(dir, "routine.json") });
+const routine = { ...message, messageKey: "CLOG:1783821001.0001", contentHash: "h2", text: "5301 is loaded with Frost motors.", operationalClassification: { categories: ["trucking", "warehouse", "equipment", "resolution"], status: "resolved", summary: "5301 is loaded with Frost motors.", unresolved: false }, matchState: "needs_review" };
+const routineResult = await routineStore.syncSlackSnapshot({ messages: { [routine.messageKey]: routine } });
+assert.equal(routineResult.openDecisionCount, 0, "routine state confirmation does not clutter decisions");
+
+const unmatchedStore = createCueFoundationStore({ filePath: path.join(dir, "unmatched.json") });
+const unmatched = { ...message, messageKey: "CGENERAL:1783821002.0001", contentHash: "h3", text: "Can someone receive the delivery?", matches: [], matchState: "general_queue", operationalClassification: { categories: ["trucking"], status: "needs_review", summary: "Can someone receive the delivery?", unresolved: true } };
+const unmatchedResult = await unmatchedStore.syncSlackSnapshot({ messages: { [unmatched.messageKey]: unmatched } });
+assert.equal(unmatchedResult.intakeCount, 1, "unmatched operational signal retained in Intake");
+assert.equal(unmatchedResult.openDecisionCount, 0, "unmatched chatter does not flood My Decisions");
+
+const lowStore = createCueFoundationStore({ filePath: path.join(dir, "low.json") });
+const low = { ...unmatched, messageKey: "CGENERAL:1783821003.0001", contentHash: "h4", matches: [{ showKey: "fifa-final", showName: "FIFA Final", score: 25, confidenceBand: "low", matchState: "general_queue", reasons: ["Department alignment", "Active/upcoming"] }] };
+await lowStore.syncSlackSnapshot({ messages: { [low.messageKey]: low } });
+const lowDb = await lowStore.read();
+const lowIntake = Object.values(lowDb.intakeItems)[0];
+assert.equal(lowIntake.status, "routed", "low-confidence operational signal routes by scope instead of forcing a show match");
+assert.equal(lowIntake.scope, "warehouse_shop", "shop delivery signal routes to warehouse/shop");
+assert.equal(lowIntake.matchedShowId, null, "low-confidence candidate never attaches to a show");
+
+const orderingStore = createCueFoundationStore({ filePath: path.join(dir, "ordering.json") });
+const unordered = { ...message, messageKey: "CLOG:1783821004.0001", contentHash: "h5", matches: [
+  { showKey: "wrong-low", score: 25, confidenceBand: "low", matchState: "general_queue", reasons: ["Recency only"] },
+  { showKey: "sound-haven", score: 125, confidenceBand: "high", matchState: "auto_attached", reasons: ["Exact quote"] },
+] };
+await orderingStore.syncSlackSnapshot({ messages: { [unordered.messageKey]: unordered } });
+const orderingDb = await orderingStore.read();
+const orderingIntake = Object.values(orderingDb.intakeItems)[0];
+assert.equal(orderingIntake.matchedShowId, "sound-haven", "strongest selected match wins regardless of array order");
+
+const matchStore = createCueFoundationStore({ filePath: path.join(dir, "match-decision.json") });
+const candidate = { ...message, messageKey: "CLOG:1783821005.0001", contentHash: "h6", matches: [{ showKey: "paul-simon", score: 75, confidenceBand: "medium", matchState: "needs_review", reasons: ["Chastain alias"] }] };
+await matchStore.syncSlackSnapshot({ messages: { [candidate.messageKey]: candidate } });
+const matchCards = await matchStore.listDecisionCards({ status: "open" });
+assert.equal(matchCards[0].cardType, "show_match_review", "candidate creates match-review card");
+const matchDecision = await matchStore.decide(matchCards[0].id, { action: "link_show", actorId: "pm-user", idempotencyKey: "link-1", parameters: { showId: "paul-simon", alias: "Chastain Paul" } });
+assert(matchDecision.ok && matchDecision.event, "show match decision is recorded");
+const matchDb = await matchStore.read();
+assert.equal(Object.values(matchDb.intakeItems)[0].matchedShowId, "paul-simon", "confirmed show persisted to Intake");
+assert.equal(matchDb.learnedAliases["chastain paul"].showId, "paul-simon", "confirmed alias learned");
+
+const explicitQuoteStore = createCueFoundationStore({ filePath: path.join(dir, "explicit-quote.json") });
+const explicitQuoteMessage = {
+  ...message,
+  messageKey: "CAUDIO:1783821005.1001",
+  contentHash: "explicit-quote-h1",
+  text: "Chastain: Spare Galaxy 2026 (26-0821)",
+  extractedEntities: { trucks: [], quotes: ["26-0821"] },
+  matches: [{ showKey: "chastain-imag", showName: "Chastain IMAG", documentNumbers: [], quoteElements: [], score: 55, confidenceBand: "medium", reasons: ["Chastain alias"], matchState: "needs_review" }],
+};
+await explicitQuoteStore.syncSlackSnapshot({ messages: { [explicitQuoteMessage.messageKey]: explicitQuoteMessage } });
+const explicitQuoteIntake = Object.values((await explicitQuoteStore.read()).intakeItems)[0];
+assert.deepEqual(explicitQuoteIntake.flexDocumentNumbers, ["26-0821"], "explicit Slack quote enters Intake even when the show catalog lacks it");
+assert.equal(explicitQuoteIntake.primaryFlexDocumentNumber, null, "a Slack document number remains mentioned evidence until FLEX or a human verifies its primary role");
+assert.equal(explicitQuoteIntake.status, "needs_review", "explicit quote evidence does not silently confirm an uncertain show match");
+
+const multipleQuoteStore = createCueFoundationStore({ filePath: path.join(dir, "multiple-explicit-quotes.json") });
+const multipleQuoteMessage = { ...explicitQuoteMessage, messageKey: "CAUDIO:1783821005.1002", contentHash: "explicit-quote-h2", text: "Compare 26-0821 and 26-0822", extractedEntities: { trucks: [], quotes: ["26-0821", "26-0822"] } };
+await multipleQuoteStore.syncSlackSnapshot({ messages: { [multipleQuoteMessage.messageKey]: multipleQuoteMessage } });
+const multipleQuoteIntake = Object.values((await multipleQuoteStore.read()).intakeItems)[0];
+assert.deepEqual(multipleQuoteIntake.flexDocumentNumbers, ["26-0821", "26-0822"], "all explicit quote evidence is preserved");
+assert.equal(multipleQuoteIntake.primaryFlexDocumentNumber, null, "multiple explicit quotes require human workstream confirmation");
+
+const typedDocumentStore = createCueFoundationStore({ filePath: path.join(dir, "typed-flex-documents.json") });
+const typedDocumentMessage = {
+  ...message,
+  messageKey: "CWAREHOUSE:1783821005.1003",
+  contentHash: "typed-flex-documents-h1",
+  text: "Live Nation Moonchild @ The Fox (26-0836) pull sheet is ready to prep.",
+  extractedEntities: { trucks: [], quotes: ["26-0836"] },
+  matches: [{
+    showKey: "live-nation-moonchild-the-fox",
+    showName: "Live Nation Moonchild @ The Fox",
+    documentNumbers: ["26-1846", "26-0836"],
+    primaryDocumentNumber: "26-1846",
+    elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
+    documentRefs: [
+      { documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00", source: "active_shows_primary" },
+    ],
+    quoteElements: [],
+    score: 180,
+    confidenceBand: "high",
+    reasons: ["Exact normalized show name"],
+    matchState: "auto_attached",
+  }],
+};
+await typedDocumentStore.syncSlackSnapshot({ messages: { [typedDocumentMessage.messageKey]: typedDocumentMessage } });
+const typedDocumentIntake = Object.values((await typedDocumentStore.read()).intakeItems)[0];
+assert.equal(typedDocumentIntake.primaryFlexDocumentNumber, "26-1846", "canonical Active Shows quote remains the primary show quote");
+assert.deepEqual(typedDocumentIntake.sourceMentionedFlexDocuments, [{ documentNumber: "26-0836", documentType: "pull_sheet", role: "mentioned_source", elementId: null, source: "slack" }], "Slack-mentioned pull sheet is typed separately from the show quote");
+assert(typedDocumentIntake.flexDocumentRefs.some(ref => ref.documentNumber === "26-1846" && ref.role === "primary_show_quote" && ref.elementId), "canonical quote keeps its Intake Engine UUID");
+assert(typedDocumentIntake.flexDocumentRefs.some(ref => ref.documentNumber === "26-0836" && ref.documentType === "pull_sheet" && ref.role === "mentioned_source"), "pull sheet remains source evidence and never replaces the primary quote");
+
+await typedDocumentStore.syncCanonicalShowRegistry([{
+  id: "live-nation-moonchild-the-fox",
+  name: "Live Nation Moonchild @ The Fox",
+  activeShowsIndex: { client: "Live Nation" },
+  flex: { status: "Missing", documents: [] },
+}], { source: "test-active-shows" });
+const humanRegistryLink = await typedDocumentStore.linkFlexQuote({
+  documentNumber: "26-1846",
+  elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
+  documentType: "quote",
+  role: "primary_show_quote",
+  intakeItemId: typedDocumentIntake.id,
+  actorId: "ops-manager",
+  source: "command_center",
+});
+assert(humanRegistryLink.ok, "human primary quote link succeeds");
+const canonicalMoonchild = await typedDocumentStore.getCanonicalShow("live-nation-moonchild-the-fox");
+assert.equal(canonicalMoonchild.flex.primaryShowQuote.documentNumber, "26-1846", "human link updates the canonical show registry");
+assert.equal(canonicalMoonchild.humanOverrides.primaryShowQuote.actorId, "ops-manager", "registry records the human authority");
+
+const linkedPullSheet = await typedDocumentStore.linkFlexQuote({
+  documentNumber: "26-0836",
+  elementId: "95141d01-8008-4d29-8fc2-1749159e35e0",
+  documentType: "pull_sheet",
+  role: "linked",
+  intakeItemId: typedDocumentIntake.id,
+  actorId: "ops-manager",
+  flexUrl: "https://m2.flexrentalsolutions.com/f5/ui/#pull-sheet/95141d01-8008-4d29-8fc2-1749159e35e0/header",
+});
+assert(linkedPullSheet.ok, "operator can link the exact pull-sheet URL as supporting evidence");
+assert.equal(linkedPullSheet.intake.primaryFlexDocumentNumber, "26-1846", "linking a pull sheet never replaces the canonical primary show quote");
+assert(!linkedPullSheet.intake.flexQuoteElements.some(ref => ref.documentNumber === "26-0836" && ref.elementId === "95141d01-8008-4d29-8fc2-1749159e35e0"), "pull-sheet UUID is not misclassified as a quote UUID");
+
+await typedDocumentStore.linkFlexQuote({ documentNumber: "26-0836", elementId: "95141d01-8008-4d29-8fc2-1749159e35e0", intakeItemId: typedDocumentIntake.id, actorId: "system:flex-verified", source: "flex_header_verification" });
+assert.equal(await typedDocumentStore.getLearnedFlexLink("26-0836", typedDocumentIntake.id), null, "unsafe historical number-only mappings are quarantined from reuse");
+
+const qualityStore = createCueFoundationStore({ filePath: path.join(dir, "quality.json") });
+const birthday = { ...unmatched, messageKey: "CGENERAL:1783821006.0001", contentHash: "h7", text: "Happy birthday! Hope you have a blast.", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Happy birthday!", unresolved: false } };
+const guardrails = { ...message, messageKey: "CLOG:1783821007.0001", contentHash: "h8", text: "<@U47> We need two guardrails for LiteFlair.", operationalClassification: { categories: ["general_operations"], status: "at_risk", summary: "<@U47> We need two guardrails for LiteFlair.", unresolved: true } };
+const authorDirectoryMessage = { ...unmatched, messageKey: "CGENERAL:1783821008.0001", contentHash: "h9", userId: "U47", authorName: "Aaron", text: "Kewl", operationalClassification: { categories: ["general_operations"], status: "informational", summary: "Kewl", unresolved: false } };
+await qualityStore.syncSlackSnapshot({ messages: { [birthday.messageKey]: birthday, [guardrails.messageKey]: guardrails, [authorDirectoryMessage.messageKey]: authorDirectoryMessage } });
+const qualityDb = await qualityStore.read();
+assert.equal(Object.keys(qualityDb.intakeItems).length, 1, "social chatter excluded from operational Intake");
+const qualityIntake = Object.values(qualityDb.intakeItems)[0];
+assert.equal(qualityIntake.category, "equipment", "equipment language overrides broad cached category");
+assert.match(qualityIntake.summary, /@Aaron/, "Slack mention resolves from cached author directory when users.info data is absent");
+await qualityStore.syncSlackSnapshot({ messages: { [birthday.messageKey]: birthday } });
+const reconciledDb = await qualityStore.read();
+assert.equal(Object.keys(reconciledDb.intakeItems).length, 0, "stale derived Intake is reconciled when no longer operational");
+
+const lifecycleCheckpointStore = createCueFoundationStore({ filePath: path.join(dir, "lifecycle-checkpoints.json") });
+await lifecycleCheckpointStore.checkpointConnectorRun({
+  connectorName: "flex-confirmed-quote-lifecycle",
+  connectorVersion: "test-v1",
+  sourceType: "flex",
+  status: "completed",
+  cursorBefore: "cursor-1",
+  cursorAfter: "cursor-2",
+  startedAt: "2026-07-14T01:00:00.000Z",
+  finishedAt: "2026-07-14T01:00:01.000Z",
+  counts: { received: 1, observed: 1 },
+});
+assert.equal(
+  (await lifecycleCheckpointStore.getConnectorCursor("flex-confirmed-quote-lifecycle")).cursor,
+  "cursor-2",
+  "a completed lifecycle page advances the durable connector cursor",
+);
+await lifecycleCheckpointStore.checkpointConnectorRun({
+  connectorName: "flex-confirmed-quote-lifecycle",
+  connectorVersion: "test-v1",
+  sourceType: "flex",
+  status: "partial",
+  cursorBefore: "cursor-2",
+  cursorAfter: "cursor-2",
+  startedAt: "2026-07-14T01:01:00.000Z",
+  finishedAt: "2026-07-14T01:01:01.000Z",
+  counts: { received: 2, observed: 1, failed: 1 },
+  errors: [{ message: "one candidate failed authoritative verification" }],
+});
+assert.equal(
+  (await lifecycleCheckpointStore.getConnectorCursor("flex-confirmed-quote-lifecycle")).cursor,
+  "cursor-2",
+  "a partial lifecycle page retains the previous cursor for safe replay",
+);
+await lifecycleCheckpointStore.checkpointConnectorRun({
+  connectorName: "flex-confirmed-quote-lifecycle",
+  connectorVersion: "test-v1",
+  sourceType: "flex",
+  status: "unavailable",
+  cursorBefore: "cursor-2",
+  cursorAfter: "cursor-3",
+  startedAt: "2026-07-14T01:02:00.000Z",
+  finishedAt: "2026-07-14T01:02:01.000Z",
+});
+assert.equal(
+  (await lifecycleCheckpointStore.getConnectorCursor("flex-confirmed-quote-lifecycle")).cursor,
+  "cursor-2",
+  "an unavailable lifecycle endpoint never advances the durable cursor",
+);

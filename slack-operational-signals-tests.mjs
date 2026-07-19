@@ -522,6 +522,17 @@ console.log("\nservice sync fixtures (no live Slack)");
   const storeAfter = await service.store.read();
   assert(storeAfter.channels.C_OPS?.latestTs === cursorBefore || storeAfter.channels.C_OPS?.latestTs >= cursorBefore, "cursor preserved/advanced safely");
 
+  const attachedBeforeEmptyRematch = Object.values(storeAfter.messages)
+    .flatMap((message) => message.matches || [])
+    .filter((match) => match.matchState === "auto_attached").length;
+  const emptyRematch = await service.rematchAll([], { expandQuotes: false });
+  const afterEmptyRematch = await service.store.read();
+  const attachedAfterEmptyRematch = Object.values(afterEmptyRematch.messages)
+    .flatMap((message) => message.matches || [])
+    .filter((match) => match.matchState === "auto_attached").length;
+  assert(emptyRematch.skipped && emptyRematch.skipReason === "candidate_catalog_empty", "empty candidate catalog skips destructive rematch");
+  assert(attachedAfterEmptyRematch === attachedBeforeEmptyRematch, "empty catalog preserves established matches");
+
   // Security: no token in store
   const raw = fs.readFileSync(filePath, "utf8").toLowerCase();
   assert(!raw.includes("xoxb-"), "store has no bot token");
@@ -598,6 +609,33 @@ console.log("\nservice: material edit rematches rejected signals");
   assert(after.manualDecision == null, "material edit clears manual reject");
   assert(after.matchState !== "manually_rejected", "material edit does not keep silent reject");
 
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+console.log("\nservice: manual approval refreshes FLEX metadata");
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slack-signals-manual-refresh-"));
+  const filePath = path.join(dir, "store.json");
+  const service = createSlackOperationalSignalsService({ filePath, channelIds: [], token: "" });
+  const liteFlairMessage = normalizeSlackMessage(
+    { ts: "1710000250.000100", text: "I added 2 x MDG Hazers to LiteFlair", user: "U9" },
+    { channelId: "C_OPS", channelName: "lighting", authorName: "Pat" }
+  );
+  await service.store.upsertMessages([liteFlairMessage]);
+  await service.approveSlackSignalMatch(liteFlairMessage.messageKey, "liteflair-shoot", { showName: "LiteFlair Shoot" });
+  await service.rematchAll([{
+    showKey: "liteflair-shoot",
+    showName: "LiteFlair Shoot",
+    documentNumbers: ["26-1790"],
+    primaryDocumentNumber: "26-1790",
+    elementId: "33333333-3333-4333-8333-333333333333",
+    documentRefs: [{ documentNumber: "26-1790", documentType: "quote", role: "primary_show_quote", elementId: "33333333-3333-4333-8333-333333333333" }],
+    quoteElements: [{ documentNumber: "26-1790", elementId: "33333333-3333-4333-8333-333333333333", documentType: "quote" }],
+  }], { expandQuotes: false });
+  const refreshed = await service.store.getMessage(liteFlairMessage.messageKey);
+  assert(refreshed.manualDecision?.showKey === "liteflair-shoot", "manual show approval survives metadata refresh");
+  assert(refreshed.matches?.[0]?.primaryDocumentNumber === "26-1790", "manual match receives the current primary FLEX quote");
+  assert(refreshed.matches?.[0]?.elementId === "33333333-3333-4333-8333-333333333333", "manual match receives the verified FLEX UUID");
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
@@ -689,7 +727,7 @@ console.log("\nalias / fuzzy / ambiguity matching");
     showKey: "paul-simon-2026",
     showName: "Paul Simon LED Wall - 2026",
     documentNumbers: ["26-2001"],
-    source: "active_shows",
+    source: "canonical_show_registry",
     daysOut: 12,
     departments: ["video", "led"],
   };
@@ -829,6 +867,25 @@ console.log("\nalias / fuzzy / ambiguity matching");
     ),
     "unverified quote mapping reason present"
   );
+
+  const moonchildCandidate = {
+    showKey: "live-nation-moonchild-the-fox",
+    showName: "Live Nation Moonchild @ The Fox",
+    documentNumbers: ["26-1846", "26-0836"],
+    primaryDocumentNumber: "26-1846",
+    elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00",
+    documentRefs: [{ documentNumber: "26-1846", documentType: "quote", role: "primary_show_quote", elementId: "826adc32-f11e-4d12-bd31-ecaa3f7bfe00" }],
+    source: "active_shows",
+    daysOut: 5,
+  };
+  const pullSheetMessage = normalizeSlackMessage(
+    { ts: "2.7", text: "Live Nation Moonchild @ The Fox (26-0836) pull sheet is ready", user: "U7" },
+    { channelId: "C_WAREHOUSE", channelName: "warehouse", authorName: "Ops" }
+  );
+  const pullSheetMatch = matchSlackMessageToShows(pullSheetMessage, [moonchildCandidate])[0];
+  assert(pullSheetMatch?.primaryDocumentNumber === "26-1846", "matcher preserves canonical show quote separately from mentioned pull sheet");
+  assert(pullSheetMatch?.documentRefs?.[0]?.elementId === moonchildCandidate.elementId, "matcher carries Intake Engine UUID forward");
+  assert(pullSheetMatch?.reasons?.some(reason => /Prefer current Active Shows candidate/.test(reason)), "canonical registry candidates retain the Active Show Index recency preference");
 }
 
 console.log("\nsystem noise excluded from queues");

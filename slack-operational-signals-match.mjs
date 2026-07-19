@@ -296,7 +296,7 @@ function recencyAdjustment(show) {
 
   let delta = 0;
   const reasons = [];
-  if (String(show.source || "").toLowerCase() === "active_shows") {
+  if (["active_shows", "canonical_show_registry"].includes(String(show.source || "").toLowerCase())) {
     delta += 10;
     reasons.push("Prefer current Active Shows candidate");
   }
@@ -698,7 +698,15 @@ export function matchSlackMessageToShows(message, candidateShows = []) {
     results.push({
       showKey,
       showName,
-      documentNumbers: parentShowOnly && quoteHits.length === 0 ? [] : docs,
+      // Preserve the candidate show's known FLEX documents for operator
+      // context even when the message only identifies the parent show. The
+      // workstreamUnspecified flag still prevents treating one child quote as
+      // definitively selected.
+      documentNumbers: docs,
+      primaryDocumentNumber: show.primaryDocumentNumber || null,
+      elementId: show.elementId || null,
+      documentRefs: Array.isArray(show.documentRefs) ? show.documentRefs : [],
+      quoteElements: Array.isArray(show.quoteElements) ? show.quoteElements : [],
       workstreamUnspecified: Boolean(parentShowOnly && quoteHits.length === 0),
       confidence: confidenceBand,
       confidenceBand,
