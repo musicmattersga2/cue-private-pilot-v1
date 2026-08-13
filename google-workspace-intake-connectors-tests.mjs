@@ -56,9 +56,18 @@ function assertSecretSafe(result, label) {
   for (const marker of SECRET_MARKERS) assert.doesNotMatch(serialized, new RegExp(marker), `${label} leaked protected diagnostics`);
   assert.doesNotMatch(serialized, /(?:access|refresh)[_-]?token|authorization|bearer|parents|modifiedTime\s*>/i, `${label} serialized a credential, identifier, or query`);
 }
-function driveConnector(fetch, envOverrides = {}) {
-  return createGoogleWorkspaceIntakeConnectors({ env: { ...baseEnv, ...envOverrides }, fetch });
+function driveConnector(fetch, envOverrides = {}, options = {}) {
+  return createGoogleWorkspaceIntakeConnectors({ env: { ...baseEnv, ...envOverrides }, fetch, ...options });
 }
+
+const privateContinuation = result => result[Symbol.for("cue.googleWorkspace.driveContinuation")]?.continuation || null;
+const fixtureFile = (id, modifiedTime = "2026-08-13T12:00:00.000Z") => ({
+  id,
+  name: `fixture-${id}.txt`,
+  mimeType: "text/plain",
+  modifiedTime,
+  version: "1",
+});
 
 const invalid = readGoogleWorkspaceConfig({
   CUE_GOOGLE_WORKSPACE_ENABLED: "true",
@@ -244,11 +253,160 @@ for (const pagination of [false, true]) {
   assertSecretSafe(result, "metadata/export/content failures");
 }
 
+// A seven-batch sweep capped in batch two persists a private checkpoint and resumes there.
+{
+  const sweepStart = "2026-08-13T14:00:00.000Z";
+  const folders = Array.from({ length: 140 }, (_, index) => `private-folder-${String(index).padStart(3, "0")}`);
+  const listCalls = [];
+  let continuationRun = false;
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    if (url.includes("?alt=media")) return { ok: true, status: 200, text: async () => "fixture", json: async () => ({}) };
+    const parsed = new URL(url);
+    const query = parsed.searchParams.get("q") || "";
+    const pageToken = parsed.searchParams.get("pageToken");
+    listCalls.push({ query, pageToken, orderBy: parsed.searchParams.get("orderBy") });
+    const batch = folders.findIndex(id => query.includes(`'${id}' in parents`));
+    const batchIndex = Math.floor(Math.max(0, batch) / 20);
+    if (!continuationRun && batchIndex === 0) {
+      return json({ files: Array.from({ length: 60 }, (_, index) => fixtureFile(`batch-0-${index}`)) });
+    }
+    if (!continuationRun && batchIndex === 1) {
+      return json({ files: Array.from({ length: 40 }, (_, index) => fixtureFile(`batch-1-${index}`)), nextPageToken: "private-next-page" });
+    }
+    if (continuationRun && batchIndex === 1) {
+      assert.equal(pageToken, "private-next-page", "retry resumes the saved page in batch two");
+      return json({ files: [fixtureFile("batch-1-resumed")] });
+    }
+    return json({ files: [] });
+  };
+  const connector = driveConnector(fetch, {
+    CUE_DRIVE_FOLDER_IDS: folders.join(","),
+    CUE_DRIVE_RECURSIVE: "false",
+    CUE_DRIVE_MAX_FILES: "100",
+  }, { now: () => new Date(sweepStart) });
+
+  const first = await connector.pullDrive({ cursorBefore: CURSOR });
+  const checkpoint = privateContinuation(first);
+  assert.equal(first.status, "partial");
+  assert.equal(first.reason, "file_limit_reached");
+  assert.equal(first.cursorAfter, CURSOR);
+  assert.equal(first.metadata.plannedBatches, 7);
+  assert.equal(first.metadata.attemptedBatches, 2);
+  assert.equal(first.metadata.completedBatches, 1);
+  assert.equal(first.metadata.paginationRemaining, true);
+  assert.equal(first.metadata.fileTraversalComplete, false);
+  assert.equal(first.metadata.fileLimitReason, "file_limit_reached");
+  assert.ok(checkpoint, "the continuation remains private but available to orchestration");
+  assert.equal(checkpoint.batchIndex, 1);
+  assert.equal(checkpoint.upperBound, sweepStart);
+  assert.equal(checkpoint.lowerBound, "2026-07-18T09:29:00.000Z");
+  assert.equal(JSON.stringify(first).includes("private-next-page"), false, "API serialization omits page tokens");
+  assert.equal(JSON.stringify(first).includes("private-folder"), false, "API serialization omits folder identifiers");
+
+  continuationRun = true;
+  const resumed = await connector.pullDrive({ cursorBefore: CURSOR, continuation: checkpoint });
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.cursorAfter, sweepStart, "the durable cursor advances to the fixed upper bound");
+  assert.equal(resumed.metadata.plannedBatches, 7);
+  assert.equal(resumed.metadata.attemptedBatches, 6);
+  assert.equal(resumed.metadata.completedBatches, 6);
+  assert.equal(resumed.metadata.fileTraversalComplete, true);
+  assert.equal(privateContinuation(resumed), null, "final traversal clears the continuation");
+  const fileQueries = listCalls.map(call => call.query);
+  assert.ok(fileQueries.every(query => query.includes("modifiedTime > '2026-07-18T09:29:00.000Z'")));
+  assert.ok(fileQueries.every(query => query.includes(`modifiedTime <= '${sweepStart}'`)), "all continuation runs retain the fixed upper bound");
+  assert.ok(listCalls.every(call => call.orderBy === "modifiedTime asc,name_natural asc"), "Drive uses the strongest supported stable ordering");
+}
+
+// Exactly 100 files is complete when the sole page and every batch are exhausted.
+{
+  const upperBound = "2026-08-13T15:00:00.000Z";
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    if (url.includes("?alt=media")) return { ok: true, status: 200, text: async () => "fixture", json: async () => ({}) };
+    return json({ files: Array.from({ length: 100 }, (_, index) => fixtureFile(`terminal-${index}`)) });
+  };
+  const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => upperBound }).pullDrive({ cursorBefore: CURSOR });
+  assert.equal(result.status, "completed");
+  assert.equal(result.files.length, 100);
+  assert.equal(result.cursorAfter, upperBound);
+  assert.equal(result.metadata.completedBatches, 1);
+  assert.equal(result.metadata.paginationRemaining, false);
+  assert.equal(result.metadata.fileTraversalComplete, true);
+  assert.equal(privateContinuation(result), null);
+}
+
+// Equal timestamps are locally tie-broken by a private stable identifier, and post-bound files are deferred by query.
+{
+  const upperBound = "2026-08-13T16:00:00.000Z";
+  let boundedQuery = "";
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    if (url.includes("?alt=media")) return { ok: true, status: 200, text: async () => "fixture", json: async () => ({}) };
+    boundedQuery = driveQueryFrom(url);
+    return json({ files: [
+      { ...fixtureFile("stable-b"), name: "same", modifiedTime: upperBound },
+      { ...fixtureFile("stable-a"), name: "same", modifiedTime: upperBound },
+      { ...fixtureFile("deferred-after-bound"), modifiedTime: "2026-08-13T16:00:00.001Z" },
+    ] });
+  };
+  const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => upperBound }).pullDrive({ cursorBefore: CURSOR });
+  assert.deepEqual(result.files.map(file => file.id), ["stable-a", "stable-b"]);
+  assert.match(boundedQuery, new RegExp(`modifiedTime <= '${upperBound}'`));
+}
+
+// Initial and pagination failures retain resumable private checkpoints without advancing the cursor.
+for (const pagination of [false, true]) {
+  let page = 0;
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    page += 1;
+    if (pagination && page === 1) return json({ files: [], nextPageToken: "failure-page-token" });
+    return failure(503);
+  };
+  const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => "2026-08-13T17:00:00.000Z" }).pullDrive({ cursorBefore: CURSOR });
+  const checkpoint = privateContinuation(result);
+  assertCursorHeld(result, pagination ? "pagination continuation" : "initial continuation");
+  assert.ok(checkpoint);
+  assert.equal(checkpoint.batchIndex, 0);
+  assert.equal(checkpoint.pageToken, pagination ? "failure-page-token" : null);
+  assert.equal(result.metadata.requestFailure, true);
+  assert.equal(result.metadata.fileTraversalComplete, false);
+  assert.equal(JSON.stringify(result).includes("failure-page-token"), false);
+}
+
+// Invalid continuation is discarded and replaced by a fresh bounded sweep from the durable cursor.
+{
+  let query = "";
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    query = driveQueryFrom(url);
+    return json({ files: [] });
+  };
+  const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => "2026-08-13T18:00:00.000Z" }).pullDrive({
+    cursorBefore: CURSOR,
+    continuation: { version: 0, originalCursor: CURSOR, folderIds: [] },
+  });
+  assert.equal(result.status, "completed");
+  assert.equal(result.metadata.continuationDiagnostic, "invalid_continuation");
+  assert.match(query, /modifiedTime > '2026-07-18T09:29:00.000Z'/);
+  assert.match(query, /modifiedTime <= '2026-08-13T18:00:00.000Z'/);
+}
+
 console.log(JSON.stringify({
   ok: true,
   folderLimitFailClosed: true,
   exactLimitTerminalTraversal: true,
   failureClassifications: ["folder_listing", "file_listing_initial", "file_listing_pagination", "metadata", "export", "content"],
   failedDriveCursorsHeld: true,
+  resumableDriveSweeps: true,
+  fixedSweepBounds: true,
+  deterministicDriveOrdering: true,
   diagnosticsSecretSafe: true,
 }, null, 2));

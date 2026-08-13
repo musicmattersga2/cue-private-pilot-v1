@@ -1,5 +1,11 @@
+import crypto from "node:crypto";
+
 const GMAIL_CONNECTOR = "gmail-operational-intake";
 const DRIVE_CONNECTOR = "google-drive-operational-intake";
+const PRIVATE_DRIVE_CONTINUATION = Symbol.for("cue.googleWorkspace.driveContinuation");
+const DRIVE_CONTINUATION_VERSION = 1;
+const DRIVE_FOLDER_BATCH_SIZE = 20;
+const DRIVE_CONTINUATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function text(value) { return String(value ?? "").trim(); }
 function number(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
@@ -102,6 +108,57 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
   const fetchImpl = options.fetch || globalThis.fetch;
   let cachedToken = null;
   let tokenExpiresAt = 0;
+  const currentTime = options.now || (() => new Date());
+
+  function nowIso() {
+    const value = currentTime();
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error("Google Workspace connector clock is invalid.");
+    return date.toISOString();
+  }
+
+  function driveScopeFingerprint() {
+    return crypto.createHash("sha256").update(JSON.stringify({
+      roots: [...config.drive.folderIds].sort(),
+      recursive: config.drive.recursive,
+      maxFolderDepth: config.drive.maxFolderDepth,
+      maxFolders: config.drive.maxFolders,
+      query: config.drive.query,
+      overlapSeconds: config.cursorOverlapSeconds,
+    })).digest("hex");
+  }
+
+  function attachDriveContinuation(result, continuation, diagnosticCategory = null) {
+    Object.defineProperty(result, PRIVATE_DRIVE_CONTINUATION, {
+      value: { continuation, diagnosticCategory },
+      enumerable: false,
+    });
+    return result;
+  }
+
+  function continuationDiagnostic(continuation, cursorBefore, startedAt) {
+    if (!continuation || typeof continuation !== "object") return "invalid_continuation";
+    if (continuation.version !== DRIVE_CONTINUATION_VERSION
+      || continuation.connectorName !== DRIVE_CONNECTOR) return "invalid_continuation";
+    if (continuation.originalCursor !== cursorBefore
+      || continuation.scopeFingerprint !== driveScopeFingerprint()) return "incompatible_continuation";
+    const lowerBound = iso(continuation.lowerBound);
+    const upperBound = iso(continuation.upperBound);
+    const age = new Date(startedAt).getTime() - new Date(upperBound || 0).getTime();
+    if (!lowerBound || !upperBound || lowerBound !== continuation.lowerBound || upperBound !== continuation.upperBound
+      || new Date(lowerBound).getTime() > new Date(upperBound).getTime()) return "invalid_continuation";
+    if (age < -5 * 60 * 1000 || age > DRIVE_CONTINUATION_MAX_AGE_MS) return "stale_continuation";
+    if (!Array.isArray(continuation.folderIds)
+      || continuation.folderIds.some(id => !text(id))
+      || new Set(continuation.folderIds).size !== continuation.folderIds.length
+      || continuation.folderIds.join("\n") !== [...continuation.folderIds].sort().join("\n")) return "invalid_continuation";
+    const plannedBatches = Math.max(1, Math.ceil(continuation.folderIds.length / DRIVE_FOLDER_BATCH_SIZE));
+    if (!Number.isInteger(continuation.batchIndex)
+      || continuation.batchIndex < 0
+      || continuation.batchIndex >= plannedBatches
+      || !(continuation.pageToken === null || typeof continuation.pageToken === "string")) return "invalid_continuation";
+    return null;
+  }
 
   async function request(url, init = {}, responseType = "json") {
     const controller = new AbortController();
@@ -148,7 +205,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     const cursorBefore = input.cursorBefore || null;
     if (!config.gmail.enabled) return { status: "skipped", reason: "not_enabled", connectorName: GMAIL_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, messages: [], errors: [] };
     if (!config.gmail.configured) return { status: "skipped", reason: "not_configured", connectorName: GMAIL_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, messages: [], errors: [] };
-    const startedAt = new Date().toISOString();
+    const startedAt = nowIso();
     const after = overlapCursor(cursorBefore, config.cursorOverlapSeconds);
     const query = [config.gmail.query, after && `after:${Math.floor(new Date(after).getTime() / 1000)}`].filter(Boolean).join(" ");
     const messages = [];
@@ -208,12 +265,12 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     };
   }
 
-  function driveQuery(cursorBefore, folderIds = config.drive.folderIds) {
+  function driveQuery(lowerBound, upperBound, folderIds = config.drive.folderIds) {
     const clauses = ["trashed = false", "mimeType != 'application/vnd.google-apps.folder'"];
     if (folderIds.length) clauses.push(`(${folderIds.map(id => `'${id.replace(/'/g, "\\'")}' in parents`).join(" or ")})`);
     if (config.drive.query) clauses.push(`(${config.drive.query})`);
-    const after = overlapCursor(cursorBefore, config.cursorOverlapSeconds);
-    if (after) clauses.push(`modifiedTime > '${after}'`);
+    if (lowerBound) clauses.push(`modifiedTime > '${lowerBound}'`);
+    clauses.push(`modifiedTime <= '${upperBound}'`);
     return clauses.join(" and ");
   }
 
@@ -226,7 +283,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     const url = new URL("https://www.googleapis.com/drive/v3/files");
     url.searchParams.set("q", query);
     url.searchParams.set("pageSize", String(pageSize));
-    url.searchParams.set("orderBy", "modifiedTime asc");
+    url.searchParams.set("orderBy", "modifiedTime asc,name_natural asc");
     url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,description,modifiedTime,createdTime,version,headRevisionId,webViewLink,parents,driveId,owners,shared,ownedByMe,size,trashed,lastModifyingUser)");
     url.searchParams.set("supportsAllDrives", "true");
     url.searchParams.set("includeItemsFromAllDrives", "true");
@@ -235,7 +292,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
   }
 
   async function discoverDriveFolders() {
-    const roots = config.drive.folderIds;
+    const roots = [...new Set(config.drive.folderIds)].sort();
     if (!config.drive.recursive || !roots.length || config.drive.maxFolderDepth === 0) {
       return { complete: true, folderIds: roots, errors: [] };
     }
@@ -244,12 +301,16 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     while (frontier.length && seen.size < config.drive.maxFolders) {
       const next = [];
       for (let offset = 0; offset < frontier.length && seen.size < config.drive.maxFolders; offset += 20) {
-        const batch = frontier.slice(offset, offset + 20);
+        const batch = frontier.slice(offset, offset + DRIVE_FOLDER_BATCH_SIZE);
         let pageToken = null;
         try {
           do {
             const page = await driveList(folderQuery(batch.map(item => item.id)), Math.min(1000, config.drive.maxFolders - seen.size), pageToken);
-            for (const folder of page.files || []) {
+            const orderedFolders = [...(page.files || [])].sort((left, right) =>
+              text(left?.modifiedTime).localeCompare(text(right?.modifiedTime))
+              || text(left?.name).localeCompare(text(right?.name))
+              || text(left?.id).localeCompare(text(right?.id)));
+            for (const folder of orderedFolders) {
               const parentDepths = batch.filter(parent => (folder.parents || []).includes(parent.id)).map(parent => parent.depth);
               const depth = (parentDepths.length ? Math.min(...parentDepths) : batch[0].depth) + 1;
               if (depth <= config.drive.maxFolderDepth && !seen.has(folder.id)) {
@@ -271,7 +332,8 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
           return { complete: false, folderIds: [...seen], errors: [requestDiagnostic(error, "folder_listing")] };
         }
       }
-      frontier = next.filter(item => item.depth < config.drive.maxFolderDepth);
+      frontier = next.filter(item => item.depth < config.drive.maxFolderDepth)
+        .sort((left, right) => left.depth - right.depth || left.id.localeCompare(right.id));
     }
     if (frontier.length) {
       return {
@@ -280,7 +342,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
         errors: [{ reason: "incomplete_folder_traversal", operation: "folder_listing" }],
       };
     }
-    return { complete: true, folderIds: [...seen], errors: [] };
+    return { complete: true, folderIds: [...seen].sort(), errors: [] };
   }
 
   function driveContentOperation(file) {
@@ -315,53 +377,103 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     const cursorBefore = input.cursorBefore || null;
     if (!config.drive.enabled) return { status: "skipped", reason: "not_enabled", connectorName: DRIVE_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, files: [], skippedFiles: [], errors: [] };
     if (!config.drive.configured) return { status: "skipped", reason: "not_configured", connectorName: DRIVE_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, files: [], skippedFiles: [], errors: [] };
-    const startedAt = new Date().toISOString();
+    const startedAt = nowIso();
     const files = [];
     const skippedFiles = [];
     const errors = [];
-    const discovery = await discoverDriveFolders();
-    if (!discovery.complete) {
-      return {
+    let continuation = input.continuation || null;
+    let continuationCategory = null;
+    if (continuation) {
+      continuationCategory = continuationDiagnostic(continuation, cursorBefore, startedAt);
+      if (continuationCategory) continuation = null;
+    }
+
+    let sweep = continuation;
+    if (!sweep) {
+      const discovery = await discoverDriveFolders();
+      if (!discovery.complete) {
+        return attachDriveContinuation({
+          connectorName: DRIVE_CONNECTOR,
+          status: "failed",
+          reason: "incomplete_folder_traversal",
+          cursorBefore,
+          cursorAfter: cursorBefore,
+          files,
+          skippedFiles,
+          errors: discovery.errors,
+          metadata: {
+            recursive: config.drive.recursive,
+            folderTraversalComplete: false,
+            plannedBatches: 0,
+            attemptedBatches: 0,
+            completedBatches: 0,
+            paginationRemaining: false,
+            fileTraversalComplete: false,
+            fileLimitReached: false,
+            fileLimitReason: null,
+            requestFailure: discovery.errors.some(error => /request_(?:failed|timeout)/.test(error.reason)),
+            continuationDiagnostic: continuationCategory,
+            received: 0,
+            skipped: 0,
+            failed: discovery.errors.length,
+          },
+        }, null, continuationCategory);
+      }
+      const upperBound = startedAt;
+      const lowerBound = overlapCursor(cursorBefore, config.cursorOverlapSeconds) || new Date(0).toISOString();
+      sweep = {
+        version: DRIVE_CONTINUATION_VERSION,
         connectorName: DRIVE_CONNECTOR,
-        status: "failed",
-        reason: "incomplete_folder_traversal",
-        cursorBefore,
-        cursorAfter: cursorBefore,
-        files,
-        skippedFiles,
-        errors: discovery.errors,
-        metadata: {
-          recursive: config.drive.recursive,
-          folderTraversalComplete: false,
-          received: 0,
-          skipped: 0,
-          failed: discovery.errors.length,
-        },
+        originalCursor: cursorBefore,
+        lowerBound,
+        upperBound,
+        scopeFingerprint: driveScopeFingerprint(),
+        folderIds: [...new Set(discovery.folderIds)].sort(),
+        batchIndex: 0,
+        pageToken: null,
       };
     }
 
-    const batches = discovery.folderIds.length
-      ? Array.from({ length: Math.ceil(discovery.folderIds.length / 20) }, (_, index) => discovery.folderIds.slice(index * 20, index * 20 + 20))
+    const batches = sweep.folderIds.length
+      ? Array.from({ length: Math.ceil(sweep.folderIds.length / DRIVE_FOLDER_BATCH_SIZE) }, (_, index) => sweep.folderIds.slice(index * DRIVE_FOLDER_BATCH_SIZE, index * DRIVE_FOLDER_BATCH_SIZE + DRIVE_FOLDER_BATCH_SIZE))
       : [[]];
     const seenFiles = new Set();
-    fileBatches: for (const batch of batches) {
-      if (files.length >= config.drive.maxFiles) break;
-      const query = driveQuery(cursorBefore, batch);
-      let pageToken = null;
+    let attemptedBatches = 0;
+    let completedBatches = 0;
+    let paginationRemaining = false;
+    let fileTraversalComplete = true;
+    let fileLimitReached = false;
+    let requestFailure = false;
+    let nextContinuation = null;
+    fileBatches: for (let batchIndex = sweep.batchIndex; batchIndex < batches.length; batchIndex += 1) {
+      const batch = batches[batchIndex];
+      attemptedBatches += 1;
+      const query = driveQuery(sweep.lowerBound, sweep.upperBound, batch);
+      let pageToken = batchIndex === sweep.batchIndex ? sweep.pageToken : null;
       do {
+        const requestedPageToken = pageToken;
         let page;
         try {
           page = await driveList(query, Math.min(1000, config.drive.maxFiles - files.length), pageToken);
         } catch (error) {
           errors.push(requestDiagnostic(error, pageToken ? "file_listing_pagination" : "file_listing_initial"));
+          requestFailure = true;
+          fileTraversalComplete = false;
+          paginationRemaining = Boolean(pageToken);
+          nextContinuation = { ...sweep, batchIndex, pageToken: requestedPageToken };
           break fileBatches;
         }
-        for (const file of page.files || []) {
+        const orderedFiles = [...(page.files || [])].sort((left, right) =>
+          text(left?.modifiedTime).localeCompare(text(right?.modifiedTime))
+          || text(left?.name).localeCompare(text(right?.name))
+          || text(left?.id).localeCompare(text(right?.id)));
+        for (const file of orderedFiles) {
           if (files.length >= config.drive.maxFiles || seenFiles.has(file?.id)) continue;
           if (!text(file?.id) || !text(file?.mimeType) || !text(file?.modifiedTime) || !iso(file.modifiedTime)) {
             errors.push({ reason: "invalid_metadata", operation: "metadata" });
             continue;
           }
+          if (new Date(file.modifiedTime).getTime() > new Date(sweep.upperBound).getTime()) continue;
           seenFiles.add(file.id);
           try {
             const content = await driveContent(file);
@@ -371,29 +483,61 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
             errors.push(requestDiagnostic(error, driveContentOperation(file)));
           }
         }
-        pageToken = files.length < config.drive.maxFiles ? page.nextPageToken || null : null;
+        const providerNextPageToken = page.nextPageToken || null;
+        if (files.length >= config.drive.maxFiles) {
+          if (providerNextPageToken) {
+            nextContinuation = { ...sweep, batchIndex, pageToken: providerNextPageToken };
+            paginationRemaining = true;
+          } else if (batchIndex + 1 < batches.length) {
+            nextContinuation = { ...sweep, batchIndex: batchIndex + 1, pageToken: null };
+            completedBatches += 1;
+          }
+          if (nextContinuation) {
+            fileLimitReached = true;
+            fileTraversalComplete = false;
+            break fileBatches;
+          }
+        }
+        pageToken = providerNextPageToken;
+        paginationRemaining = Boolean(pageToken);
       } while (pageToken);
+      completedBatches += 1;
+      paginationRemaining = false;
     }
-    const timestamps = files.map(file => iso(file.modifiedTime)).filter(Boolean).sort();
-    return {
+    const result = {
       connectorName: DRIVE_CONNECTOR,
-      status: errors.length || skippedFiles.length ? (files.length ? "partial" : "failed") : "completed",
-      ...(errors.length && !files.length ? { reason: errors[0].reason } : {}),
+      status: fileLimitReached ? "partial"
+        : errors.length || skippedFiles.length ? (files.length ? "partial" : "failed")
+          : "completed",
+      ...(fileLimitReached ? { reason: "file_limit_reached" }
+        : errors.length && !files.length ? { reason: errors[0].reason } : {}),
       cursorBefore,
-      cursorAfter: errors.length ? cursorBefore : timestamps.at(-1) || startedAt,
+      cursorAfter: fileTraversalComplete && !errors.length ? sweep.upperBound : cursorBefore,
       files,
       skippedFiles,
       errors,
       metadata: {
         recursive: config.drive.recursive,
         folderTraversalComplete: true,
-        folderCount: discovery.folderIds.length,
+        folderCount: sweep.folderIds.length,
         queryBatchCount: batches.length,
+        plannedBatches: batches.length,
+        attemptedBatches,
+        completedBatches,
+        paginationRemaining,
+        fileTraversalComplete,
+        fileLimitReached,
+        fileLimitReason: fileLimitReached ? "file_limit_reached" : null,
+        requestFailure,
+        continuationDiagnostic: continuationCategory,
+        sweepLowerBound: sweep.lowerBound,
+        sweepUpperBound: sweep.upperBound,
         received: files.length,
         skipped: skippedFiles.length,
         failed: errors.length,
       },
     };
+    return attachDriveContinuation(result, nextContinuation, continuationCategory);
   }
 
   return { config, pullGmail, pullDrive };

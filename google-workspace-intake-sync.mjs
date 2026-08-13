@@ -5,6 +5,13 @@ import {
 
 const CONNECTOR_VERSION = "google-workspace-v1";
 const SOURCE_KINDS = ["gmail", "drive"];
+const PRIVATE_DRIVE_CONTINUATION = Symbol.for("cue.googleWorkspace.driveContinuation");
+const SAFE_METADATA_KEYS = new Set([
+  "recursive", "folderTraversalComplete", "folderCount", "queryBatchCount",
+  "plannedBatches", "attemptedBatches", "completedBatches", "paginationRemaining",
+  "fileTraversalComplete", "fileLimitReached", "fileLimitReason", "requestFailure", "continuationDiagnostic",
+  "sweepLowerBound", "sweepUpperBound", "received", "skipped", "failed",
+]);
 
 function sourceTypeFor(kind) {
   return kind === "gmail" ? "email" : "drive";
@@ -12,6 +19,32 @@ function sourceTypeFor(kind) {
 
 function sourceItems(kind, source = {}) {
   return kind === "gmail" ? source.messages : source.files;
+}
+
+function safeDiagnostics(errors = []) {
+  return errors.map(error => ({
+    reason: String(error?.reason || "request_failed"),
+    operation: String(error?.operation || "connector_request"),
+    ...(Number.isInteger(error?.httpStatus) ? { httpStatus: error.httpStatus } : {}),
+  }));
+}
+
+function safeMetadata(metadata = {}) {
+  return Object.fromEntries(Object.entries(metadata).filter(([key, value]) =>
+    SAFE_METADATA_KEYS.has(key)
+    && (value === null || ["string", "number", "boolean"].includes(typeof value))));
+}
+
+function publicConnectorResult(source = {}) {
+  return {
+    connectorName: source.connectorName || null,
+    status: source.status || "failed",
+    reason: source.reason || null,
+    cursorBefore: source.cursorBefore ?? null,
+    cursorAfter: source.cursorAfter ?? source.cursorBefore ?? null,
+    errors: safeDiagnostics(source.errors || []),
+    metadata: safeMetadata(source.metadata || {}),
+  };
 }
 
 export function createGoogleWorkspaceIntakeSync(options = {}) {
@@ -29,6 +62,8 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
   if (
     typeof store?.read !== "function"
     || typeof store?.getConnectorCursor !== "function"
+    || typeof store?.getConnectorState !== "function"
+    || typeof store?.saveConnectorState !== "function"
     || typeof store?.checkpointConnectorRun !== "function"
     || typeof store?.ingestSourceRecords !== "function"
   ) {
@@ -47,9 +82,15 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
   async function pullSource(kind) {
     const connector = connectorFor(kind);
     const cursorBefore = await connectorCursor(kind);
+    const continuationState = kind === "drive"
+      ? await store.getConnectorState(connector.connectorName)
+      : null;
     const result = kind === "gmail"
       ? await connectors.pullGmail({ cursorBefore })
-      : await connectors.pullDrive({ cursorBefore });
+      : await connectors.pullDrive({
+        cursorBefore,
+        continuation: continuationState?.driveSweepContinuation || null,
+      });
 
     if (["skipped", "failed"].includes(result.status)) {
       await store.checkpointConnectorRun({
@@ -59,12 +100,26 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
         status: result.status,
         cursorBefore: result.cursorBefore,
         cursorAfter: result.cursorAfter,
-        errors: result.errors || [],
+        errors: safeDiagnostics(result.errors || []),
         counts: { received: 0, skipped: result.errors?.length || 0 },
-        metadata: { reason: result.reason || null, ...(result.metadata || {}) },
+        metadata: { reason: result.reason || null, ...safeMetadata(result.metadata || {}) },
       });
+      if (kind === "drive") await persistDriveContinuation(result, continuationState);
     }
     return result;
+  }
+
+  async function persistDriveContinuation(source, previousState = null) {
+    if (!Object.prototype.hasOwnProperty.call(source, PRIVATE_DRIVE_CONTINUATION)) return;
+    const privateState = source[PRIVATE_DRIVE_CONTINUATION] || {};
+    const nextState = { ...(previousState || {}) };
+    delete nextState.connectorName;
+    delete nextState.updatedAt;
+    if (privateState.continuation) nextState.driveSweepContinuation = privateState.continuation;
+    else delete nextState.driveSweepContinuation;
+    if (privateState.diagnosticCategory) nextState.driveContinuationDiagnostic = privateState.diagnosticCategory;
+    else delete nextState.driveContinuationDiagnostic;
+    await store.saveConnectorState(config.drive.connectorName, nextState);
   }
 
   async function ingestSource(kind, items, verifiedFlexDocuments, source = {}) {
@@ -77,13 +132,13 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
         status: source.status === "partial" ? "partial" : "completed",
         cursorBefore: source.cursorBefore,
         cursorAfter: source.cursorAfter,
-        errors: source.errors || [],
+        errors: safeDiagnostics(source.errors || []),
         counts: {
           received: 0,
           skipped: source.skippedFiles?.length || 0,
           failed: source.errors?.length || 0,
         },
-        metadata: source.metadata || {},
+        metadata: safeMetadata(source.metadata || {}),
       });
     }
 
@@ -106,8 +161,14 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
       cursorBefore: source.cursorBefore ?? null,
       cursorAfter: source.cursorAfter ?? source.cursorBefore ?? null,
       status: source.status,
-      errors: source.errors || [],
-      metadata: { ...(source.metadata || {}), skippedFiles: source.skippedFiles || [] },
+      errors: safeDiagnostics(source.errors || []),
+      metadata: {
+        ...safeMetadata(source.metadata || {}),
+        skippedFiles: (source.skippedFiles || []).map(item => ({
+          reason: String(item?.reason || "skipped"),
+          operation: String(item?.operation || "metadata"),
+        })),
+      },
     });
   }
 
@@ -124,7 +185,7 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
             name: kind,
             status: source.status,
             reason: source.reason || "connector_failed",
-            connector: source,
+            connector: publicConnectorResult(source),
           });
           continue;
         }
@@ -134,10 +195,14 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
           verifiedFlexDocuments,
           source,
         );
+        if (kind === "drive") {
+          const previousState = await store.getConnectorState(config.drive.connectorName);
+          await persistDriveContinuation(source, previousState);
+        }
         stages.push({
           name: kind,
           status: source.status === "partial" || result?.ok === false ? "partial" : "completed",
-          connector: source,
+          connector: publicConnectorResult(source),
           result,
         });
       } catch {
