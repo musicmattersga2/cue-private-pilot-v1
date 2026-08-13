@@ -395,6 +395,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
         return attachDriveContinuation({
           connectorName: DRIVE_CONNECTOR,
           status: "failed",
+          completionDisposition: "failed",
           reason: "incomplete_folder_traversal",
           cursorBefore,
           cursorAfter: cursorBefore,
@@ -507,8 +508,11 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     const result = {
       connectorName: DRIVE_CONNECTOR,
       status: fileLimitReached ? "partial"
-        : errors.length || skippedFiles.length ? (files.length ? "partial" : "failed")
+        : errors.length ? (files.length ? "partial" : "failed")
           : "completed",
+      completionDisposition: fileLimitReached ? "file_limit_reached"
+        : errors.length ? "failed"
+          : skippedFiles.length ? "completed_with_skips" : "completed",
       ...(fileLimitReached ? { reason: "file_limit_reached" }
         : errors.length && !files.length ? { reason: errors[0].reason } : {}),
       cursorBefore,

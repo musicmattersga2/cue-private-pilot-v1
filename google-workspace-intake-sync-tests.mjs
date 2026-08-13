@@ -52,29 +52,47 @@ try {
       pullDrive: async ({ cursorBefore }) => {
         calls.push({ kind: "drive", cursorBefore });
         return {
-          status: "partial",
+          status: "completed",
+          completionDisposition: "completed_with_skips",
           cursorBefore,
           cursorAfter: "2026-08-13T12:01:00.000Z",
-          files: [{
-            id: "fixture-drive-file-1",
-            version: "1",
-            name: "Fixture production note.txt",
-            mimeType: "text/plain",
-            modifiedTime: "2026-08-13T12:01:00.000Z",
-            extractedText: "Synthetic Drive fixture evidence only.",
-          }],
+          files: [
+            {
+              id: "fixture-drive-file-1",
+              version: "1",
+              name: "Fixture production note.txt",
+              mimeType: "text/plain",
+              modifiedTime: "2026-08-13T12:01:00.000Z",
+              extractedText: "Synthetic Drive fixture evidence only.",
+            },
+            {
+              id: "fixture-drive-file-2",
+              version: "1",
+              name: "Fixture metadata-only artifact.bin",
+              mimeType: "application/octet-stream",
+              modifiedTime: "2026-08-13T12:01:00.000Z",
+              extractedText: "",
+            },
+          ],
           skippedFiles: [{ name: "fixture-unsupported.bin", reason: "unsupported_content_type" }],
           errors: [],
-          metadata: { recursive: true },
+          metadata: {
+            recursive: true,
+            skipped: 1,
+            sweepLowerBound: "private-lower-bound",
+            sweepUpperBound: "private-upper-bound",
+            providerPayload: "private-provider-payload",
+          },
         };
       },
     },
   });
 
   const result = await sync.runPoll();
-  assert.equal(result.ok, false, "a partial source prevents a fully successful poll");
-  assert.equal(result.degraded, true);
-  assert.deepEqual(result.partialStages, ["drive"]);
+  assert.equal(result.ok, true, "completed metadata-only skips are successful");
+  assert.equal(result.degraded, false);
+  assert.equal(result.ok ? 200 : 502, 200, "the unchanged HTTP route mapping returns 200 for completed metadata-only skips");
+  assert.deepEqual(result.partialStages, []);
   assert.deepEqual(result.failedStages, []);
   assert.deepEqual(calls, [
     { kind: "gmail", cursorBefore: null },
@@ -82,11 +100,20 @@ try {
   ], "each source receives only its persisted cursor");
 
   const database = await fixture.store.read();
-  assert.equal(Object.keys(database.sourceRecords).length, 2, "fixture records are written only to the temporary store");
+  assert.equal(Object.keys(database.sourceRecords).length, 3, "supported and metadata-only records are written only to the temporary store");
+  assert.equal(Object.keys(database.intakeItems).length, 3, "metadata-only records still create Intake items");
   assert.equal(database.connectorCursors[config.gmail.connectorName].cursor, "2026-08-13T12:00:00.000Z");
   assert.equal(database.connectorCursors[config.drive.connectorName].cursor, "2026-08-13T12:01:00.000Z");
   assert.equal(result.stages[0].status, "completed");
-  assert.equal(result.stages[1].status, "partial");
+  assert.equal(result.stages[1].status, "completed");
+  assert.equal(result.stages[1].completionDisposition, "completed_with_skips");
+  assert.equal(result.stages[1].connector.completionDisposition, "completed_with_skips");
+  const serializedResult = JSON.stringify(result);
+  for (const protectedValue of ["private-lower-bound", "private-upper-bound", "private-provider-payload"]) {
+    assert.equal(serializedResult.includes(protectedValue), false, `sanitized completion output leaked ${protectedValue}`);
+  }
+  const driveRun = Object.values(database.connectorRuns).find(run => run.connectorName === config.drive.connectorName);
+  assert.equal(driveRun.metadata.completionDisposition, "completed_with_skips");
 } finally {
   fs.rmSync(fixture.directory, { recursive: true, force: true });
 }
@@ -236,6 +263,7 @@ try {
         if (drivePull === 1) return withPrivateContinuation({
           ...common,
           status: "partial",
+          completionDisposition: "file_limit_reached",
           reason: "file_limit_reached",
           cursorAfter: cursorBefore,
           metadata: {
@@ -253,6 +281,7 @@ try {
         return withPrivateContinuation({
           ...common,
           status: "completed",
+          completionDisposition: "completed_with_skips",
           cursorAfter: sweepUpperBound,
           metadata: {
             plannedBatches: 7,
@@ -269,6 +298,7 @@ try {
 
   const first = await sync.runPoll();
   assert.equal(first.degraded, true);
+  assert.equal(first.stages[1].completionDisposition, "file_limit_reached");
   assert.deepEqual(first.partialStages, ["drive"]);
   assert.equal((await resumeFixture.store.getConnectorCursor(config.gmail.connectorName)).cursor, sweepUpperBound, "Gmail progress persists independently");
   assert.equal((await resumeFixture.store.getConnectorCursor(config.drive.connectorName)).cursor, durableCursor, "Drive cursor remains held while resumable");
@@ -280,6 +310,8 @@ try {
 
   const second = await sync.runPoll();
   assert.equal(second.ok, true);
+  assert.equal(second.degraded, false);
+  assert.equal(second.stages[1].completionDisposition, "completed_with_skips");
   assert.equal((await resumeFixture.store.getConnectorCursor(config.drive.connectorName)).cursor, sweepUpperBound, "Drive advances once after complete traversal");
   assert.equal((await resumeFixture.store.getConnectorState(config.drive.connectorName)).driveSweepContinuation, undefined, "completed traversal clears private state");
   assert.deepEqual(driveInputs.map(input => input.cursorBefore), [durableCursor, durableCursor]);
@@ -312,6 +344,7 @@ try {
       pullGmail: async ({ cursorBefore }) => ({ status: "skipped", cursorBefore, cursorAfter: cursorBefore, messages: [] }),
       pullDrive: async ({ cursorBefore }) => withPrivateContinuation({
         status: "failed",
+        completionDisposition: "failed",
         reason: "request_failed",
         cursorBefore,
         cursorAfter: cursorBefore,
@@ -322,15 +355,55 @@ try {
     },
   });
   const result = await sync.runPoll();
+  assert.equal(result.stages[1].completionDisposition, "failed");
   assert.deepEqual((await failureContinuationFixture.store.getConnectorState(config.drive.connectorName)).driveSweepContinuation, checkpoint, "request failure retains its resumable checkpoint");
   assert.equal(JSON.stringify(result).includes("private-provider-payload"), false);
 } finally {
   fs.rmSync(failureContinuationFixture.directory, { recursive: true, force: true });
 }
 
+const ingestionFailureFixture = temporaryStore("cue-google-workspace-ingestion-failure-");
+try {
+  const durableCursor = "2026-08-13T08:00:00.000Z";
+  await ingestionFailureFixture.store.checkpointConnectorRun({
+    connectorName: config.drive.connectorName,
+    sourceType: "drive",
+    status: "completed",
+    cursorBefore: null,
+    cursorAfter: durableCursor,
+  });
+  const sync = createGoogleWorkspaceIntakeSync({
+    config,
+    store: ingestionFailureFixture.store,
+    adaptDriveFileToIntakeRecord: () => { throw new Error("Synthetic adapter failure."); },
+    connectors: {
+      pullGmail: async ({ cursorBefore }) => ({ status: "skipped", cursorBefore, cursorAfter: cursorBefore, messages: [] }),
+      pullDrive: async ({ cursorBefore }) => ({
+        status: "completed",
+        completionDisposition: "completed",
+        cursorBefore,
+        cursorAfter: "2026-08-13T09:00:00.000Z",
+        files: [{ id: "private-ingestion-id" }],
+        skippedFiles: [],
+        errors: [],
+        metadata: { fileTraversalComplete: true },
+      }),
+    },
+  });
+  const result = await sync.runPoll();
+  assert.equal(result.ok, false);
+  assert.equal(result.degraded, true);
+  assert.equal(result.stages[1].status, "failed");
+  assert.equal(result.stages[1].completionDisposition, "failed");
+  assert.equal((await ingestionFailureFixture.store.getConnectorCursor(config.drive.connectorName)).cursor, durableCursor, "ingestion failure holds the durable cursor");
+  assert.equal(JSON.stringify(result).includes("private-ingestion-id"), false);
+} finally {
+  fs.rmSync(ingestionFailureFixture.directory, { recursive: true, force: true });
+}
+
 console.log(JSON.stringify({
   ok: true,
-  fixtureDatastores: 5,
+  fixtureDatastores: 6,
   resumableDriveState: true,
   replayDeduplication: true,
   mixedSourceProgressIsolation: true,

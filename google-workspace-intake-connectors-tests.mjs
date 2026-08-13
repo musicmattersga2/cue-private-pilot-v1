@@ -169,6 +169,7 @@ assert.equal(invalid.errors.length, 2, "both live sources require bounded retrie
   }, { now: () => "2026-08-13T12:30:00.000Z" });
   const result = await connector.pullDrive({ cursorBefore: CURSOR });
   assert.equal(result.status, "completed");
+  assert.equal(result.completionDisposition, "completed");
   const validated = assertSupportedDriveFileListRequest(fileListUrl, { remainingCapacity: 100, privateFileId });
   assert.match(validated.query, /parent\\'quoted/, "quoted parent literals are escaped without breaking query grammar");
   const fields = new URL(fileListUrl).searchParams.get("fields") || "";
@@ -286,9 +287,12 @@ assert.equal(invalid.errors.length, 2, "both live sources require bounded retrie
   assert.match(driveQueryFrom(gmailList.url), /after:1784365140/, "Gmail cursor overlaps by one minute");
 
   const drive = await connectors.pullDrive({ cursorBefore: CURSOR });
-  assert.equal(drive.status, "partial");
+  assert.equal(drive.status, "completed");
+  assert.equal(drive.completionDisposition, "completed_with_skips");
   assert.equal(drive.files.length, 2, "unsupported binary files still contribute safe metadata");
   assert.equal(drive.skippedFiles.length, 1);
+  assert.notEqual(drive.cursorAfter, CURSOR, "completed metadata-only handling advances the durable cursor");
+  assert.equal(privateContinuation(drive), null, "completed metadata-only handling clears private continuation state");
   assert.equal(drive.files[0].extractedText, "fixture text");
   const driveLists = calls.filter(call => call.url.includes("drive/v3/files?"));
   const driveList = driveLists.find(call => !isFolderListing(call.url));
@@ -319,6 +323,7 @@ assert.equal(invalid.errors.length, 2, "both live sources require bounded retrie
   const result = await driveConnector(fetch).pullDrive({ cursorBefore: CURSOR });
   assert.equal(result.status, "failed");
   assert.equal(result.reason, "incomplete_folder_traversal");
+  assert.equal(result.completionDisposition, "failed");
   assert.deepEqual(result.errors, [{ reason: "incomplete_folder_traversal", operation: "folder_listing" }]);
   assert.equal(fileListings, 0, "file listing must not start after incomplete traversal");
   assertCursorHeld(result, "folder limit");
@@ -342,6 +347,7 @@ assert.equal(invalid.errors.length, 2, "both live sources require bounded retrie
   };
   const result = await driveConnector(fetch, { CUE_DRIVE_MAX_FOLDER_DEPTH: "1" }).pullDrive({ cursorBefore: CURSOR });
   assert.equal(result.status, "completed");
+  assert.equal(result.completionDisposition, "completed");
   assert.equal(result.metadata.folderCount, 500);
   assert.equal(result.metadata.folderTraversalComplete, true);
   assert.ok(fileListings > 0, "file listing starts only after complete traversal");
@@ -359,6 +365,8 @@ assert.equal(invalid.errors.length, 2, "both live sources require bounded retrie
     return json({ files: [] });
   };
   const result = await driveConnector(fetch).pullDrive({ cursorBefore: CURSOR });
+  assert.equal(result.status, "failed");
+  assert.equal(result.completionDisposition, "failed");
   assert.equal(result.reason, "incomplete_folder_traversal");
   assert.deepEqual(result.errors, [{ reason: "request_failed", operation: "folder_listing", httpStatus: 503 }]);
   assert.equal(fileListings, 0);
@@ -379,6 +387,7 @@ for (const pagination of [false, true]) {
   };
   const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }).pullDrive({ cursorBefore: CURSOR });
   assert.equal(result.status, "failed");
+  assert.equal(result.completionDisposition, "failed");
   assert.deepEqual(result.errors, [{
     reason: "request_failed",
     operation: pagination ? "file_listing_pagination" : "file_listing_initial",
@@ -403,6 +412,7 @@ for (const pagination of [false, true]) {
   };
   const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }).pullDrive({ cursorBefore: CURSOR });
   assert.equal(result.status, "failed");
+  assert.equal(result.completionDisposition, "failed");
   assert.deepEqual(result.errors, [
     { reason: "invalid_metadata", operation: "metadata" },
     { reason: "request_failed", operation: "export", httpStatus: 403 },
@@ -449,6 +459,7 @@ for (const pagination of [false, true]) {
   const first = await connector.pullDrive({ cursorBefore: CURSOR });
   const checkpoint = privateContinuation(first);
   assert.equal(first.status, "partial");
+  assert.equal(first.completionDisposition, "file_limit_reached");
   assert.equal(first.reason, "file_limit_reached");
   assert.equal(first.cursorAfter, CURSOR);
   assert.equal(first.metadata.plannedBatches, 7);
@@ -467,6 +478,7 @@ for (const pagination of [false, true]) {
   continuationRun = true;
   const resumed = await connector.pullDrive({ cursorBefore: CURSOR, continuation: checkpoint });
   assert.equal(resumed.status, "completed");
+  assert.equal(resumed.completionDisposition, "completed");
   assert.equal(resumed.cursorAfter, sweepStart, "the durable cursor advances to the fixed upper bound");
   assert.equal(resumed.metadata.plannedBatches, 7);
   assert.equal(resumed.metadata.attemptedBatches, 6);
@@ -490,6 +502,7 @@ for (const pagination of [false, true]) {
   };
   const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => upperBound }).pullDrive({ cursorBefore: CURSOR });
   assert.equal(result.status, "completed");
+  assert.equal(result.completionDisposition, "completed");
   assert.equal(result.files.length, 100);
   assert.equal(result.cursorAfter, upperBound);
   assert.equal(result.metadata.completedBatches, 1);

@@ -6,11 +6,12 @@ import {
 const CONNECTOR_VERSION = "google-workspace-v1";
 const SOURCE_KINDS = ["gmail", "drive"];
 const PRIVATE_DRIVE_CONTINUATION = Symbol.for("cue.googleWorkspace.driveContinuation");
+const COMPLETION_DISPOSITIONS = new Set(["completed", "completed_with_skips", "file_limit_reached", "failed"]);
 const SAFE_METADATA_KEYS = new Set([
   "recursive", "folderTraversalComplete", "folderCount", "queryBatchCount",
   "plannedBatches", "attemptedBatches", "completedBatches", "paginationRemaining",
   "fileTraversalComplete", "fileLimitReached", "fileLimitReason", "requestFailure", "continuationDiagnostic",
-  "sweepLowerBound", "sweepUpperBound", "received", "skipped", "failed",
+  "received", "skipped", "failed",
 ]);
 
 function sourceTypeFor(kind) {
@@ -29,6 +30,11 @@ function safeDiagnostics(errors = []) {
   }));
 }
 
+function safeCompletionDisposition(value) {
+  const disposition = String(value || "");
+  return COMPLETION_DISPOSITIONS.has(disposition) ? disposition : null;
+}
+
 function safeMetadata(metadata = {}) {
   return Object.fromEntries(Object.entries(metadata).filter(([key, value]) =>
     SAFE_METADATA_KEYS.has(key)
@@ -36,9 +42,11 @@ function safeMetadata(metadata = {}) {
 }
 
 function publicConnectorResult(source = {}) {
+  const completionDisposition = safeCompletionDisposition(source.completionDisposition);
   return {
     connectorName: source.connectorName || null,
     status: source.status || "failed",
+    ...(completionDisposition ? { completionDisposition } : {}),
     reason: source.reason || null,
     cursorBefore: source.cursorBefore ?? null,
     cursorAfter: source.cursorAfter ?? source.cursorBefore ?? null,
@@ -124,6 +132,7 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
 
   async function ingestSource(kind, items, verifiedFlexDocuments, source = {}) {
     const connector = connectorFor(kind);
+    const completionDisposition = safeCompletionDisposition(source.completionDisposition);
     if (!items.length) {
       return store.checkpointConnectorRun({
         connectorName: connector.connectorName,
@@ -138,7 +147,10 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
           skipped: source.skippedFiles?.length || 0,
           failed: source.errors?.length || 0,
         },
-        metadata: safeMetadata(source.metadata || {}),
+        metadata: {
+          ...safeMetadata(source.metadata || {}),
+          ...(completionDisposition ? { completionDisposition } : {}),
+        },
       });
     }
 
@@ -164,6 +176,7 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
       errors: safeDiagnostics(source.errors || []),
       metadata: {
         ...safeMetadata(source.metadata || {}),
+        ...(completionDisposition ? { completionDisposition } : {}),
         skippedFiles: (source.skippedFiles || []).map(item => ({
           reason: String(item?.reason || "skipped"),
           operation: String(item?.operation || "metadata"),
@@ -184,6 +197,7 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
           stages.push({
             name: kind,
             status: source.status,
+            ...(source.status === "failed" ? { completionDisposition: "failed" } : {}),
             reason: source.reason || "connector_failed",
             connector: publicConnectorResult(source),
           });
@@ -202,6 +216,12 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
         stages.push({
           name: kind,
           status: source.status === "partial" || result?.ok === false ? "partial" : "completed",
+          ...(kind === "drive" ? {
+            completionDisposition: result?.ok === false
+              ? "failed"
+              : safeCompletionDisposition(source.completionDisposition)
+                || (source.status === "partial" ? "failed" : "completed"),
+          } : {}),
           connector: publicConnectorResult(source),
           result,
         });
@@ -209,6 +229,7 @@ export function createGoogleWorkspaceIntakeSync(options = {}) {
         stages.push({
           name: kind,
           status: "failed",
+          ...(kind === "drive" ? { completionDisposition: "failed" } : {}),
           reason: "connector_failed",
           errors: [{ message: `${kind} connector failed.` }],
         });
