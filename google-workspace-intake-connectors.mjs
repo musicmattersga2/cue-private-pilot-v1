@@ -8,11 +8,14 @@ function number(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
 }
 function enabled(value) { return /^(1|true|yes|on)$/i.test(text(value)); }
 function csv(value) { return text(value).split(",").map(item => item.trim()).filter(Boolean); }
-function safeMessage(error) {
+function requestDiagnostic(error, operation) {
+  const diagnostic = {
+    reason: error?.name === "AbortError" ? "request_timeout" : "request_failed",
+    operation,
+  };
   const status = Number(error?.status || error?.statusCode || 0);
-  if (status) return `Google Workspace request failed with HTTP ${status}.`;
-  if (error?.name === "AbortError") return "Google Workspace request timed out.";
-  return "Google Workspace request failed.";
+  if (Number.isInteger(status) && status >= 100 && status <= 599) diagnostic.httpStatus = status;
+  return diagnostic;
 }
 function iso(value) {
   const date = new Date(value || 0);
@@ -144,7 +147,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
   async function pullGmail(input = {}) {
     const cursorBefore = input.cursorBefore || null;
     if (!config.gmail.enabled) return { status: "skipped", reason: "not_enabled", connectorName: GMAIL_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, messages: [], errors: [] };
-    if (!config.gmail.configured) return { status: "skipped", reason: "not_configured", connectorName: GMAIL_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, messages: [], errors: config.errors.map(message => ({ message })) };
+    if (!config.gmail.configured) return { status: "skipped", reason: "not_configured", connectorName: GMAIL_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, messages: [], errors: [] };
     const startedAt = new Date().toISOString();
     const after = overlapCursor(cursorBefore, config.cursorOverlapSeconds);
     const query = [config.gmail.query, after && `after:${Math.floor(new Date(after).getTime() / 1000)}`].filter(Boolean).join(" ");
@@ -185,13 +188,13 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
               sourceUrl: `https://mail.google.com/mail/u/0/#all/${detail.id}`,
             });
           } catch (error) {
-            errors.push({ externalId: item.id || null, reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
+            errors.push(requestDiagnostic(error, "message_detail"));
           }
         }
         pageToken = messages.length < config.gmail.maxMessages ? page.nextPageToken || null : null;
       } while (pageToken);
     } catch (error) {
-      errors.push({ reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
+      errors.push(requestDiagnostic(error, "message_listing"));
     }
     const timestamps = messages.map(message => iso(Number(message.internalDate))).filter(Boolean).sort();
     return {
@@ -201,7 +204,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
       cursorAfter: errors.length ? cursorBefore : timestamps.at(-1) || startedAt,
       messages,
       errors,
-      metadata: { query, received: messages.length, skipped: errors.length },
+      metadata: { received: messages.length, skipped: errors.length },
     };
   }
 
@@ -231,9 +234,11 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     return authorized(url);
   }
 
-  async function discoverDriveFolders(errors) {
+  async function discoverDriveFolders() {
     const roots = config.drive.folderIds;
-    if (!config.drive.recursive || !roots.length || config.drive.maxFolderDepth === 0) return roots;
+    if (!config.drive.recursive || !roots.length || config.drive.maxFolderDepth === 0) {
+      return { complete: true, folderIds: roots, errors: [] };
+    }
     const seen = new Set(roots);
     let frontier = roots.map(id => ({ id, depth: 0 }));
     while (frontier.length && seen.size < config.drive.maxFolders) {
@@ -253,16 +258,38 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
                 if (seen.size >= config.drive.maxFolders) break;
               }
             }
-            pageToken = seen.size < config.drive.maxFolders ? page.nextPageToken || null : null;
+            if (seen.size >= config.drive.maxFolders && page.nextPageToken) {
+              return {
+                complete: false,
+                folderIds: [...seen],
+                errors: [{ reason: "incomplete_folder_traversal", operation: "folder_listing" }],
+              };
+            }
+            pageToken = page.nextPageToken || null;
           } while (pageToken);
         } catch (error) {
-          errors.push({ reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error), operation: "folder_discovery" });
+          return { complete: false, folderIds: [...seen], errors: [requestDiagnostic(error, "folder_listing")] };
         }
       }
       frontier = next.filter(item => item.depth < config.drive.maxFolderDepth);
     }
-    if (frontier.length) errors.push({ reason: "folder_limit_reached", message: "Drive folder discovery reached its configured safety limit.", operation: "folder_discovery" });
-    return [...seen];
+    if (frontier.length) {
+      return {
+        complete: false,
+        folderIds: [...seen],
+        errors: [{ reason: "incomplete_folder_traversal", operation: "folder_listing" }],
+      };
+    }
+    return { complete: true, folderIds: [...seen], errors: [] };
+  }
+
+  function driveContentOperation(file) {
+    const mime = text(file?.mimeType).toLowerCase();
+    return mime === "application/vnd.google-apps.document"
+      || mime === "application/vnd.google-apps.spreadsheet"
+      || mime === "application/vnd.google-apps.presentation"
+      ? "export"
+      : "content";
   }
 
   async function driveContent(file) {
@@ -287,50 +314,85 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
   async function pullDrive(input = {}) {
     const cursorBefore = input.cursorBefore || null;
     if (!config.drive.enabled) return { status: "skipped", reason: "not_enabled", connectorName: DRIVE_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, files: [], skippedFiles: [], errors: [] };
-    if (!config.drive.configured) return { status: "skipped", reason: "not_configured", connectorName: DRIVE_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, files: [], skippedFiles: [], errors: config.errors.map(message => ({ message })) };
+    if (!config.drive.configured) return { status: "skipped", reason: "not_configured", connectorName: DRIVE_CONNECTOR, cursorBefore, cursorAfter: cursorBefore, files: [], skippedFiles: [], errors: [] };
     const startedAt = new Date().toISOString();
     const files = [];
     const skippedFiles = [];
     const errors = [];
-    const queries = [];
-    try {
-      const folderIds = await discoverDriveFolders(errors);
-      const batches = folderIds.length ? Array.from({ length: Math.ceil(folderIds.length / 20) }, (_, index) => folderIds.slice(index * 20, index * 20 + 20)) : [[]];
-      const seenFiles = new Set();
-      for (const batch of batches) {
-        if (files.length >= config.drive.maxFiles) break;
-        const query = driveQuery(cursorBefore, batch);
-        queries.push(query);
-        let pageToken = null;
-        do {
-          const page = await driveList(query, Math.min(1000, config.drive.maxFiles - files.length), pageToken);
-          for (const file of page.files || []) {
-            if (files.length >= config.drive.maxFiles || seenFiles.has(file.id)) continue;
-            seenFiles.add(file.id);
-            try {
-              const content = await driveContent(file);
-              if (content.skipped) skippedFiles.push({ externalId: file.id, reason: content.reason, message: "Drive file metadata was ingested without unsupported binary content." });
-              files.push({ ...file, fileId: file.id, extractedText: content.text, externalRevisionId: file.headRevisionId || file.version || file.modifiedTime });
-            } catch (error) {
-              errors.push({ externalId: file.id || null, modifiedTime: file.modifiedTime || null, reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
-            }
+    const discovery = await discoverDriveFolders();
+    if (!discovery.complete) {
+      return {
+        connectorName: DRIVE_CONNECTOR,
+        status: "failed",
+        reason: "incomplete_folder_traversal",
+        cursorBefore,
+        cursorAfter: cursorBefore,
+        files,
+        skippedFiles,
+        errors: discovery.errors,
+        metadata: {
+          recursive: config.drive.recursive,
+          folderTraversalComplete: false,
+          received: 0,
+          skipped: 0,
+          failed: discovery.errors.length,
+        },
+      };
+    }
+
+    const batches = discovery.folderIds.length
+      ? Array.from({ length: Math.ceil(discovery.folderIds.length / 20) }, (_, index) => discovery.folderIds.slice(index * 20, index * 20 + 20))
+      : [[]];
+    const seenFiles = new Set();
+    fileBatches: for (const batch of batches) {
+      if (files.length >= config.drive.maxFiles) break;
+      const query = driveQuery(cursorBefore, batch);
+      let pageToken = null;
+      do {
+        let page;
+        try {
+          page = await driveList(query, Math.min(1000, config.drive.maxFiles - files.length), pageToken);
+        } catch (error) {
+          errors.push(requestDiagnostic(error, pageToken ? "file_listing_pagination" : "file_listing_initial"));
+          break fileBatches;
+        }
+        for (const file of page.files || []) {
+          if (files.length >= config.drive.maxFiles || seenFiles.has(file?.id)) continue;
+          if (!text(file?.id) || !text(file?.mimeType) || !text(file?.modifiedTime) || !iso(file.modifiedTime)) {
+            errors.push({ reason: "invalid_metadata", operation: "metadata" });
+            continue;
           }
-          pageToken = files.length < config.drive.maxFiles ? page.nextPageToken || null : null;
-        } while (pageToken);
-      }
-    } catch (error) {
-      errors.push({ reason: error?.name === "AbortError" ? "request_timeout" : "request_failed", message: safeMessage(error) });
+          seenFiles.add(file.id);
+          try {
+            const content = await driveContent(file);
+            if (content.skipped) skippedFiles.push({ reason: content.reason, operation: "metadata" });
+            files.push({ ...file, fileId: file.id, extractedText: content.text, externalRevisionId: file.headRevisionId || file.version || file.modifiedTime });
+          } catch (error) {
+            errors.push(requestDiagnostic(error, driveContentOperation(file)));
+          }
+        }
+        pageToken = files.length < config.drive.maxFiles ? page.nextPageToken || null : null;
+      } while (pageToken);
     }
     const timestamps = files.map(file => iso(file.modifiedTime)).filter(Boolean).sort();
     return {
       connectorName: DRIVE_CONNECTOR,
       status: errors.length || skippedFiles.length ? (files.length ? "partial" : "failed") : "completed",
+      ...(errors.length && !files.length ? { reason: errors[0].reason } : {}),
       cursorBefore,
       cursorAfter: errors.length ? cursorBefore : timestamps.at(-1) || startedAt,
       files,
       skippedFiles,
       errors,
-      metadata: { query: queries.join(" OR "), queries, recursive: config.drive.recursive, received: files.length, skipped: skippedFiles.length, failed: errors.length },
+      metadata: {
+        recursive: config.drive.recursive,
+        folderTraversalComplete: true,
+        folderCount: discovery.folderIds.length,
+        queryBatchCount: batches.length,
+        received: files.length,
+        skipped: skippedFiles.length,
+        failed: errors.length,
+      },
     };
   }
 
