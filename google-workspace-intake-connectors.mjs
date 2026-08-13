@@ -283,7 +283,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     const url = new URL("https://www.googleapis.com/drive/v3/files");
     url.searchParams.set("q", query);
     url.searchParams.set("pageSize", String(pageSize));
-    url.searchParams.set("orderBy", "modifiedTime asc,name_natural asc");
+    url.searchParams.set("orderBy", "modifiedTime asc");
     url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,description,modifiedTime,createdTime,version,headRevisionId,webViewLink,parents,driveId,owners,shared,ownedByMe,size,trashed,lastModifyingUser)");
     url.searchParams.set("supportsAllDrives", "true");
     url.searchParams.set("includeItemsFromAllDrives", "true");

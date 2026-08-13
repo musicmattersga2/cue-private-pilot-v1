@@ -69,6 +69,60 @@ const fixtureFile = (id, modifiedTime = "2026-08-13T12:00:00.000Z") => ({
   version: "1",
 });
 
+const DRIVE_PROVIDER_ORDER = "modifiedTime asc";
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function assertBalancedDriveQuery(query) {
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (const character of query) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quoted) {
+      escaped = true;
+      continue;
+    }
+    if (character === "'") {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) continue;
+    if (character === "(") depth += 1;
+    if (character === ")") depth -= 1;
+    assert.ok(depth >= 0, "Drive query closes a group before it opens one");
+  }
+  assert.equal(quoted, false, "Drive query has an unterminated quoted literal");
+  assert.equal(escaped, false, "Drive query has an unterminated escape");
+  assert.equal(depth, 0, "Drive query grouping is balanced");
+}
+function assertSupportedDriveFileListRequest(input, options = {}) {
+  const url = new URL(String(input));
+  const query = url.searchParams.get("q") || "";
+  const orderBy = url.searchParams.get("orderBy");
+  assert.equal(orderBy, DRIVE_PROVIDER_ORDER, "provider ordering uses only the supported primary key and direction");
+  assert.doesNotMatch(orderBy, /name_natural|\bid\b/i, "secondary or private identifier ordering must remain local");
+  assertBalancedDriveQuery(query);
+  const operators = [...query.matchAll(/\s(!=|<=|>=|=|<|>)\s/g)].map(match => match[1]);
+  assert.ok(operators.length > 0, "Drive query contains recognized comparison operators");
+  assert.ok(operators.every(operator => ["=", "!=", "<", "<=", ">", ">="].includes(operator)), "Drive query uses only allowed comparison operators");
+  const timeLiterals = [...query.matchAll(/modifiedTime\s(?:>|<=)\s'([^']+)'/g)].map(match => match[1]);
+  assert.equal(timeLiterals.length, 2, "resumable file query has fixed lower and upper time bounds");
+  assert.ok(timeLiterals.every(value => RFC3339.test(value) && !Number.isNaN(Date.parse(value))), "time bounds are canonical RFC 3339 values");
+  assert.match(query, /\([^()]+' in parents(?: or '[^()]+' in parents)*\)/, "parent alternatives remain grouped");
+  assert.ok((query.match(/ in parents/g) || []).length <= 20, "a file query contains no more than 20 parents");
+  assert.ok(Number(url.searchParams.get("pageSize")) <= Number(options.remainingCapacity ?? 100), "page size does not exceed remaining global capacity");
+  assert.equal(url.searchParams.get("supportsAllDrives"), "true");
+  assert.equal(url.searchParams.get("includeItemsFromAllDrives"), "true");
+  for (const unintended of ["corpora", "driveId", "spaces"]) assert.equal(url.searchParams.has(unintended), false, `${unintended} is not added implicitly`);
+  if (options.privateFileId) {
+    assert.doesNotMatch(query, new RegExp(options.privateFileId), "private file identifiers never enter the query");
+    assert.doesNotMatch(orderBy, new RegExp(options.privateFileId), "private file identifiers never enter provider ordering");
+  }
+  return { query, orderBy };
+}
+
 const invalid = readGoogleWorkspaceConfig({
   CUE_GOOGLE_WORKSPACE_ENABLED: "true",
   CUE_GMAIL_ENABLED: "true",
@@ -79,6 +133,38 @@ const invalid = readGoogleWorkspaceConfig({
 });
 assert.equal(invalid.configured, false);
 assert.equal(invalid.errors.length, 2, "both live sources require bounded retrieval constraints");
+
+// Strictly validate the generated file-list request without trusting a permissive fetch mock.
+{
+  const privateFileId = "private-local-tie-break-id";
+  let fileListUrl = null;
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    if (url.includes("?alt=media")) return { ok: true, status: 200, text: async () => "fixture", json: async () => ({}) };
+    fileListUrl = url;
+    return json({ files: [fixtureFile(privateFileId)] });
+  };
+  const connector = driveConnector(fetch, {
+    CUE_DRIVE_FOLDER_IDS: "parent'quoted",
+    CUE_DRIVE_RECURSIVE: "false",
+    CUE_DRIVE_MAX_FILES: "100",
+  }, { now: () => "2026-08-13T12:30:00.000Z" });
+  const result = await connector.pullDrive({ cursorBefore: CURSOR });
+  assert.equal(result.status, "completed");
+  const validated = assertSupportedDriveFileListRequest(fileListUrl, { remainingCapacity: 100, privateFileId });
+  assert.match(validated.query, /parent\\'quoted/, "quoted parent literals are escaped without breaking query grammar");
+  const fields = new URL(fileListUrl).searchParams.get("fields") || "";
+  for (const requiredField of ["id", "name", "mimeType", "modifiedTime", "parents"]) assert.match(fields, new RegExp(`\\b${requiredField}\\b`));
+
+  const formerlyPermitted = new URL(fileListUrl);
+  formerlyPermitted.searchParams.set("orderBy", "modifiedTime asc,name_natural asc");
+  assert.throws(
+    () => assertSupportedDriveFileListRequest(formerlyPermitted, { remainingCapacity: 100, privateFileId }),
+    /provider ordering uses only the supported primary key/,
+    "the removed secondary ordering is rejected independently of a mock that would accept the URL",
+  );
+}
 
 // Existing mixed Gmail/Drive fixture behavior remains intact and offline.
 {
@@ -317,7 +403,7 @@ for (const pagination of [false, true]) {
   const fileQueries = listCalls.map(call => call.query);
   assert.ok(fileQueries.every(query => query.includes("modifiedTime > '2026-07-18T09:29:00.000Z'")));
   assert.ok(fileQueries.every(query => query.includes(`modifiedTime <= '${sweepStart}'`)), "all continuation runs retain the fixed upper bound");
-  assert.ok(listCalls.every(call => call.orderBy === "modifiedTime asc,name_natural asc"), "Drive uses the strongest supported stable ordering");
+  assert.ok(listCalls.every(call => call.orderBy === DRIVE_PROVIDER_ORDER), "Drive provider ordering uses only modification time ascending");
 }
 
 // Exactly 100 files is complete when the sole page and every batch are exhausted.
@@ -339,24 +425,27 @@ for (const pagination of [false, true]) {
   assert.equal(privateContinuation(result), null);
 }
 
-// Equal timestamps are locally tie-broken by a private stable identifier, and post-bound files are deferred by query.
+// Provider ordering and deterministic local modification-time/title/private-ID sorting remain separate.
 {
   const upperBound = "2026-08-13T16:00:00.000Z";
-  let boundedQuery = "";
+  let fileListUrl = "";
   const fetch = async input => {
     const url = String(input);
     if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
     if (url.includes("?alt=media")) return { ok: true, status: 200, text: async () => "fixture", json: async () => ({}) };
-    boundedQuery = driveQueryFrom(url);
+    fileListUrl = url;
     return json({ files: [
-      { ...fixtureFile("stable-b"), name: "same", modifiedTime: upperBound },
-      { ...fixtureFile("stable-a"), name: "same", modifiedTime: upperBound },
+      { ...fixtureFile("later-title"), name: "zeta", modifiedTime: "2026-08-13T15:59:00.000Z" },
+      { ...fixtureFile("stable-b"), name: "same", modifiedTime: "2026-08-13T15:58:00.000Z" },
+      { ...fixtureFile("stable-a"), name: "same", modifiedTime: "2026-08-13T15:58:00.000Z" },
+      { ...fixtureFile("earlier-title"), name: "omega", modifiedTime: "2026-08-13T15:57:00.000Z" },
       { ...fixtureFile("deferred-after-bound"), modifiedTime: "2026-08-13T16:00:00.001Z" },
     ] });
   };
   const result = await driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => upperBound }).pullDrive({ cursorBefore: CURSOR });
-  assert.deepEqual(result.files.map(file => file.id), ["stable-a", "stable-b"]);
-  assert.match(boundedQuery, new RegExp(`modifiedTime <= '${upperBound}'`));
+  assert.deepEqual(result.files.map(file => file.id), ["earlier-title", "stable-a", "stable-b", "later-title"]);
+  const validated = assertSupportedDriveFileListRequest(fileListUrl, { remainingCapacity: 100, privateFileId: "stable-a" });
+  assert.match(validated.query, new RegExp(`modifiedTime <= '${upperBound}'`));
 }
 
 // Initial and pagination failures retain resumable private checkpoints without advancing the cursor.
@@ -378,6 +467,38 @@ for (const pagination of [false, true]) {
   assert.equal(result.metadata.requestFailure, true);
   assert.equal(result.metadata.fileTraversalComplete, false);
   assert.equal(JSON.stringify(result).includes("failure-page-token"), false);
+}
+
+// The exact initial-list failure checkpoint resumes batch one under its original fixed bounds.
+{
+  const upperBound = "2026-08-13T17:30:00.000Z";
+  let failInitialRequest = true;
+  let resumedRequest = null;
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    if (failInitialRequest) return failure(400);
+    resumedRequest = url;
+    return json({ files: [] });
+  };
+  const connector = driveConnector(fetch, { CUE_DRIVE_RECURSIVE: "false" }, { now: () => upperBound });
+  const failed = await connector.pullDrive({ cursorBefore: CURSOR });
+  const checkpoint = privateContinuation(failed);
+  assert.equal(failed.status, "failed");
+  assertCursorHeld(failed, "initial batch-one failure");
+  assert.equal(checkpoint.batchIndex, 0);
+  assert.equal(checkpoint.pageToken, null);
+  const originalLowerBound = checkpoint.lowerBound;
+  const originalUpperBound = checkpoint.upperBound;
+
+  failInitialRequest = false;
+  const resumed = await connector.pullDrive({ cursorBefore: CURSOR, continuation: checkpoint });
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.cursorAfter, originalUpperBound, "cursor advances only after the resumed sweep completes");
+  assert.equal(privateContinuation(resumed), null);
+  const validated = assertSupportedDriveFileListRequest(resumedRequest, { remainingCapacity: 100 });
+  assert.match(validated.query, new RegExp(`modifiedTime > '${originalLowerBound}'`));
+  assert.match(validated.query, new RegExp(`modifiedTime <= '${originalUpperBound}'`));
 }
 
 // Invalid continuation is discarded and replaced by a fresh bounded sweep from the durable cursor.
