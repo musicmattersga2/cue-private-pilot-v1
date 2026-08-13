@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-const MATCHER_VERSION = "google-workspace-review-preview-v1";
+export const GOOGLE_WORKSPACE_MATCHER_VERSION = "google-workspace-review-preview-v1";
+const MATCHER_VERSION = GOOGLE_WORKSPACE_MATCHER_VERSION;
 const GOOGLE_SOURCE_TYPES = new Set(["drive", "gmail", "email"]);
 const CONFIDENCE_ORDER = { high: 3, medium: 2, low: 1 };
 
@@ -78,6 +79,10 @@ function supportSignals(show, evidence, source) {
   return signals;
 }
 
+function providerFor(source) {
+  return source?.sourceType === "drive" ? "drive" : ["gmail", "email"].includes(source?.sourceType) ? "gmail" : null;
+}
+
 function candidateFor({ intake, source, show, signals, confidence, contentBearing }) {
   const candidateId = stableId("gwmc", intake.id, show.id);
   const facts = [...new Set(signals)].sort().map(signal => ({
@@ -85,7 +90,16 @@ function candidateFor({ intake, source, show, signals, confidence, contentBearin
     candidateId,
     category: signal,
   }));
-  return { id: candidateId, intakeItemId: intake.id, showId: show.id, confidence, contentBearing, facts };
+  return {
+    id: candidateId,
+    intakeItemId: intake.id,
+    showId: show.id,
+    confidence,
+    contentBearing,
+    provider: providerFor(source),
+    matcherVersion: MATCHER_VERSION,
+    facts,
+  };
 }
 
 function distribution(counts) {

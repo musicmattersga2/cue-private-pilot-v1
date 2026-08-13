@@ -10,6 +10,7 @@
     "test:google-workspace": "node google-workspace-intake-connectors-tests.mjs && node google-workspace-intake-sync-tests.mjs && node google-workspace-intake-matching-tests.mjs",
     "test:google-workspace-matching": "node google-workspace-intake-matching-tests.mjs",
     "preview:google-workspace-matching": "node scripts/google-workspace-intake-match-preview.mjs",
+    "persist:google-workspace-matching": "node scripts/google-workspace-intake-match-persist.mjs",
     "test:intelligence": "node cue-intelligence-rules-tests.mjs",
     "test:control-board": "node control-board-client-tests.mjs",
     "smoke:flex-confirmed": "node flex-confirmed-quote-live-smoke.mjs",

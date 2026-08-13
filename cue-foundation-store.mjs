@@ -25,6 +25,13 @@ const DEFAULT_PATH = path.resolve(
   process.env.CUE_FOUNDATION_STORE_PATH || "./data/cue-foundation-v1.json"
 );
 let writeChain = Promise.resolve();
+const GOOGLE_WORKSPACE_MATCHER_VERSION = "google-workspace-review-preview-v1";
+const GOOGLE_WORKSPACE_PROVIDERS = new Set(["drive", "gmail"]);
+const GOOGLE_WORKSPACE_CONFIDENCE = { low: 1, medium: 2, high: 3 };
+const GOOGLE_WORKSPACE_SIGNALS = new Set([
+  "verified_reference", "normalized_title_or_alias", "date_support", "client_support",
+  "location_support", "folder_context", "mime_context",
+]);
 
 function now() { return new Date().toISOString(); }
 function cleanText(value) {
@@ -63,6 +70,18 @@ function writeFile(filePath, data) {
   fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: now() }, null, 2));
   fs.renameSync(tmp, filePath);
 }
+function sha256File(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex").toUpperCase();
+}
+function googleWorkspaceProjectionId(kind, matcherVersion, ...parts) {
+  return `${kind}_${crypto.createHash("sha256").update([matcherVersion, ...parts].join("\u001f")).digest("hex").slice(0, 24)}`;
+}
+function exactKeys(value, allowed) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).every(key => allowed.has(key));
+}
+function sameJson(left, right) { return JSON.stringify(left) === JSON.stringify(right); }
 function primaryMatch(message) {
   const rank = { manually_approved: 0, auto_attached: 1, needs_review: 2, general_queue: 3, manually_rejected: 4 };
   return [...(message.matches || [])]
@@ -187,6 +206,131 @@ export function createCueFoundationStore(options = {}) {
       reason: `Verified FLEX ${match.document.documentType || "document"}: ${match.document.documentNumber || match.document.elementId}`,
       confidence: 100,
     };
+  }
+
+  async function persistGoogleWorkspaceReviewCandidates(input = {}) {
+    return locked(async () => {
+      const provider = String(input.provider || "").trim();
+      const matcherVersion = String(input.matcherVersion || "").trim();
+      const minimumConfidence = String(input.minimumConfidence || "medium").trim();
+      const expectedSha256 = String(input.expectedSha256 || "").trim().toUpperCase();
+      const apply = input.apply === true;
+      if (!GOOGLE_WORKSPACE_PROVIDERS.has(provider)) throw new Error("invalid_provider");
+      if (matcherVersion !== GOOGLE_WORKSPACE_MATCHER_VERSION) throw new Error("unsupported_matcher_version");
+      if (!GOOGLE_WORKSPACE_CONFIDENCE[minimumConfidence]) throw new Error("invalid_confidence_threshold");
+      if (!/^[A-F0-9]{64}$/.test(expectedSha256)) throw new Error("invalid_expected_checksum");
+      const checksumBefore = sha256File(filePath);
+      if (checksumBefore !== expectedSha256) throw new Error("stale_datastore_checksum");
+
+      const db = readFile(filePath);
+      const projection = input.projection;
+      if (!projection || !Array.isArray(projection.candidates) || !Array.isArray(projection.facts)) throw new Error("malformed_projection");
+      const candidateAllowed = new Set(["id", "intakeItemId", "showId", "confidence", "contentBearing", "provider", "matcherVersion", "facts"]);
+      const factAllowed = new Set(["id", "candidateId", "category"]);
+      const candidatesById = new Map();
+      const factsById = new Map();
+      for (const candidate of projection.candidates) {
+        if (!exactKeys(candidate, candidateAllowed) || !Array.isArray(candidate.facts)
+          || candidate.provider !== provider || candidate.matcherVersion !== matcherVersion
+          || !GOOGLE_WORKSPACE_CONFIDENCE[candidate.confidence]
+          || candidate.id !== googleWorkspaceProjectionId("gwmc", matcherVersion, candidate.intakeItemId, candidate.showId)) {
+          throw new Error("malformed_projection");
+        }
+        if (candidatesById.has(candidate.id)) throw new Error("identity_collision");
+        candidatesById.set(candidate.id, candidate);
+        for (const fact of candidate.facts) {
+          if (!exactKeys(fact, factAllowed) || fact.candidateId !== candidate.id
+            || !GOOGLE_WORKSPACE_SIGNALS.has(fact.category)
+            || fact.id !== googleWorkspaceProjectionId("gwmf", matcherVersion, candidate.id, fact.category)) {
+            throw new Error("malformed_projection");
+          }
+          if (factsById.has(fact.id)) throw new Error("identity_collision");
+          factsById.set(fact.id, fact);
+        }
+      }
+      if (projection.facts.length !== factsById.size) throw new Error("malformed_projection");
+      for (const fact of projection.facts) {
+        if (!factsById.has(fact?.id) || !sameJson(factsById.get(fact.id), fact)) throw new Error("malformed_projection");
+      }
+
+      const supersededSourceIds = new Set(Object.values(db.sourceRecords || {}).map(source => source?.supersedesSourceRecordId).filter(Boolean));
+      const desiredCandidates = {};
+      const desiredFacts = {};
+      let excluded = 0;
+      for (const candidate of candidatesById.values()) {
+        const intake = db.intakeItems?.[candidate.intakeItemId];
+        const source = db.sourceRecords?.[intake?.sourceRecordId];
+        const sourceProvider = source?.sourceType === "drive" ? "drive" : ["email", "gmail"].includes(source?.sourceType) ? "gmail" : null;
+        if (!intake || !source || intake.status === "superseded" || intake.supersededByIntakeItemId
+          || supersededSourceIds.has(source.id) || intake.matchedShowId || sourceProvider !== provider
+          || !db.showRegistry?.[candidate.showId]) throw new Error("changed_projection_eligibility");
+        if (GOOGLE_WORKSPACE_CONFIDENCE[candidate.confidence] < GOOGLE_WORKSPACE_CONFIDENCE[minimumConfidence]) {
+          excluded += 1;
+          continue;
+        }
+        const signalCategories = candidate.facts.map(fact => fact.category).sort();
+        desiredCandidates[candidate.id] = {
+          id: candidate.id,
+          intakeItemId: candidate.intakeItemId,
+          candidateEntityType: "show",
+          candidateEntityId: candidate.showId,
+          confidence: candidate.confidence,
+          signalCategories,
+          reviewOnly: true,
+          selected: false,
+          matcherVersion,
+          provider,
+        };
+        for (const fact of candidate.facts) {
+          desiredFacts[fact.id] = {
+            id: fact.id,
+            intakeItemId: candidate.intakeItemId,
+            matchCandidateId: candidate.id,
+            factType: `google_workspace.${fact.category}`,
+            confidence: candidate.confidence,
+            reviewOnly: true,
+            matcherVersion,
+            provider,
+          };
+        }
+      }
+
+      const owns = value => value?.matcherVersion === matcherVersion && value?.provider === provider && value?.reviewOnly === true;
+      for (const [recordId, desired] of [...Object.entries(desiredCandidates), ...Object.entries(desiredFacts)]) {
+        const existing = db.matchCandidates?.[recordId] || db.candidateFacts?.[recordId];
+        if (existing && !owns(existing) && !sameJson(existing, desired)) throw new Error("identity_collision");
+      }
+      const existingOwnedCandidates = Object.entries(db.matchCandidates || {}).filter(([, value]) => owns(value));
+      const existingOwnedFacts = Object.entries(db.candidateFacts || {}).filter(([, value]) => owns(value));
+      let unchanged = 0;
+      let created = 0;
+      for (const [recordId, desired] of Object.entries(desiredCandidates)) {
+        if (sameJson(db.matchCandidates?.[recordId], desired)) unchanged += 1;
+        else created += 1;
+      }
+      const retired = existingOwnedCandidates.filter(([recordId]) => !desiredCandidates[recordId]).length;
+      const factsUnchanged = Object.entries(desiredFacts).filter(([recordId, desired]) => sameJson(db.candidateFacts?.[recordId], desired)).length;
+      const factsCreated = Object.keys(desiredFacts).length - factsUnchanged;
+      const factsRetired = existingOwnedFacts.filter(([recordId]) => !desiredFacts[recordId]).length;
+      const mutationPerformed = apply && (created > 0 || retired > 0 || factsCreated > 0 || factsRetired > 0);
+      if (mutationPerformed) {
+        for (const [recordId] of existingOwnedCandidates) delete db.matchCandidates[recordId];
+        for (const [recordId] of existingOwnedFacts) delete db.candidateFacts[recordId];
+        Object.assign(db.matchCandidates, desiredCandidates);
+        Object.assign(db.candidateFacts, desiredFacts);
+        writeFile(filePath, db);
+      }
+      return {
+        projected: Object.keys(desiredCandidates).length,
+        projectedFacts: Object.keys(desiredFacts).length,
+        created,
+        unchanged,
+        retired,
+        excluded,
+        checksumVerified: true,
+        mutationPerformed,
+      };
+    });
   }
 
   async function ingestSourceRecords(records = [], options = {}) {
@@ -1002,6 +1146,7 @@ export function createCueFoundationStore(options = {}) {
         || null;
     },
     ingestSourceRecords,
+    persistGoogleWorkspaceReviewCandidates,
     checkpointConnectorRun,
     getConnectorState: async (connectorName) => readFile(filePath).connectorState?.[cleanText(connectorName)] || null,
     saveConnectorState,

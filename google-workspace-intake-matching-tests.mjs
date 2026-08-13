@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { buildGoogleWorkspaceMatchingPreview, sanitizedGoogleWorkspaceMatchingPreview } from "./google-workspace-intake-matching.mjs";
 import { runGoogleWorkspaceMatchingPreview } from "./scripts/google-workspace-intake-match-preview.mjs";
+import { createCueFoundationStore } from "./cue-foundation-store.mjs";
+import { parsePersistArguments, runGoogleWorkspaceMatchPersistence } from "./scripts/google-workspace-intake-match-persist.mjs";
 
 function fixture() {
   return {
@@ -38,6 +41,21 @@ function addIntake(db, id, text, options = {}) {
 
 function candidatesFor(result, intakeItemId) {
   return result.privateProjection.candidates.filter(candidate => candidate.intakeItemId === intakeItemId);
+}
+
+function hashBytes(bytes) { return createHash("sha256").update(bytes).digest("hex").toUpperCase(); }
+
+async function persistenceFixture(test) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "cue-gw-match-persist-"));
+  const datastorePath = path.join(directory, "fixture.json");
+  const db = fixture();
+  Object.assign(db, {
+    version: 1,
+    connectorRuns: {}, connectorState: {}, proposedUpdates: {}, decisionCards: {}, decisions: {}, events: {},
+    showState: {}, readiness: {}, learnedAliases: {}, learnedFlexLinks: {}, showIdRedirects: {},
+    flexQuoteStatusObservations: {},
+  });
+  try { await test({ db, datastorePath }); } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
 {
@@ -180,6 +198,153 @@ function candidatesFor(result, intakeItemId) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+await persistenceFixture(async ({ db, datastorePath }) => {
+  addShow(db, "show-medium", "Medium Signal");
+  addShow(db, "show-low", "Low Signal");
+  addShow(db, "show-high", "High Signal");
+  addShow(db, "show-gmail", "Gmail Signal");
+  addIntake(db, "drive-medium", "Medium Signal with substantial extracted production evidence for a bounded review", { name: "brief" });
+  addIntake(db, "drive-low", "File: Low Signal", { name: "Low Signal", mimeType: "image/png" });
+  addIntake(db, "drive-high", "reference evidence", { intake: { canonicalShowId: "show-high" } });
+  addIntake(db, "gmail-medium", "Gmail Signal with substantial extracted production evidence for a bounded review", { sourceType: "email", name: "message" });
+  db.matchCandidates.slack = { id: "slack", matcherVersion: "slack-match-v1", provider: "slack", selected: true };
+  db.matchCandidates.manual = { id: "manual", selected: true };
+  db.matchCandidates.foreign = { id: "foreign", matcherVersion: "future-version", provider: "drive" };
+  db.candidateFacts.slackFact = { id: "slackFact", matcherVersion: "slack-match-v1", provider: "slack" };
+  db.matchCandidates.staleOwned = { id: "staleOwned", matcherVersion: "google-workspace-review-preview-v1", provider: "drive", reviewOnly: true };
+  db.candidateFacts.staleOwnedFact = { id: "staleOwnedFact", matcherVersion: "google-workspace-review-preview-v1", provider: "drive", reviewOnly: true };
+  await writeFile(datastorePath, JSON.stringify(db));
+  const originalBytes = await readFile(datastorePath);
+  const originalHash = hashBytes(originalBytes);
+  const original = JSON.parse(originalBytes);
+  const originalProtected = Object.fromEntries(Object.entries(original).filter(([key]) => !["matchCandidates", "candidateFacts", "updatedAt"].includes(key)));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => { throw new Error("network method invoked"); };
+  try {
+    const dry = await runGoogleWorkspaceMatchPersistence({ provider: "drive", expectedSha256: originalHash, datastorePath });
+    assert.equal(dry.mode, "dry_run");
+    assert.equal(dry.projected, 2, "medium and future high-confidence Drive candidates are eligible");
+    assert.equal(dry.excluded, 1, "low-confidence Drive candidates remain preview-only");
+    assert.equal(dry.mutationPerformed, false);
+    assert.equal(hashBytes(await readFile(datastorePath)), originalHash, "dry-run never writes");
+
+    const applied = await runGoogleWorkspaceMatchPersistence({ provider: "drive", expectedSha256: originalHash, datastorePath, apply: true });
+    assert.equal(applied.projected, 2);
+    assert.equal(applied.created, 2);
+    assert.equal(applied.retired, 1);
+    assert.equal(applied.mutationPerformed, true);
+    const appliedBytes = await readFile(datastorePath);
+    const appliedDb = JSON.parse(appliedBytes);
+    const ownedCandidates = Object.values(appliedDb.matchCandidates).filter(item => item.matcherVersion === "google-workspace-review-preview-v1" && item.provider === "drive");
+    assert.equal(ownedCandidates.length, 2);
+    assert(ownedCandidates.every(item => item.reviewOnly === true && item.selected === false));
+    assert(ownedCandidates.every(item => ["medium", "high"].includes(item.confidence)));
+    assert.equal(appliedDb.matchCandidates.slack.id, "slack");
+    assert.equal(appliedDb.matchCandidates.manual.id, "manual");
+    assert.equal(appliedDb.matchCandidates.foreign.id, "foreign");
+    assert.equal(appliedDb.candidateFacts.slackFact.id, "slackFact");
+    assert.equal(appliedDb.matchCandidates.staleOwned, undefined);
+    assert.equal(appliedDb.candidateFacts.staleOwnedFact, undefined);
+    assert.deepEqual(Object.fromEntries(Object.entries(appliedDb).filter(([key]) => !["matchCandidates", "candidateFacts", "updatedAt"].includes(key))), originalProtected,
+      "only candidate and candidate-fact collections change");
+    const persisted = JSON.stringify({ candidates: ownedCandidates, facts: Object.values(appliedDb.candidateFacts).filter(item => item.provider === "drive") });
+    for (const prohibited of ["rawScore", "name", "alias", "filename", "folderName", "owner", "email", "description", "extractedText", "summary", "url", "query", "cursor", "token", "providerPayload"]) {
+      assert.equal(new RegExp(`\\"${prohibited}\\"`, "i").test(persisted), false, `persisted review records omit ${prohibited}`);
+    }
+    assert.equal(persisted.includes("substantial extracted production evidence"), false);
+    const appliedHash = hashBytes(appliedBytes);
+    const second = await runGoogleWorkspaceMatchPersistence({ provider: "drive", expectedSha256: appliedHash, datastorePath, apply: true });
+    assert.equal(second.created, 0);
+    assert.equal(second.unchanged, 2);
+    assert.equal(second.retired, 0);
+    assert.equal(second.mutationPerformed, false);
+    assert.equal(hashBytes(await readFile(datastorePath)), appliedHash, "idempotent apply is byte-identical and performs no write");
+
+    const gmail = await runGoogleWorkspaceMatchPersistence({ provider: "gmail", expectedSha256: appliedHash, datastorePath });
+    assert.equal(gmail.projected, 1, "provider selection isolates Gmail from Drive");
+    assert.equal(gmail.mutationPerformed, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+await persistenceFixture(async ({ db, datastorePath }) => {
+  addShow(db, "registered", "Registered Show");
+  addIntake(db, "candidate", "Registered Show with substantial extracted evidence for review", { name: "brief" });
+  await writeFile(datastorePath, JSON.stringify(db));
+  const bytes = await readFile(datastorePath);
+  const expectedSha256 = hashBytes(bytes);
+  const preview = buildGoogleWorkspaceMatchingPreview(JSON.parse(bytes));
+  const store = createCueFoundationStore({ filePath: datastorePath });
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256: "0".repeat(64), matcherVersion: preview.report.matcherVersion, projection: preview.privateProjection }), /stale_datastore_checksum/);
+  assert.equal(hashBytes(await readFile(datastorePath)), expectedSha256);
+  const malformed = structuredClone(preview.privateProjection);
+  malformed.candidates[0].showName = "prohibited";
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256, matcherVersion: preview.report.matcherVersion, projection: malformed }), /malformed_projection/);
+  const collided = structuredClone(preview.privateProjection);
+  collided.candidates.push(structuredClone(collided.candidates[0]));
+  collided.facts.push(...structuredClone(collided.candidates[0].facts));
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256, matcherVersion: preview.report.matcherVersion, projection: collided }), /identity_collision/);
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256, matcherVersion: "unsupported", projection: preview.privateProjection }), /unsupported_matcher_version/);
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "all", expectedSha256, matcherVersion: preview.report.matcherVersion, projection: preview.privateProjection }), /invalid_provider/);
+  assert.equal(hashBytes(await readFile(datastorePath)), expectedSha256, "failed validation leaves fixture unchanged");
+
+  const changed = JSON.parse(bytes);
+  changed.intakeItems.candidate.matchedShowId = "registered";
+  await writeFile(datastorePath, JSON.stringify(changed));
+  const changedHash = hashBytes(await readFile(datastorePath));
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256: changedHash, matcherVersion: preview.report.matcherVersion, projection: preview.privateProjection }), /changed_projection_eligibility/);
+  assert.equal(hashBytes(await readFile(datastorePath)), changedHash);
+
+  for (const mutate of [
+    value => { value.intakeItems.candidate.status = "superseded"; },
+    value => { value.sourceRecords["source-candidate"].sourceType = "email"; },
+    value => { delete value.showRegistry.registered; },
+  ]) {
+    const variant = JSON.parse(bytes);
+    mutate(variant);
+    await writeFile(datastorePath, JSON.stringify(variant));
+    const variantHash = hashBytes(await readFile(datastorePath));
+    await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256: variantHash, matcherVersion: preview.report.matcherVersion, projection: preview.privateProjection }), /changed_projection_eligibility/);
+    assert.equal(hashBytes(await readFile(datastorePath)), variantHash);
+  }
+
+  const foreignCollision = JSON.parse(bytes);
+  foreignCollision.matchCandidates[preview.privateProjection.candidates[0].id] = { id: preview.privateProjection.candidates[0].id, matcherVersion: "manual", provider: "drive" };
+  await writeFile(datastorePath, JSON.stringify(foreignCollision));
+  const collisionHash = hashBytes(await readFile(datastorePath));
+  await assert.rejects(() => store.persistGoogleWorkspaceReviewCandidates({ provider: "drive", expectedSha256: collisionHash, matcherVersion: preview.report.matcherVersion, projection: preview.privateProjection }), /identity_collision/);
+  assert.equal(hashBytes(await readFile(datastorePath)), collisionHash);
+});
+
+await persistenceFixture(async ({ db, datastorePath }) => {
+  addShow(db, "locked-show", "Locked Show");
+  addIntake(db, "locked-item", "Locked Show with substantial extracted production evidence for serialized persistence", { name: "brief" });
+  await writeFile(datastorePath, JSON.stringify(db));
+  const bytes = await readFile(datastorePath);
+  const expectedSha256 = hashBytes(bytes);
+  const preview = buildGoogleWorkspaceMatchingPreview(JSON.parse(bytes));
+  const store = createCueFoundationStore({ filePath: datastorePath });
+  const calls = [1, 2].map(() => store.persistGoogleWorkspaceReviewCandidates({
+    provider: "drive", expectedSha256, matcherVersion: preview.report.matcherVersion,
+    minimumConfidence: "medium", apply: true, projection: preview.privateProjection,
+  }));
+  const outcomes = await Promise.allSettled(calls);
+  assert.equal(outcomes.filter(item => item.status === "fulfilled").length, 1);
+  assert.equal(outcomes.filter(item => item.status === "rejected" && /stale_datastore_checksum/.test(item.reason?.message)).length, 1,
+    "the expected checksum is rechecked after acquiring the serialized write lock");
+});
+
+{
+  const hash = "A".repeat(64);
+  assert.deepEqual(parsePersistArguments(["--source", "drive", "--expected-sha256", hash]), {
+    minimumConfidence: "medium", apply: false, provider: "drive", expectedSha256: hash,
+  });
+  assert.equal(parsePersistArguments(["--source", "gmail", "--expected-sha256", hash, "--apply"]).apply, true);
+  assert.throws(() => parsePersistArguments(["--source", "drive", "--expected-sha256", hash, "--unknown"]), /invalid_option/);
+  assert.throws(() => parsePersistArguments(["--source", "drive", "--source", "gmail", "--expected-sha256", hash]), /invalid_option/);
+  assert.throws(() => parsePersistArguments(["--expected-sha256", hash]), /required_option_missing/);
+  assert.throws(() => parsePersistArguments(["--source", "all", "--expected-sha256", hash]), /invalid_provider/);
 }
 
 console.log("google-workspace-intake-matching tests passed");
