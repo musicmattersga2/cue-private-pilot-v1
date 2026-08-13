@@ -265,11 +265,11 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     };
   }
 
-  function driveQuery(lowerBound, upperBound, folderIds = config.drive.folderIds) {
+  function driveQuery(lowerBound, upperBound, folderIds = config.drive.folderIds, originalCursor = null) {
     const clauses = ["trashed = false", "mimeType != 'application/vnd.google-apps.folder'"];
     if (folderIds.length) clauses.push(`(${folderIds.map(id => `'${id.replace(/'/g, "\\'")}' in parents`).join(" or ")})`);
     if (config.drive.query) clauses.push(`(${config.drive.query})`);
-    if (lowerBound) clauses.push(`modifiedTime > '${lowerBound}'`);
+    if (originalCursor && lowerBound) clauses.push(`modifiedTime > '${lowerBound}'`);
     clauses.push(`modifiedTime <= '${upperBound}'`);
     return clauses.join(" and ");
   }
@@ -448,7 +448,7 @@ export function createGoogleWorkspaceIntakeConnectors(options = {}) {
     fileBatches: for (let batchIndex = sweep.batchIndex; batchIndex < batches.length; batchIndex += 1) {
       const batch = batches[batchIndex];
       attemptedBatches += 1;
-      const query = driveQuery(sweep.lowerBound, sweep.upperBound, batch);
+      const query = driveQuery(sweep.lowerBound, sweep.upperBound, batch, sweep.originalCursor);
       let pageToken = batchIndex === sweep.batchIndex ? sweep.pageToken : null;
       do {
         const requestedPageToken = pageToken;

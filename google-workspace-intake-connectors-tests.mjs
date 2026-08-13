@@ -70,7 +70,25 @@ const fixtureFile = (id, modifiedTime = "2026-08-13T12:00:00.000Z") => ({
 });
 
 const DRIVE_PROVIDER_ORDER = "modifiedTime asc";
+const DRIVE_SUPPORTED_ORDER_KEYS = new Set([
+  "createdTime", "folder", "modifiedByMeTime", "modifiedTime", "name", "name_natural",
+  "quotaBytesUsed", "recency", "sharedWithMeTime", "starred", "viewedByMeTime",
+]);
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+function assertSupportedDriveOrdering(orderBy) {
+  const terms = String(orderBy || "").split(",").map(term => term.trim()).filter(Boolean);
+  assert.ok(terms.length > 0, "provider ordering contains at least one key");
+  for (const term of terms) {
+    const match = term.match(/^(\S+)(?:\s+(asc|desc))?$/);
+    assert.ok(match, "provider ordering uses a key with an optional supported direction");
+    assert.ok(DRIVE_SUPPORTED_ORDER_KEYS.has(match[1]), `provider ordering key ${match[1]} is documented by Drive`);
+  }
+}
+function assertProductionDriveOrdering(orderBy) {
+  assertSupportedDriveOrdering(orderBy);
+  assert.equal(orderBy, DRIVE_PROVIDER_ORDER, "production provider ordering remains modification-time ascending only");
+  assert.doesNotMatch(orderBy, /\bid\b/i, "private identifiers must remain local ordering tie-breakers");
+}
 function assertBalancedDriveQuery(query) {
   let depth = 0;
   let quoted = false;
@@ -101,14 +119,13 @@ function assertSupportedDriveFileListRequest(input, options = {}) {
   const url = new URL(String(input));
   const query = url.searchParams.get("q") || "";
   const orderBy = url.searchParams.get("orderBy");
-  assert.equal(orderBy, DRIVE_PROVIDER_ORDER, "provider ordering uses only the supported primary key and direction");
-  assert.doesNotMatch(orderBy, /name_natural|\bid\b/i, "secondary or private identifier ordering must remain local");
+  assertProductionDriveOrdering(orderBy);
   assertBalancedDriveQuery(query);
   const operators = [...query.matchAll(/\s(!=|<=|>=|=|<|>)\s/g)].map(match => match[1]);
   assert.ok(operators.length > 0, "Drive query contains recognized comparison operators");
   assert.ok(operators.every(operator => ["=", "!=", "<", "<=", ">", ">="].includes(operator)), "Drive query uses only allowed comparison operators");
   const timeLiterals = [...query.matchAll(/modifiedTime\s(?:>|<=)\s'([^']+)'/g)].map(match => match[1]);
-  assert.equal(timeLiterals.length, 2, "resumable file query has fixed lower and upper time bounds");
+  assert.equal(timeLiterals.length, options.expectedTimeBounds ?? 2, "file query has the expected fixed time bounds");
   assert.ok(timeLiterals.every(value => RFC3339.test(value) && !Number.isNaN(Date.parse(value))), "time bounds are canonical RFC 3339 values");
   assert.match(query, /\([^()]+' in parents(?: or '[^()]+' in parents)*\)/, "parent alternatives remain grouped");
   assert.ok((query.match(/ in parents/g) || []).length <= 20, "a file query contains no more than 20 parents");
@@ -157,13 +174,69 @@ assert.equal(invalid.errors.length, 2, "both live sources require bounded retrie
   const fields = new URL(fileListUrl).searchParams.get("fields") || "";
   for (const requiredField of ["id", "name", "mimeType", "modifiedTime", "parents"]) assert.match(fields, new RegExp(`\\b${requiredField}\\b`));
 
-  const formerlyPermitted = new URL(fileListUrl);
-  formerlyPermitted.searchParams.set("orderBy", "modifiedTime asc,name_natural asc");
-  assert.throws(
-    () => assertSupportedDriveFileListRequest(formerlyPermitted, { remainingCapacity: 100, privateFileId }),
-    /provider ordering uses only the supported primary key/,
-    "the removed secondary ordering is rejected independently of a mock that would accept the URL",
+  const documentedSecondary = new URL(fileListUrl);
+  documentedSecondary.searchParams.set("orderBy", "modifiedTime asc,name_natural asc");
+  assert.doesNotThrow(
+    () => assertSupportedDriveOrdering(documentedSecondary.searchParams.get("orderBy")),
+    "Drive documents name_natural as a supported provider ordering key",
   );
+  assert.throws(
+    () => assertProductionDriveOrdering(documentedSecondary.searchParams.get("orderBy")),
+    /production provider ordering remains modification-time ascending only/,
+    "official provider support is validated separately from the narrower production ordering contract",
+  );
+}
+
+// A cursorless sweep keeps its epoch sentinel private and resumes without serializing it.
+{
+  const upperBound = "2026-08-13T12:45:00.000Z";
+  let failInitialRequest = true;
+  const fileListUrls = [];
+  const fetch = async input => {
+    const url = String(input);
+    if (isTokenRequest(url)) return json({ access_token: SECRET_MARKERS[3], expires_in: 3600 });
+    fileListUrls.push(url);
+    return failInitialRequest ? failure(400) : json({ files: [] });
+  };
+  const connector = driveConnector(fetch, {
+    CUE_DRIVE_RECURSIVE: "false",
+    CUE_DRIVE_QUERY: "mimeType = 'text/plain'",
+  }, { now: () => upperBound });
+
+  const failed = await connector.pullDrive({ cursorBefore: null });
+  const checkpoint = privateContinuation(failed);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.cursorBefore, null);
+  assert.equal(failed.cursorAfter, null, "a cursorless initial-list failure cannot create a durable cursor");
+  assert.ok(checkpoint, "the cursorless failure retains a retry-safe private continuation");
+  assert.equal(checkpoint.originalCursor, null);
+  assert.equal(checkpoint.lowerBound, "1969-12-31T23:59:00.000Z", "the existing overlap-adjusted epoch sentinel remains private state");
+  assert.equal(checkpoint.upperBound, upperBound);
+  assert.equal(checkpoint.batchIndex, 0);
+  assert.equal(checkpoint.pageToken, null);
+  const checkpointBeforeResume = JSON.stringify(checkpoint);
+  const failedRequest = assertSupportedDriveFileListRequest(fileListUrls[0], {
+    remainingCapacity: 100,
+    expectedTimeBounds: 1,
+  });
+  assert.doesNotMatch(failedRequest.query, /modifiedTime\s*>/, "cursorless requests omit the epoch lower-bound predicate");
+  assert.match(failedRequest.query, new RegExp(`modifiedTime <= '${upperBound}'`), "cursorless requests retain the fixed upper bound");
+  assertSecretSafe(failed, "cursorless initial-list failure");
+
+  failInitialRequest = false;
+  const resumed = await connector.pullDrive({ cursorBefore: null, continuation: checkpoint });
+  assert.equal(resumed.status, "completed");
+  assert.equal(resumed.metadata.continuationDiagnostic, null, "the existing epoch-sentinel continuation remains compatible");
+  assert.equal(resumed.cursorBefore, null);
+  assert.equal(resumed.cursorAfter, upperBound, "the durable cursor appears only after the full resumed sweep completes");
+  assert.equal(privateContinuation(resumed), null);
+  assert.equal(JSON.stringify(checkpoint), checkpointBeforeResume, "resuming does not mutate the saved fingerprint, bounds, inventory, or position");
+  const resumedRequest = assertSupportedDriveFileListRequest(fileListUrls[1], {
+    remainingCapacity: 100,
+    expectedTimeBounds: 1,
+  });
+  assert.doesNotMatch(resumedRequest.query, /modifiedTime\s*>/, "the compatible retry still omits the private epoch sentinel");
+  assert.match(resumedRequest.query, new RegExp(`modifiedTime <= '${upperBound}'`), "the compatible retry reuses the original fixed upper bound");
 }
 
 // Existing mixed Gmail/Drive fixture behavior remains intact and offline.
