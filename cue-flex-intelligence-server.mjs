@@ -69,6 +69,7 @@ import {
   createGoogleWorkspaceIntakeConnectors,
   readGoogleWorkspaceConfig,
 } from "./google-workspace-intake-connectors.mjs";
+import { createGoogleWorkspaceIntakeSync } from "./google-workspace-intake-sync.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -80,105 +81,12 @@ const CUE_PILOT_SESSION_SECRET =
   process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
 const googleWorkspaceConfig = readGoogleWorkspaceConfig(process.env);
 const googleWorkspaceConnectors = createGoogleWorkspaceIntakeConnectors({ config: googleWorkspaceConfig });
-let googleWorkspaceSyncInFlight = null;
-
-async function googleConnectorCursor(connectorName) {
-  const record = await defaultCueFoundationStore.getConnectorCursor(connectorName);
-  return record?.cursor ?? null;
-}
-
-async function pullGoogleSource(kind) {
-  const connector = kind === "gmail" ? googleWorkspaceConfig.gmail : googleWorkspaceConfig.drive;
-  const cursorBefore = await googleConnectorCursor(connector.connectorName);
-  const result = kind === "gmail"
-    ? await googleWorkspaceConnectors.pullGmail({ cursorBefore })
-    : await googleWorkspaceConnectors.pullDrive({ cursorBefore });
-  if (["skipped", "failed"].includes(result.status)) {
-    await defaultCueFoundationStore.checkpointConnectorRun({
-      connectorName: connector.connectorName,
-      connectorVersion: "google-workspace-v1",
-      sourceType: kind === "gmail" ? "email" : "drive",
-      status: result.status,
-      cursorBefore: result.cursorBefore,
-      cursorAfter: result.cursorAfter,
-      errors: result.errors || [],
-      counts: { received: 0, skipped: result.errors?.length || 0 },
-      metadata: { reason: result.reason || null, ...(result.metadata || {}) },
-    });
-  }
-  return result;
-}
-
-async function ingestGoogleSource(kind, items, verifiedFlexDocuments, source = {}) {
-  const connector = kind === "gmail" ? googleWorkspaceConfig.gmail : googleWorkspaceConfig.drive;
-  if (!items.length) {
-    return defaultCueFoundationStore.checkpointConnectorRun({
-      connectorName: connector.connectorName,
-      connectorVersion: "google-workspace-v1",
-      sourceType: kind === "gmail" ? "email" : "drive",
-      status: source.status === "partial" ? "partial" : "completed",
-      cursorBefore: source.cursorBefore,
-      cursorAfter: source.cursorAfter,
-      errors: source.errors || [],
-      counts: { received: 0, skipped: source.skippedFiles?.length || 0, failed: source.errors?.length || 0 },
-      metadata: source.metadata || {},
-    });
-  }
-  const records = items.map(item => kind === "gmail"
-    ? adaptEmailMessageToIntakeRecord(item, {
-      connectorName: connector.connectorName,
-      connectorVersion: "google-workspace-v1",
-      verifiedFlexDocuments,
-    })
-    : adaptDriveFileToIntakeRecord(item, {
-      connectorName: connector.connectorName,
-      connectorVersion: "google-workspace-v1",
-      verifiedFlexDocuments,
-    }));
-  return defaultCueFoundationStore.ingestSourceRecords(records, {
-    sourceType: kind === "gmail" ? "email" : "drive",
-    connectorName: connector.connectorName,
-    connectorVersion: "google-workspace-v1",
-    cursorBefore: source.cursorBefore ?? null,
-    cursorAfter: source.cursorAfter ?? source.cursorBefore ?? null,
-    status: source.status,
-    errors: source.errors || [],
-    metadata: { ...(source.metadata || {}), skippedFiles: source.skippedFiles || [] },
-  });
-}
-
-async function runGoogleWorkspacePoll() {
-  if (googleWorkspaceSyncInFlight) return googleWorkspaceSyncInFlight;
-  googleWorkspaceSyncInFlight = (async () => {
-    const foundation = await defaultCueFoundationStore.read();
-    const verifiedFlexDocuments = Object.values(foundation.flexDocumentRegistry || {});
-    const stages = [];
-    for (const kind of ["gmail", "drive"]) {
-      try {
-        const source = await pullGoogleSource(kind);
-        if (source.status === "skipped" || source.status === "failed") {
-          stages.push({ name: kind, status: source.status, reason: source.reason || "connector_failed", connector: source });
-          continue;
-        }
-        const items = kind === "gmail" ? source.messages : source.files;
-        const result = await ingestGoogleSource(kind, items || [], verifiedFlexDocuments, source);
-        stages.push({ name: kind, status: source.status === "partial" || result?.ok === false ? "partial" : "completed", connector: source, result });
-      } catch {
-        stages.push({ name: kind, status: "failed", reason: "connector_failed", errors: [{ message: `${kind} connector failed.` }] });
-      }
-    }
-    return {
-      ok: stages.every(stage => ["completed", "skipped"].includes(stage.status)),
-      degraded: stages.some(stage => ["partial", "failed"].includes(stage.status)),
-      stages,
-      failedStages: stages.filter(stage => stage.status === "failed").map(stage => stage.name),
-      partialStages: stages.filter(stage => stage.status === "partial").map(stage => stage.name),
-      skippedStages: stages.filter(stage => stage.status === "skipped").map(stage => stage.name),
-    };
-  })();
-  try { return await googleWorkspaceSyncInFlight; }
-  finally { googleWorkspaceSyncInFlight = null; }
-}
+const googleWorkspaceIntakeSync = createGoogleWorkspaceIntakeSync({
+  config: googleWorkspaceConfig,
+  connectors: googleWorkspaceConnectors,
+  store: defaultCueFoundationStore,
+});
+const runGoogleWorkspacePoll = () => googleWorkspaceIntakeSync.runPoll();
 
 function resolveCueBuildId() {
   try {
