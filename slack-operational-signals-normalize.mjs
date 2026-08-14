@@ -22,7 +22,14 @@ const DEPT_TERMS = {
 };
 
 function asString(value) {
-  return String(value ?? "").trim();
+  return String(value ?? "")
+    // Repair common UTF-8-as-Windows-1252 artifacts seen in Slack cache text.
+    .replace(/â€™|â/g, "'")
+    .replace(/â|â/g, '"')
+    .replace(/â|â/g, "-")
+    .replace(/âs\b/g, "'s")
+    .replace(/Â/g, "")
+    .trim();
 }
 
 function uniqueStrings(values) {
@@ -128,13 +135,13 @@ export function classifyOperationalMessage(text, entities = {}) {
   const categories = new Set();
   const facts = [];
 
-  if (/\btruck|trailer|driver|load[- ]?(?:in|out)|maybe truck/i.test(raw) || entities.trucks?.length) {
+  if (/\btruck|trailer|driver|load[- ]?(?:in|out)|maybe truck|\b\d{4}\s+is\s+(?:getting\s+)?loaded\b/i.test(raw) || entities.trucks?.length) {
     categories.add("trucking");
   }
-  if (/\bwarehouse|pull|pack(?:ed|ing)?|cable package/i.test(raw)) {
+  if (/\bwarehouse|pull(?:ed|ing|\s+sheet)?|prep|pack(?:ed|ing)?|cable package|\bloaded\s+with\b/i.test(raw)) {
     categories.add("warehouse");
   }
-  if (/\bequipment|motor|shortage|substitut|need .+ more/i.test(raw)) {
+  if (/\bequipment|motor|shortage|substitut|need .+ more|missing items?|shackles?|deck chain|steel|followspots?|hazer|galaxy|earbuds?|cat6|cables?/i.test(raw)) {
     categories.add("equipment");
   }
   if (entities.docks?.length || /\bdock\b/i.test(raw)) {
@@ -146,7 +153,7 @@ export function classifyOperationalMessage(text, entities = {}) {
   if (/\bstaff|crew|labor|tech\b/i.test(raw)) {
     categories.add("staffing");
   }
-  if (entities.hasLoadIn || entities.hasLoadOut || entities.dates?.length) {
+  if (entities.hasLoadIn || entities.hasLoadOut || (entities.dates?.length && /\b(?:date|schedule|call|arrival|depart|load[- ]?(?:in|out))\b/i.test(raw))) {
     categories.add("schedule");
   }
   if (entities.readinessTerms?.length) {

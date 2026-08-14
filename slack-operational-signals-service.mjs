@@ -209,6 +209,47 @@ export function createSlackOperationalSignalsService(options = {}) {
     };
   }
 
+  function refreshManualApprovalMetadata(message, candidateShows) {
+    if (message?.manualDecision?.action !== "approve") return message;
+    const approvedShowKey = String(message.manualDecision.showKey || "").trim();
+    if (!approvedShowKey) return message;
+    const candidate = (candidateShows || []).find(show => String(show?.showKey || "") === approvedShowKey);
+    if (!candidate) return message;
+    const previous = (message.matches || []).find(match => String(match?.showKey || "") === approvedShowKey) || {};
+    const refreshedApprovedMatch = {
+      ...previous,
+      showKey: approvedShowKey,
+      showName: candidate.showName || candidate.name || previous.showName || approvedShowKey,
+      client: candidate.client || null,
+      venue: candidate.venue || null,
+      documentNumbers: candidate.documentNumbers || [],
+      primaryDocumentNumber: candidate.primaryDocumentNumber || null,
+      elementId: candidate.elementId || null,
+      documentRefs: candidate.documentRefs || [],
+      quoteElements: candidate.quoteElements || [],
+      plannedStartDate: candidate.plannedStartDate || null,
+      plannedEndDate: candidate.plannedEndDate || null,
+      loadInDate: candidate.loadInDate || null,
+      loadOutDate: candidate.loadOutDate || null,
+      departments: candidate.departments || [],
+      confidence: "high",
+      confidenceBand: "high",
+      score: 999,
+      reasons: ["Manually approved", "FLEX metadata refreshed from Active Shows"],
+      evidence: { ...(previous.evidence || {}), manual: true, metadataRefreshed: true },
+      matchState: "manually_approved",
+    };
+    return {
+      ...message,
+      matches: [
+        refreshedApprovedMatch,
+        ...(message.matches || []).filter(match => String(match?.showKey || "") !== approvedShowKey),
+      ],
+      matchState: "manually_approved",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
   async function resolveAuthorName(userId, cacheUsers) {
     if (!userId) return "Unknown";
     if (cacheUsers?.[userId]?.displayName) return cacheUsers[userId].displayName;
@@ -359,9 +400,12 @@ export function createSlackOperationalSignalsService(options = {}) {
               existing?.manualDecision &&
               existing.contentHash === normalized.contentHash
             ) {
-              normalized.matches = existing.matches;
-              normalized.matchState = existing.matchState;
-              normalized.manualDecision = existing.manualDecision;
+              normalized = refreshManualApprovalMetadata({
+                ...normalized,
+                matches: existing.matches,
+                matchState: existing.matchState,
+                manualDecision: existing.manualDecision,
+              }, candidateShows);
             } else if (!normalized.deleted && isOperationallyRelevant(normalized)) {
               // Thread parent context
               if (normalized.threadTs) {
@@ -375,7 +419,21 @@ export function createSlackOperationalSignalsService(options = {}) {
               candidateShows = await expandCandidatesForQuotes(candidateShows, [
                 normalized,
               ]);
-              normalized = applyMatches(normalized, candidateShows);
+              if (
+                candidateShows.length === 0 &&
+                existing?.contentHash === normalized.contentHash &&
+                Array.isArray(existing.matches) &&
+                existing.matches.length > 0
+              ) {
+                // Candidate discovery can be temporarily unavailable while the
+                // server or Active Shows source is warming up. Never downgrade
+                // previously established machine matches merely because the
+                // current catalog is empty.
+                normalized.matches = existing.matches;
+                normalized.matchState = existing.matchState;
+              } else {
+                normalized = applyMatches(normalized, candidateShows);
+              }
               normalized.manualDecision = null;
             } else if (isSlackSystemNoise(normalized)) {
               normalized.matches = [];
@@ -701,6 +759,11 @@ export function createSlackOperationalSignalsService(options = {}) {
     return store.getGeneralQueue();
   }
 
+  /** Internal bridge for the canonical CUE Foundation intake adapter. */
+  async function getSlackOperationalSnapshot() {
+    return store.read();
+  }
+
   async function approveSlackSignalMatch(signalId, showKey, showMeta = {}) {
     return store.approveMatch(signalId, showKey, showMeta);
   }
@@ -720,12 +783,38 @@ export function createSlackOperationalSignalsService(options = {}) {
       candidateShows = await expandCandidatesForQuotes(candidateShows, messages);
     }
 
+    if (candidateShows.length === 0) {
+      return {
+        rematched: 0,
+        skipped: true,
+        skipReason: "candidate_catalog_empty",
+        candidateShowCount: 0,
+        candidateQuoteNumbers: [],
+      };
+    }
+
+    // Hydrate people referenced inside messages as well as message authors so
+    // downstream Intake evidence can display human names instead of Slack IDs.
+    const mentionedUserIds = new Set(
+      messages.flatMap((message) =>
+        [...String(message.text || "").matchAll(/<@([A-Z0-9]+)>/gi)].map((match) => match[1])
+      )
+    );
+    for (const userId of mentionedUserIds) {
+      if (snap.users?.[userId]?.displayName) continue;
+      const displayName = await resolveAuthorName(userId, snap.users);
+      snap.users ||= {};
+      snap.users[userId] = { ...(snap.users[userId] || {}), displayName };
+    }
+
     const updated = [];
     for (const message of messages) {
       if (message.deleted) continue;
       if (message.manualDecision && message.contentHash) {
-        // Keep manual decisions unless caller forces later.
-        updated.push(message);
+        // Preserve the human show decision while refreshing the selected
+        // Active Shows/FLEX metadata. Freezing the entire match left verified
+        // quote UUIDs and document hierarchy permanently stale.
+        updated.push(refreshManualApprovalMetadata(message, candidateShows));
         continue;
       }
       const next = applyMatches(message, candidateShows);
@@ -771,6 +860,7 @@ export function createSlackOperationalSignalsService(options = {}) {
     getSlackSignalsForShow,
     getSlackNeedsReviewQueue,
     getSlackGeneralOperationsQueue,
+    getSlackOperationalSnapshot,
     approveSlackSignalMatch,
     rejectSlackSignalMatch,
     getSlackSignalSyncStatus,
