@@ -36,13 +36,32 @@ function currentSourceIds(sourceRecords) {
   return { superseded };
 }
 
-function isContentBearing(source) {
+export function isGoogleWorkspaceContentBearing(source) {
   const normalizedText = normalize(source?.normalizedText);
   const metadata = normalize([source?.payload?.name, source?.payload?.description].filter(Boolean).join(" "));
   if (!normalizedText) return false;
   if (!metadata) return normalizedText.length > 0;
   const remainder = normalizedText.replace(metadata, "").replace(/^file\s+/, "").trim();
   return remainder.length >= 24;
+}
+
+export function boundedGoogleWorkspaceEvidenceExcerpt(source, { limit = 240 } = {}) {
+  if (!isGoogleWorkspaceContentBearing(source)) return { available: false, excerpt: null, truncated: false };
+  const maximum = Math.max(40, Math.min(Number(limit) || 240, 400));
+  const chunks = String(source?.normalizedText || "").split(/\r?\n\s*\r?\n/).map(value => value.trim()).filter(Boolean);
+  if (/^file\s*:/i.test(chunks[0] || "")) chunks.shift();
+  const description = String(source?.payload?.description || "").trim();
+  if (description && chunks[0] === description) chunks.shift();
+  const text = chunks.join(" ")
+    .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted-email]")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[redacted-identifier]")
+    .replace(/\b[A-Za-z0-9_-]{24,}\b/g, "[redacted-identifier]")
+    .replace(/\b[A-Za-z]:\\[^\r\n]+|(?:\/[A-Za-z0-9._-]+){2,}/g, "[redacted-path]")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return { available: false, excerpt: null, truncated: false };
+  const truncated = text.length > maximum;
+  return { available: true, excerpt: truncated ? `${text.slice(0, maximum - 1).trimEnd()}…` : text, truncated };
 }
 
 function aliasesFor(show) {
@@ -156,7 +175,7 @@ export function buildGoogleWorkspaceMatchingPreview(db, { maxItems = 5000 } = {}
     }
 
     eligible += 1;
-    const contentBearing = isContentBearing(source);
+    const contentBearing = isGoogleWorkspaceContentBearing(source);
     if (contentBearing) contentBearingEligible += 1;
     else metadataOnlyEligible += 1;
     const evidence = normalize([source.normalizedText, intake.summary].filter(Boolean).join(" "));

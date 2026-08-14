@@ -20,6 +20,11 @@ import {
   confirmedQuoteMatchesShow,
   normalizeConfirmedQuoteObservation,
 } from "./flex-confirmed-quote.mjs";
+import {
+  boundedGoogleWorkspaceEvidenceExcerpt,
+  buildGoogleWorkspaceMatchingPreview,
+  isGoogleWorkspaceContentBearing,
+} from "./google-workspace-intake-matching.mjs";
 
 const DEFAULT_PATH = path.resolve(
   process.env.CUE_FOUNDATION_STORE_PATH || "./data/cue-foundation-v1.json"
@@ -331,6 +336,101 @@ export function createCueFoundationStore(options = {}) {
         mutationPerformed,
       };
     });
+  }
+
+  function googleWorkspaceReviewProjection(db, candidate, provider, previewCandidates = null) {
+    const intake = db.intakeItems?.[candidate?.intakeItemId];
+    const source = db.sourceRecords?.[intake?.sourceRecordId];
+    const show = db.showRegistry?.[candidate?.candidateEntityId];
+    const facts = Object.values(db.candidateFacts || {})
+      .filter(fact => fact?.matchCandidateId === candidate?.id
+        && fact?.matcherVersion === GOOGLE_WORKSPACE_MATCHER_VERSION
+        && fact?.provider === provider
+        && fact?.reviewOnly === true);
+    const superseded = intake?.status === "superseded"
+      || Boolean(intake?.supersededByIntakeItemId)
+      || Object.values(db.sourceRecords || {}).some(item => item?.supersedesSourceRecordId === source?.id);
+    const sourceProvider = source?.sourceType === "drive" ? "drive" : ["email", "gmail"].includes(source?.sourceType) ? "gmail" : null;
+    let staleReason = null;
+    if (!intake || !source) staleReason = "source_unavailable";
+    else if (superseded) staleReason = "superseded";
+    else if (intake.matchedShowId) staleReason = "already_matched";
+    else if (!show) staleReason = "show_unavailable";
+    else if (sourceProvider !== provider) staleReason = "provider_changed";
+    else if (candidate.selected) staleReason = "already_selected";
+    else if (!facts.length || facts.some(fact => fact.intakeItemId !== candidate.intakeItemId
+      || fact.confidence !== candidate.confidence
+      || !GOOGLE_WORKSPACE_SIGNALS.has(String(fact.factType || "").replace(/^google_workspace\./, "")))) staleReason = "facts_unavailable";
+
+    const factSignals = facts.map(fact => String(fact.factType || "").replace(/^google_workspace\./, "")).sort();
+    const recordedSignals = [...new Set(candidate?.signalCategories || [])].sort();
+    if (!staleReason && (!sameJson(factSignals, recordedSignals) || factSignals.length !== facts.length)) staleReason = "facts_unavailable";
+
+    let previewCandidate = null;
+    if (!staleReason) {
+      if (!previewCandidates) staleReason = "projection_unavailable";
+      else previewCandidate = previewCandidates.find(item => item.id === candidate.id) || null;
+      if (!previewCandidate || previewCandidate.showId !== candidate.candidateEntityId) staleReason = staleReason || "projection_changed";
+    }
+    const previewForIntake = (previewCandidates || []).filter(item => item?.intakeItemId === candidate?.intakeItemId && item?.provider === provider);
+    const signals = [...new Set(facts.map(fact => String(fact.factType || "").replace(/^google_workspace\./, ""))
+      .filter(signal => GOOGLE_WORKSPACE_SIGNALS.has(signal)))].sort();
+    return {
+      reference: candidate.id,
+      proposedShow: show?.name || null,
+      sourceCategory: cleanText(intake?.category || "uncategorized") || "uncategorized",
+      confidence: GOOGLE_WORKSPACE_CONFIDENCE[candidate?.confidence] ? candidate.confidence : "unknown",
+      supportingSignals: signals,
+      evidenceMode: source && isGoogleWorkspaceContentBearing(source) ? "content_bearing" : "metadata_only",
+      ambiguity: previewForIntake.length > 1,
+      conflict: Boolean(staleReason && staleReason !== "already_selected"),
+      intakeDisposition: cleanText(intake?.status || "unavailable") || "unavailable",
+      matcherVersion: candidate?.matcherVersion || null,
+      reviewOnly: candidate?.reviewOnly === true,
+      selected: candidate?.selected === true,
+      eligible: !staleReason,
+      staleReason,
+    };
+  }
+
+  async function listGoogleWorkspaceReviewSuggestions({ provider = "drive", page = 1, pageSize = 20 } = {}) {
+    if (!GOOGLE_WORKSPACE_PROVIDERS.has(provider)) throw new Error("invalid_provider");
+    const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
+    const safePageSize = Math.max(1, Math.min(Number.parseInt(pageSize, 10) || 20, 50));
+    const db = readFile(filePath);
+    let previewCandidates = null;
+    try { previewCandidates = buildGoogleWorkspaceMatchingPreview(db).privateProjection.candidates; } catch {}
+    const items = Object.values(db.matchCandidates || {})
+      .filter(candidate => candidate?.matcherVersion === GOOGLE_WORKSPACE_MATCHER_VERSION
+        && candidate?.provider === provider
+        && candidate?.reviewOnly === true)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      .map(candidate => googleWorkspaceReviewProjection(db, candidate, provider, previewCandidates));
+    const start = (safePage - 1) * safePageSize;
+    return {
+      provider,
+      page: safePage,
+      pageSize: safePageSize,
+      total: items.length,
+      totalPages: Math.max(1, Math.ceil(items.length / safePageSize)),
+      items: items.slice(start, start + safePageSize),
+    };
+  }
+
+  async function getGoogleWorkspaceReviewEvidence(reference, { provider = "drive", limit = 240 } = {}) {
+    if (!GOOGLE_WORKSPACE_PROVIDERS.has(provider)) throw new Error("invalid_provider");
+    if (!/^gwmc_[a-f0-9]{24}$/.test(String(reference || ""))) return null;
+    const db = readFile(filePath);
+    const candidate = db.matchCandidates?.[reference];
+    if (!candidate || candidate.matcherVersion !== GOOGLE_WORKSPACE_MATCHER_VERSION
+      || candidate.provider !== provider || candidate.reviewOnly !== true) return null;
+    let previewCandidates = null;
+    try { previewCandidates = buildGoogleWorkspaceMatchingPreview(db).privateProjection.candidates; } catch {}
+    const projection = googleWorkspaceReviewProjection(db, candidate, provider, previewCandidates);
+    if (!projection.eligible) return { ok: false, status: 409, code: "candidate_ineligible" };
+    const intake = db.intakeItems[candidate.intakeItemId];
+    const source = db.sourceRecords[intake.sourceRecordId];
+    return { ok: true, reference: candidate.id, ...boundedGoogleWorkspaceEvidenceExcerpt(source, { limit }) };
   }
 
   async function ingestSourceRecords(records = [], options = {}) {
@@ -1147,6 +1247,8 @@ export function createCueFoundationStore(options = {}) {
     },
     ingestSourceRecords,
     persistGoogleWorkspaceReviewCandidates,
+    listGoogleWorkspaceReviewSuggestions,
+    getGoogleWorkspaceReviewEvidence,
     checkpointConnectorRun,
     getConnectorState: async (connectorName) => readFile(filePath).connectorState?.[cleanText(connectorName)] || null,
     saveConnectorState,

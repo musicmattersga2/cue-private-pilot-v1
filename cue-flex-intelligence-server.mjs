@@ -70,6 +70,7 @@ import {
   readGoogleWorkspaceConfig,
 } from "./google-workspace-intake-connectors.mjs";
 import { createGoogleWorkspaceIntakeSync } from "./google-workspace-intake-sync.mjs";
+import { createIntakeReviewAuthorization } from "./cue-intake-review-authorization.mjs";
 
 const PORT = process.env.PORT || 3000;
 const HTML_FILE = path.resolve("./cue-flex-intake-lab.html");
@@ -79,6 +80,7 @@ const CUE_LOGO_FILE = path.resolve("./cue-logo.svg");
 const CUE_PILOT_PASSWORD = process.env.CUE_PILOT_PASSWORD || "";
 const CUE_PILOT_SESSION_SECRET =
   process.env.CUE_PILOT_SESSION_SECRET || "local-private-pilot-secret";
+const intakeReviewAuthorization = createIntakeReviewAuthorization({ env: process.env });
 const googleWorkspaceConfig = readGoogleWorkspaceConfig(process.env);
 const googleWorkspaceConnectors = createGoogleWorkspaceIntakeConnectors({ config: googleWorkspaceConfig });
 const googleWorkspaceIntakeSync = createGoogleWorkspaceIntakeSync({
@@ -6918,6 +6920,25 @@ function isPilotAuthorized(req) {
   return token && token === getPilotSessionToken();
 }
 
+function sendIntakeReviewJson(res, status, payload, extraHeaders = {}) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, private",
+    Pragma: "no-cache",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    ...extraHeaders,
+  });
+  res.end(JSON.stringify(payload));
+}
+
+function authorizeIntakeReview(req) {
+  return intakeReviewAuthorization.authorizeRequest(req, {
+    pilotConfigured: Boolean(CUE_PILOT_PASSWORD),
+    pilotAuthorized: isPilotAuthorized(req),
+  });
+}
+
 function isAutomationAuthorized(req, url) {
   const configuredToken = process.env.CUE_AUTOMATION_TOKEN || "";
 
@@ -9117,6 +9138,81 @@ const server = http.createServer(async (req, res) => {
       html = html.replaceAll("__CUE_BUILD_LABEL__", CUE_BUILD_LABEL);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       res.end(html);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/intake-match-review/session") {
+      let body;
+      try {
+        body = JSON.parse((await readRequestBody(req)) || "{}");
+      } catch {
+        sendIntakeReviewJson(res, 400, { ok: false, code: "invalid_request" });
+        return;
+      }
+      const issued = intakeReviewAuthorization.issueSession({
+        accessKey: String(body?.accessKey || ""),
+        pilotConfigured: Boolean(CUE_PILOT_PASSWORD),
+        pilotAuthorized: isPilotAuthorized(req),
+      });
+      if (!issued.ok) {
+        sendIntakeReviewJson(res, issued.status, { ok: false, code: issued.code });
+        return;
+      }
+      sendIntakeReviewJson(res, 200, { ok: true, permission: "intake_match_review" }, {
+        "Set-Cookie": intakeReviewAuthorization.sessionCookie(issued.token, { secure: process.env.NODE_ENV === "production" }),
+      });
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/foundation/intake-match-review/session") {
+      sendIntakeReviewJson(res, 200, { ok: true }, {
+        "Set-Cookie": intakeReviewAuthorization.clearCookie({ secure: process.env.NODE_ENV === "production" }),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/foundation/intake-match-review") {
+      const authorization = authorizeIntakeReview(req);
+      if (!authorization.ok) {
+        sendIntakeReviewJson(res, authorization.status, { ok: false, code: authorization.code });
+        return;
+      }
+      try {
+        const result = await defaultCueFoundationStore.listGoogleWorkspaceReviewSuggestions({
+          provider: String(url.searchParams.get("provider") || "drive").trim().toLowerCase(),
+          page: url.searchParams.get("page") || 1,
+          pageSize: url.searchParams.get("pageSize") || 20,
+        });
+        sendIntakeReviewJson(res, 200, { ok: true, ...result });
+      } catch {
+        sendIntakeReviewJson(res, 400, { ok: false, code: "invalid_request" });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/foundation/intake-match-review/evidence") {
+      const authorization = authorizeIntakeReview(req);
+      if (!authorization.ok) {
+        sendIntakeReviewJson(res, authorization.status, { ok: false, code: authorization.code });
+        return;
+      }
+      let body;
+      try {
+        body = JSON.parse((await readRequestBody(req)) || "{}");
+      } catch {
+        sendIntakeReviewJson(res, 400, { ok: false, code: "invalid_request" });
+        return;
+      }
+      try {
+        const result = await defaultCueFoundationStore.getGoogleWorkspaceReviewEvidence(String(body?.reference || ""), {
+          provider: String(body?.provider || "drive").trim().toLowerCase(),
+          limit: 240,
+        });
+        if (!result) sendIntakeReviewJson(res, 404, { ok: false, code: "review_suggestion_not_found" });
+        else sendIntakeReviewJson(res, result.ok ? 200 : result.status || 409, result);
+      } catch {
+        sendIntakeReviewJson(res, 400, { ok: false, code: "invalid_request" });
+      }
       return;
     }
 

@@ -8,6 +8,35 @@ assert.match(
   /api\/foundation\/source-first\/sync/,
   "the Command Center must invoke the FLEX-first shared Intake pipeline",
 );
+
+assert.match(html, /Google Workspace review suggestions/, "Match Review includes a separate Google Workspace review section");
+assert.match(html, /Human review required\. These suggestions are not authoritative matches, proposals, learned aliases, or operational updates\./,
+  "the review-only warning is explicit");
+assert.match(html, /intake-match-review\?provider=drive/, "the review projection defaults to Drive and remains separately selectable");
+assert.match(html, /intake-match-review\/evidence/, "evidence is loaded only through the protected detail endpoint");
+assert.match(html, />Reveal evidence</, "evidence disclosure requires an explicit reviewer action");
+assert.match(html, /phase==='loading'.*phase==='unauthorized'.*phase==='unavailable'/s,
+  "loading, unauthorized, and unavailable states are explicit");
+assert.match(html, /No Google Workspace review suggestions are available/, "the empty state is explicit");
+assert.match(html, /This suggestion is no longer eligible/, "stale suggestions are visibly disabled");
+assert.match(html, /@media\(max-width:700px\).*review-heading.*review-auth-row/s,
+  "the review surface has a narrow mobile layout");
+assert.match(html, /<label for="reviewAccessKey">.*<input id="reviewAccessKey".*<button/s,
+  "review access and actions use keyboard-accessible native controls");
+assert.match(html, /autocomplete="off" spellcheck="false"/, "the access key input opts out of browser persistence helpers");
+assert.doesNotMatch(html, /localStorage|sessionStorage|console\.log|console\.error/,
+  "review credentials and evidence are not placed in browser storage or telemetry");
+const reviewCardSource = html.match(/function reviewCard\(item\)\{([\s\S]*?)\nfunction reviewBody/)?.[1] || "";
+assert(reviewCardSource, "review-card renderer is present");
+for (const forbiddenControl of ["Accept", "Reject", "Defer", "Approve", "Confirm show", "Select match"]) {
+  assert.equal(reviewCardSource.includes(`>${forbiddenControl}<`), false, `${forbiddenControl} is not exposed as a Google Workspace action`);
+}
+
+const serverSource = fs.readFileSync(new URL("./cue-flex-intelligence-server.mjs", import.meta.url), "utf8");
+assert.match(serverSource, /authorizeIntakeReview\(req\)/, "list and detail routes enforce dedicated review authorization");
+assert.match(serverSource, /Cache-Control": "no-store, private"/, "review responses are not cacheable");
+assert.doesNotMatch(serverSource.match(/function isAutomationAllowedPath[\s\S]*?\.includes\(pathname\);/)?.[0] || "", /intake-match-review/,
+  "automation credentials cannot access the review endpoints");
 assert.doesNotMatch(
   html,
   /await api\('\/api\/foundation\/slack\/sync'/,

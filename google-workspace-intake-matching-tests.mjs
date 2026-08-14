@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { buildGoogleWorkspaceMatchingPreview, sanitizedGoogleWorkspaceMatchingPreview } from "./google-workspace-intake-matching.mjs";
+import { boundedGoogleWorkspaceEvidenceExcerpt, buildGoogleWorkspaceMatchingPreview, GOOGLE_WORKSPACE_MATCHER_VERSION, sanitizedGoogleWorkspaceMatchingPreview } from "./google-workspace-intake-matching.mjs";
 import { runGoogleWorkspaceMatchingPreview } from "./scripts/google-workspace-intake-match-preview.mjs";
 import { createCueFoundationStore } from "./cue-foundation-store.mjs";
 import { parsePersistArguments, runGoogleWorkspaceMatchPersistence } from "./scripts/google-workspace-intake-match-persist.mjs";
@@ -345,6 +345,87 @@ await persistenceFixture(async ({ db, datastorePath }) => {
   assert.throws(() => parsePersistArguments(["--source", "drive", "--source", "gmail", "--expected-sha256", hash]), /invalid_option/);
   assert.throws(() => parsePersistArguments(["--expected-sha256", hash]), /required_option_missing/);
   assert.throws(() => parsePersistArguments(["--source", "all", "--expected-sha256", hash]), /invalid_provider/);
+}
+
+await persistenceFixture(async ({ db, datastorePath }) => {
+  addShow(db, "review-show", "Review Surface Show");
+  addIntake(db, "review-item", "File: review brief\n\nReview Surface Show\n\nDetailed production context suitable for an authorized human review excerpt.", {
+    name: "review brief", description: "Review Surface Show",
+  });
+  addIntake(db, "metadata-item", "File: Review Surface Show", { name: "Review Surface Show", mimeType: "image/png" });
+  await writeFile(datastorePath, JSON.stringify(db));
+  const bytes = await readFile(datastorePath);
+  const parsed = JSON.parse(bytes);
+  const preview = buildGoogleWorkspaceMatchingPreview(parsed);
+  const store = createCueFoundationStore({ filePath: datastorePath });
+  await store.persistGoogleWorkspaceReviewCandidates({
+    provider: "drive", expectedSha256: hashBytes(bytes), matcherVersion: preview.report.matcherVersion,
+    minimumConfidence: "low", apply: true, projection: preview.privateProjection,
+  });
+  const checksumAfterPersistence = hashBytes(await readFile(datastorePath));
+
+  const first = await store.listGoogleWorkspaceReviewSuggestions({ provider: "drive", page: 1, pageSize: 1 });
+  const second = await store.listGoogleWorkspaceReviewSuggestions({ provider: "drive", page: 2, pageSize: 1 });
+  assert.equal(first.total, 2);
+  assert.equal(first.items.length, 1);
+  assert.equal(second.items.length, 1);
+  const all = [...first.items, ...second.items];
+  assert(all.every(item => item.reviewOnly && !item.selected && item.matcherVersion === GOOGLE_WORKSPACE_MATCHER_VERSION));
+  assert(all.every(item => item.eligible && !item.staleReason));
+  assert(all.some(item => item.evidenceMode === "content_bearing"));
+  assert(all.some(item => item.evidenceMode === "metadata_only"));
+  assert(all.every(item => !Object.hasOwn(item, "intakeItemId") && !Object.hasOwn(item, "candidateEntityId") && !Object.hasOwn(item, "sourceRecord")));
+
+  const contentItem = all.find(item => item.evidenceMode === "content_bearing");
+  const metadataItem = all.find(item => item.evidenceMode === "metadata_only");
+  const detail = await store.getGoogleWorkspaceReviewEvidence(contentItem.reference, { provider: "drive", limit: 80 });
+  assert.equal(detail.ok, true);
+  assert.equal(detail.available, true);
+  assert(detail.excerpt.length <= 80);
+  assert.equal(detail.excerpt.includes("File:"), false);
+  assert.equal(JSON.stringify(detail).includes("review brief"), false, "file metadata is not copied into evidence detail");
+  const metadataDetail = await store.getGoogleWorkspaceReviewEvidence(metadataItem.reference, { provider: "drive" });
+  assert.deepEqual(metadataDetail, { ok: true, reference: metadataItem.reference, available: false, excerpt: null, truncated: false });
+  assert.equal(await store.getGoogleWorkspaceReviewEvidence("gwmc_000000000000000000000000", { provider: "drive" }), null);
+
+  const afterRead = await readFile(datastorePath);
+  assert.equal(hashBytes(afterRead), checksumAfterPersistence, "read projections never mutate the datastore");
+  const selectedVariant = JSON.parse(afterRead);
+  selectedVariant.matchCandidates[contentItem.reference].selected = true;
+  selectedVariant.matchCandidates["gwmc_000000000000000000000000"] = {
+    id: "gwmc_000000000000000000000000", matcherVersion: GOOGLE_WORKSPACE_MATCHER_VERSION,
+    provider: "gmail", reviewOnly: true, selected: false,
+  };
+  await writeFile(datastorePath, JSON.stringify(selectedVariant));
+  const selectedList = await store.listGoogleWorkspaceReviewSuggestions({ provider: "drive" });
+  assert.equal(selectedList.total, 2, "foreign-provider candidates are excluded");
+  const selectedItem = selectedList.items.find(item => item.reference === contentItem.reference);
+  assert.equal(selectedItem.eligible, false);
+  assert.equal(selectedItem.staleReason, "already_selected", "selected candidates are explicitly ineligible");
+  assert.equal(await store.getGoogleWorkspaceReviewEvidence("gwmc_000000000000000000000000", { provider: "drive" }), null,
+    "foreign-provider references fail closed");
+
+  const changed = JSON.parse(afterRead);
+  const owned = Object.values(changed.matchCandidates).find(item => item.id === contentItem.reference);
+  changed.intakeItems[owned.intakeItemId].matchedShowId = owned.candidateEntityId;
+  await writeFile(datastorePath, JSON.stringify(changed));
+  const stale = (await store.listGoogleWorkspaceReviewSuggestions({ provider: "drive" })).items.find(item => item.reference === contentItem.reference);
+  assert.equal(stale.eligible, false);
+  assert.equal(stale.staleReason, "already_matched");
+  assert.deepEqual(await store.getGoogleWorkspaceReviewEvidence(contentItem.reference, { provider: "drive" }), {
+    ok: false, status: 409, code: "candidate_ineligible",
+  });
+});
+
+{
+  const source = { normalizedText: "File: sensitive-name\n\nprivate description\n\nSafe evidence contact@example.com https://forbidden.invalid and 123e4567-e89b-12d3-a456-426614174000.", payload: { description: "private description" } };
+  const excerpt = boundedGoogleWorkspaceEvidenceExcerpt(source, { limit: 200 });
+  assert.equal(excerpt.available, true);
+  assert.equal(excerpt.excerpt.includes("sensitive-name"), false);
+  assert.equal(excerpt.excerpt.includes("private description"), false);
+  assert.equal(excerpt.excerpt.includes("contact@example.com"), false);
+  assert.equal(excerpt.excerpt.includes("forbidden.invalid"), false);
+  assert.equal(excerpt.excerpt.includes("123e4567"), false);
 }
 
 console.log("google-workspace-intake-matching tests passed");
